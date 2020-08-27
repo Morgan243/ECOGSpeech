@@ -6,6 +6,7 @@ setup(name='ECOGSpeech',
       packages=['ecog_speech'],
       requires=[
             'BCI2kReader',
+            'torchaudio', 'tqdm',
             'numpy', 'pandas',
             'sklearn',
             'attrs'])
