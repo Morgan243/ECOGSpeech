@@ -1,5 +1,8 @@
 import pandas as pd
 import numpy as np
+import torch
+from torch.utils import data as tdata
+from tqdm.auto import tqdm
 
 from BCI2kReader import BCI2kReader as b2k
 from os import environ
@@ -12,13 +15,14 @@ from ecog_speech import feature_processing
 path_map = dict()
 pkg_data_dir = os.path.join(os.path.split(os.path.abspath(__file__))[0], '../data')
 
+## TODO
+# - Datasets
+#   - Open ECOG from stanford (a bunch of tasks, including speech)
+#   - DEAP dataset for emotion recognition
+#   - VR + Workload (ball into a cup in VR) wearing EEG
+
 class HarvardSentences:
     pass
-
-import torch
-from torch.utils import data as tdata
-
-from tqdm.auto import tqdm
 
 class BaseDataset(tdata.Dataset):
     def to_dataloader(self, batch_size=64, num_workers=2,
@@ -53,12 +57,12 @@ class NorthwesternWords(BaseDataset):
     sensor_columns = list(range(64))
     audio_sample_rate = 48000
     ecog_sample_rate = 1200
-    ecog_pass_band = attr.ib((5, 250))
+    ecog_pass_band = attr.ib((70, 250))
 
     # Hack
-    ecog_window_shift_sec = pd.Timedelta(0.25, 's')
+    ecog_window_shift_sec = pd.Timedelta(0.15, 's')
     ecog_window_step_sec = pd.Timedelta(0.01, 's')
-    ecog_window_n = 20
+    ecog_window_n = 40
 
     # In terms of audio samples
     fixed_window_size = attr.ib(audio_sample_rate*1)
@@ -87,7 +91,6 @@ class NorthwesternWords(BaseDataset):
         self.s_ecog_df = self.s_ecog_df.pipe(feature_processing.filter,
                                              band=self.ecog_pass_band,
                                             sfreq=self.ecog_sample_rate)
-
 
         # Important piece - identifies time segments automatically
         #   - Positive values are word/speech labels
@@ -126,11 +129,23 @@ class NorthwesternWords(BaseDataset):
         return {k: v for k, v in attr.asdict(so).items()
                 if isinstance(v, torch.Tensor)}
 
-    def sample_plot(self, i, band=None, figsize=(15, 10), axs=None ):
+    def sample_plot(self, i, band=None,
+                    offset_seconds=0,
+                    figsize=(15, 10), axs=None ):
         import matplotlib
+        from IPython.display import display
+        #offs = pd.Timedelta(offset_seconds)
         t_word_ix = self.word_index[self.word_index == i].index
-        t_word_ecog_df = self.ecog_df.reindex(t_word_ix).dropna()
-        t_word_wav_df = self.speech_df.reindex(t_word_ix)
+        offs_td = pd.Timedelta(offset_seconds, 's')
+        t_word_slice = slice(t_word_ix.min() - offs_td, t_word_ix.max() - offs_td)
+        display(t_word_slice)
+        display(t_word_ix.min() - offs_td)
+        #t_word_ix = self.word_index.loc[t_word_ix.min() - offs_td: t_word_ix.max() - offs_td].index
+        #t_word_ecog_df = self.ecog_df.reindex(t_word_ix).dropna()
+        #t_word_wav_df = self.speech_df.reindex(t_word_ix)
+        t_word_ecog_df = self.ecog_df.loc[t_word_slice].dropna()
+        t_word_wav_df = self.speech_df.loc[t_word_slice]
+        display(t_word_ecog_df.describe())
         scols = self.sensor_columns
 
         ecog_std = self.ecog_df[scols].std()
@@ -173,11 +188,17 @@ class NorthwesternWords(BaseDataset):
             start_t = ixes.min()
             if wrd_id > 0:
                 start_t -= cls.ecog_window_shift_sec
+                step = cls.ecog_window_step_sec
+                n = cls.ecog_window_n
             else:
-                start_t += cls.ecog_window_shift_sec
+                start_t += (cls.ecog_window_shift_sec * 1)
+                #start_t += (cls.ecog_window_shift_sec * 2)
+                #start_t = ixes.median() #- cls.ecog_window_shift_sec
+                step = cls.ecog_window_step_sec * 1.25
+                n = cls.ecog_window_n# * 2
 
-            for i in range(cls.ecog_window_n):
-                sl = slice(start_t + i * cls.ecog_window_step_sec, None)
+            for i in range(n):
+                sl = slice(start_t + i * step, None)
                 sample_indices[(wrd_id, i)] = label_index.loc[sl].iloc[:win_size].index
             #elif len(ix_iter) == 0:
             #    pass
@@ -209,7 +230,7 @@ class NorthwesternWords(BaseDataset):
         if 'ecog_arr' in fields:
             kws['ecog'] = ecog_df.loc[ix.min() - cls.ecog_window_shift_sec:].iloc[:max_ecog_samples]
             # Transpose to keep time as last index for torch
-            kws['ecog_arr'] = torch.from_numpy(kws['ecog'].values.T).float()
+            kws['ecog_arr'] = torch.from_numpy(kws['ecog'].values.T).float() #/ 10.
         # Can't do this for non-contihous label regions
         # ecog=nww.ecog_df.loc[ixes.min(): ixes.max()],
         # Word index is base on wave file, so just reindex
