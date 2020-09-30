@@ -44,6 +44,16 @@ def compute_speech_index(wav, speaking_mask_f=compute_speaking_mask):
 
 
 ######
+def fft(data, fs=1000):
+    fft_vals = np.absolute(np.fft.rfft(data, axis=0))
+
+    # Get frequencies for amplitudes in Hz
+    fft_freq = np.fft.rfftfreq(len(data), 1.0 / fs)
+    #return fft_freq, fft_vals
+    s = pd.Series(fft_vals, index=fft_freq, name='fft_values')
+    s.index.name = 'hz'
+    return s
+
 def filter(s, band, sfreq=1000, verbose=False, n_jobs=4,
            method='fir'):
     try:
