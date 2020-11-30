@@ -2,6 +2,7 @@ import attr
 from tqdm.auto import tqdm
 import numpy as np
 import torch
+from ecog_speech import utils
 
 def weights_init(m):
     classname = m.__class__.__name__
@@ -51,7 +52,8 @@ class MultiChannelSincNN(torch.nn.Module):
                  kernel_size=701, fs=200,
                  min_low_hz=1, min_band_hz=3,
                  update=True, per_channel_filter=False,
-                 channel_dim=1, unsqueeze_dim=1
+                 channel_dim=1, unsqueeze_dim=1,
+                 padding=0,
                  #store_param_history=False
                  ):
         super(MultiChannelSincNN, self).__init__()
@@ -61,6 +63,7 @@ class MultiChannelSincNN(torch.nn.Module):
         sinc_kwargs = dict(in_channels=1, out_channels=num_bands,
                            kernel_size=kernel_size, sample_rate=fs,
                            min_low_hz=min_low_hz, min_band_hz=min_band_hz,
+                           padding=padding,
                            #update=update,
                            )
         if per_channel_filter:
@@ -92,6 +95,85 @@ class MultiChannelSincNN(torch.nn.Module):
         o = torch.cat(o, self.unsqueeze_dim)
         return o
 
+
+class BaseMultiSincNN(torch.nn.Module):
+    def __init__(self, in_channels, window_size, fs,
+                 n_bands=2, per_channel_filter=False,
+                 sn_kernel_size=31,
+                 sn_padding=0,
+                 dropout=0.,
+                 dropout2d=False,
+                 batch_norm=False
+                 ):
+
+        super().__init__()
+        self.dropout = dropout
+        self.activation_cls = torch.nn.SELU
+        #DrpOut = torch.nn.Dropout2d if dropout2d else torch.nn.Dropout
+        self.dropout_cls = torch.nn.Dropout2d if dropout2d else torch.nn.AlphaDropout
+
+        def make_block(in_ch, out_ch, k_s, s, d, g):
+            b = []
+            if dropout > 0:
+                b.append(self.dropout_cls(self.dropout))
+            b.append(torch.nn.Conv2d(in_ch, out_ch, kernel_size=k_s, stride=s,
+                                     dilation=d, groups=g))
+            if batch_norm:
+                b.append(torch.nn.BatchNorm2d(out_ch))
+            b.append(self.activation_cls())
+            return b
+
+        self.m = torch.nn.Sequential(
+            Unsqueeze(2),
+            # Pctile(),
+            MultiChannelSincNN(n_bands, in_channels,
+                               padding=sn_padding,
+                               kernel_size=sn_kernel_size, fs=fs,
+                               per_channel_filter=per_channel_filter),
+            *make_block(64, 64, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1),
+            #DrpOut(self.dropout),
+            #torch.nn.Conv2d(64, 64, kernel_size=(1, 5), stride=(1, 5),
+            #                dilation=(1, 2), groups=1),
+            #torch.nn.BatchNorm2d(64),
+            #torch.nn.PReLU(),
+
+            # torch.nn.AvgPool2d(kernel_size=(1, 5), stride=(1, 5)),
+            # torch.nn.Dropout2d(),
+            # torch.nn.Conv2d(64, 64, kernel_size=(1, 5), stride=(1, 5)),
+            # torch.nn.BatchNorm2d(64),
+            # torch.nn.PReLU(),
+
+            *make_block(64, 32, k_s=(1,3), s=(1, 3), d=1, g=1),
+            #DrpOut(self.dropout),
+            #torch.nn.Conv2d(64, 32, kernel_size=(1, 3), stride=(1, 3)),
+            #torch.nn.BatchNorm2d(32),
+            #torch.nn.PReLU(),
+
+            *make_block(32, 32, k_s=(1,3), s=(1, 3), d=1, g=1),
+            #DrpOut(self.dropout),
+            #torch.nn.Conv2d(32, 32, kernel_size=(1, 3), stride=(1, 2)),
+            #torch.nn.BatchNorm2d(32),
+            #torch.nn.PReLU(),
+
+            Flatten(),
+            #torch.nn.Dropout(p=self.dropout),
+            self.dropout_cls(self.dropout)
+
+        )
+        t_out = self.m(torch.rand(32, in_channels, window_size))
+        print(t_out.shape)
+        #self.m.add_module("lin_h0", torch.nn.Linear(t_out.shape[-1], 512))
+        #self.m.add_module('act_h0', self.activation_cls())
+        #self.m.add_module("drp_h0", torch.nn.Dropout(self.dropout))
+        #self.m.add_module("lin_output", torch.nn.Linear(512, 1))
+        self.m.add_module("lin_output", torch.nn.Linear(t_out.shape[-1], 1))
+        self.m.add_module('sigmoid_output', torch.nn.Sigmoid())
+
+        self.n_params = utils.number_of_model_params(self.m)
+        print("N params: " + str(self.n_params))
+
+    def forward(self, x):
+        return self.m(x)
 
 @attr.attrs
 class Trainer:
@@ -132,10 +214,10 @@ class Trainer:
                         self.model.zero_grad()
 
                         # print("batch {i}")
-                        ecog_arr = data_dict['ecog_arr']  # .to(self.device)
+                        ecog_arr = data_dict['ecog_arr'].to(self.device)
                         # ecog_arr = (ecog_arr/ecog_arr.abs().max(1, keepdim=True).values)
 
-                        actuals = data_dict['text_arr']  # .to(self.device)
+                        actuals = data_dict['text_arr'].to(self.device)
                         # print("running model")
                         m_output = self.model(ecog_arr)
 
@@ -183,3 +265,16 @@ class Trainer:
                 epoch_pbar.update(1)
 
 
+    def generate_outputs(self, **dl_map):
+        self.model.eval()
+        output_map = dict()
+        with torch.no_grad():
+            for dname, dset in dl_map.items():
+                preds_l, actuals_l = list(), list()
+                for _x in tqdm(dset, desc="Eval on %s" % dname):
+                    preds_l.append(self.model(_x['ecog_arr'].to(self.device)))
+                    actuals_l.append(_x['text_arr'])
+
+                output_map[dname] = dict(preds=torch.cat(preds_l).detach().cpu().numpy(),
+                                         actuals=torch.cat(actuals_l).detach().cpu().int().numpy())
+        return output_map
