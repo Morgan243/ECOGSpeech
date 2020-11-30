@@ -1492,7 +1492,8 @@ class SincConv(nn.Module):
         y_left = torch.sin(x_left) / x_left
         y_right = torch.flip(y_left, dims=[1])
 
-        sinc = torch.cat([y_left, torch.ones([x.shape[0], 1]).to(x.device), y_right], dim=1)
+        sinc = torch.cat([y_left.to(x.device), torch.ones([x.shape[0], 1], device=x.device),
+                          y_right.to(x.device)], dim=1)
 
         return sinc
 
@@ -1518,7 +1519,18 @@ class SincConv(nn.Module):
         #self.band_hz_ = self.band_hz_ - (high - self.max_hz)
         #self.band_hz_.clamp_max(self.max_hz - (self.min_band_hz/self.sample_rate))
 
-        f_times_t = torch.matmul(low, self.n_)
+        try:
+            #print(low)
+            #print(low.shape)
+            #print(self.n_)
+            #print(self.n_.shape)
+            f_times_t = torch.matmul(low, self.n_)
+        except RuntimeError:
+            print(low)
+            print(low.shape)
+            print(self.n_)
+            print(self.n_.shape)
+            raise
 
         low_pass1 = 2 * low * self.sinc(2 * math.pi * f_times_t * self.sample_rate)
 
