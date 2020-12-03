@@ -19,6 +19,14 @@ def build_default_options(default_option_kwargs, **overrides):
     return Options(*[d['default'] if o not in overrides else overrides[o]
                      for o, d in zip(opt_keys, default_option_kwargs)])
 
+def performance(y, preds):
+    from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
+    return dict(f1=f1_score(y, preds),
+                accuracy=accuracy_score(y, preds),
+                precision=precision_score(y, preds),
+                recall=recall_score(y, preds),
+                )
+
 def build_argparse(default_option_kwargs, description=''):
     import argparse
     parser = argparse.ArgumentParser(description=description)
