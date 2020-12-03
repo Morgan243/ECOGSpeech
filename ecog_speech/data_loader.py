@@ -312,7 +312,6 @@ class NorthwesternWords(BaseDataset):
     base_path = attr.ib(None)
     # TODO: named tuple
     patient_tuples = attr.ib((
-
                               ('Mayo Clinic', 19, 1, 1),
                               ('Mayo Clinic', 19, 1, 2),
                               ('Mayo Clinic', 19, 1, 3),
@@ -320,11 +319,10 @@ class NorthwesternWords(BaseDataset):
                               #('Mayo Clinic', 21, 1, 1),
                               #('Mayo Clinic', 21, 1, 2),
 
-         #('Mayo Clinic', 22, 1, 1),
-         #('Mayo Clinic', 22, 1, 2),
-         #('Mayo Clinic', 22, 1, 3),
-         #('Mayo Clinic', 22, 1, 4),
-
+                              #('Mayo Clinic', 22, 1, 1),
+                              #('Mayo Clinic', 22, 1, 2),
+                              #('Mayo Clinic', 22, 1, 3),
+                              #('Mayo Clinic', 22, 1, 4),
     ))
     # num_mfcc = 13
     sensor_columns = list(range(64))
@@ -336,7 +334,7 @@ class NorthwesternWords(BaseDataset):
     ecog_window_shift_sec = pd.Timedelta(0.5, 's')
     #ecog_window_step_sec = attr.ib(0.01, factory=lambda s: pd.Timedelta(s, 's'))
     ecog_window_step_sec = pd.Timedelta(0.01, 's')
-    ecog_window_n = attr.ib(50)
+    ecog_window_n = attr.ib(60)
 
     # In terms of audio samples
     # fixed_window_size = attr.ib(audio_sample_rate * 1)
@@ -401,50 +399,12 @@ class NorthwesternWords(BaseDataset):
             ## Data loading
             ## Load the data, parsing into pandas data frame/series types
             data_iter = tqdm(self.patient_tuples, desc="Loading data")
-            self.data_map = {l_p_s_t_tuple:
-                                 self.load_data(*l_p_s_t_tuple, verbose=self.verbose)
+            self.data_map = {l_p_s_t_tuple: self.load_data(*l_p_s_t_tuple,
+                                                           verbose=self.verbose)
                              for l_p_s_t_tuple in data_iter}
+            self._process(self.data_map, self.pipeline_steps,
+                          self.make_sample_indices)
 
-            ## Data pre-processing
-            # Cleanup the raw data at the global level
-            for l_p_s_t_tuple in self.data_map.keys():
-                frame_d = self.data_map[l_p_s_t_tuple]
-                for p_i, (p_func, p_kws) in enumerate(self.pipeline_steps):
-                    print(f"[{p_i}] {p_func.__name__}({','.join(p_kws.keys())})")
-                    updates, remaps = p_func(frame_d, **p_kws)
-                    in_use_kw = [nk for nk in updates.keys() if nk in frame_d]
-                    if len(in_use_kw) > 0:
-                        msg = ("Processing KW already in use: %s" %(", ".join(in_use_kw)))
-                        raise ValueError(msg)
-
-                    msg = "\t->Outputs: " + ", ".join(updates.keys())
-                    print(msg)
-                    frame_d.update(updates)
-                    for src_name, new_mapping in remaps.items():
-                        frame_d['remap'][src_name] = new_mapping
-                self.data_map[l_p_s_t_tuple] = frame_d
-
-
-            ## Sample Indexing
-            # Produce a map from label mask to window indices
-            self.sample_index_maps = {k_t: self.make_sample_indices(frame_d[frame_d['remap'][self.stim_indexing_source]],
-                                                                    self.max_ecog_window_size,
-                                                                    self.ecog_window_n)
-                                      for k_t, frame_d in tqdm(self.data_map.items(),
-                                                               desc="Extracting windows from "
-                                                                    + self.stim_indexing_source)}
-            # Creat a flat mapping for fully defined key
-            self.flat_index_map = {tuple([wrd_id, ix_i] + list(k_t)): ixes
-                                   for k_t, index_map in self.sample_index_maps.items()
-                                       for wrd_id, ix_list in index_map.items()
-                                           for ix_i, ixes in enumerate(ix_list)}
-
-            #self.i_to_keys = {i: (k, k[2:]) for i, k in enumerate(self.flat_index_map.keys())}
-            # Enumerate all the keys across flat_index_map into one large list for index-style,
-            # has a len() and can be indexed into nicely (via np.ndarray)
-            self.flat_keys = np.array([(k, k[2:])
-                                       for i, k in enumerate(self.flat_index_map.keys())],
-                                      dtype='object')
         else:
             print("Warning: using naive cross-referencing")
             self.mfcc_m = self.data_from.mfcc_m
@@ -457,6 +417,42 @@ class NorthwesternWords(BaseDataset):
             self.selected_flat_keys = self.flat_keys[self.selected_word_indices]
         else:
             self.selected_flat_keys = self.flat_keys
+
+    def _process(self, data_maps, pre_pipeline, sample_index_f):
+        self.sample_index_maps = dict()
+        for k in data_maps.keys():
+            dmap = data_maps[k]
+            for p_i, (p_func, p_kws) in enumerate(pre_pipeline):
+                print(f"[{p_i}] {p_func.__name__}({','.join(p_kws.keys())})")
+                updates, remaps = p_func(dmap, **p_kws)
+                in_use_kw = [nk for nk in updates.keys() if nk in dmap]
+                if len(in_use_kw) > 0:
+                    msg = ("Processing KW already in use: %s" %(", ".join(in_use_kw)))
+                    raise ValueError(msg)
+
+                msg = "\t->Outputs: " + ", ".join(updates.keys())
+                print(msg)
+                dmap.update(updates)
+                for src_name, new_mapping in remaps.items():
+                    dmap['remap'][src_name] = new_mapping
+                self.data_map[k] = dmap
+
+            self.sample_index_maps[k] = sample_index_f(
+                dmap[dmap['remap'][self.stim_indexing_source]],
+                self.max_ecog_window_size,
+                self.ecog_window_n)
+
+        self.flat_index_map = {tuple([wrd_id, ix_i] + list(k_t)): ixes
+                               for k_t, index_map in self.sample_index_maps.items()
+                               for wrd_id, ix_list in index_map.items()
+                               for ix_i, ixes in enumerate(ix_list)}
+
+        # Enumerate all the keys across flat_index_map into one large list for index-style,
+        # has a len() and can be indexed into nicely (via np.ndarray)
+        self.flat_keys = np.array([(k, k[2:])
+                                   for i, k in enumerate(self.flat_index_map.keys())],
+                                  dtype='object')
+
 
     def __len__(self):
         return len(self.selected_flat_keys)
@@ -546,40 +542,53 @@ class NorthwesternWords(BaseDataset):
         :return:
         """
         sample_indices = dict()
-        # Repeated labels, group
-        grp = label_index.groupby(label_index)
-        for wrd_id, wave_wrd_values in grp:
-            ixes = wave_wrd_values.index
+        ####
+        # Separate into two sets and loops so that the negative
+        # samples can be derived from the positive samples
 
-            # ixes = label_index.index
-            # if win_size > len(ixes):
-            start_t = ixes.min()
-            if wrd_id > 0:
-                start_t -= cls.ecog_window_shift_sec
-                step = cls.ecog_window_step_sec
-                n = ecog_window_n
-            else:
-                #start_t += (cls.ecog_window_shift_sec *.5)
+        pos_ix = label_index[label_index > 0]
+        neg_ix = label_index[label_index < 0]
+        pos_grp = pos_ix.groupby(pos_ix)
+        neg_grp = neg_ix.groupby(neg_ix)
 
-                # start_t += (cls.ecog_window_shift_sec * 2)
-                # start_t = ixes.median() #- cls.ecog_window_shift_sec
-                step = cls.ecog_window_step_sec #* 1.25
-                n = ecog_window_n  # * 2
+
+        for wrd_id, wave_wrd_values in pos_grp:
+            start_t = wave_wrd_values.index.min() - cls.ecog_window_shift_sec
 
             sample_indices[wrd_id] = [label_index
-                                          .loc[start_t + i * step:]
+                                          .loc[start_t + i * cls.ecog_window_step_sec:]
                                           .iloc[:win_size]
                                           .index
-                                      for i in range(n)]
+                                      for i in range(ecog_window_n)]
 
-            # Hacky, but just remove anything that's not the right side from the end
-            sample_indices[wrd_id] = [ixes for ixes in sample_indices[wrd_id]
-                                      if len(ixes) == win_size]
-            if len(sample_indices[wrd_id]) == 0:
-                msg = ("Error: word %d had no windows" % wrd_id)
-                #raise ValueError(msg)
+        for wrd_id, wave_wrd_values in neg_grp:
+            start_t = wave_wrd_values.index.min() #- cls.ecog_window_shift_sec
+
+            # Where the last positive window ends
+            pos_ix = sample_indices[-wrd_id][-1].max()
+            # Start from positive window if there's overlap
+            if start_t < pos_ix:
+                start_t = pos_ix
+
+            sample_indices[wrd_id] = [label_index
+                                          .loc[start_t + i * cls.ecog_window_step_sec:]
+                                          .iloc[:win_size]
+                                          .index
+                                      for i in range(ecog_window_n)]
+
+
+        # Hacky, but just remove anything that's not the right side from the end
+        #sample_indices[wrd_id] = [ixes for ixes in sample_indices[wrd_id]
+        #                          if len(ixes) == win_size]
+        sample_indices = {w: [ix for ix in ixes if len(ix) == win_size]
+                          for w, ixes in sample_indices.items()}
+        for w, ixes in sample_indices.items():
+            if len(ixes) == 0:
+                msg = ("Error: word %d had no windows" % w)
+                print(msg)
 
         return sample_indices
+
 
     @staticmethod
     def stim_adjust__power_threshold(data_map, threshold=0.007):
@@ -608,13 +617,19 @@ class NorthwesternWords(BaseDataset):
         #return data_map
 
     @staticmethod
-    def stim_adjust__power_quantile(data_map, q=0.75):
+    def stim_adjust__power_quantile(data_map, q=0.75, trim_sample_n=50):
         audio_s = data_map['audio']
         stim_s = data_map['stim']
 
         rolling_pwr = audio_s.abs().rolling(48000).mean().reindex(stim_s.index).fillna(method='ffill').fillna(0)
-        q_thresh_s = rolling_pwr.groupby(stim_s).quantile(q)
+        # TODO: before taking quantile or grabbing slice, clip ends to avoid positioning at extreme of stim code region
+        #q_thresh_s = rolling_pwr.groupby(stim_s).quantile(q)
+        q_thresh_s = rolling_pwr.groupby(stim_s).apply(lambda s: s.iloc[trim_sample_n:-trim_sample_n].quantile(q))
+        # Label zero doesn't really matter, but set it's threshold to zero
         q_thresh_s.loc[0] = 0
+
+        # Create a mask of regions where stim code is set and the audio power is above
+        # quantile(q) for the stim region
         stim_auto_m = (stim_s != 0.) & (rolling_pwr >= stim_s.map(q_thresh_s.to_dict()))
 
         eq = (stim_s.nunique(dropna=False) - 1) == stim_s[stim_auto_m].nunique(dropna=False)
@@ -623,9 +638,13 @@ class NorthwesternWords(BaseDataset):
             msg = "stim_s and stim_auto not equal: %d - 1 != %d" % (stim_s.nunique(False),
                                                                     stim_s[stim_auto_m].nunique(False))
             print(msg)
-        stim_pwrq_s = pd.Series(np.where(stim_auto_m, stim_s, 0), index=stim_s.index)
-        stim_pwrq_diff_s = stim_pwrq_s.diff().fillna(0).astype(int)
 
+        # New stim takes origin stim value only where the mask is set, otherwise 0
+        stim_pwrq_s = pd.Series(np.where(stim_auto_m, stim_s, 0), index=stim_s.index)
+
+        # Diff it: positive stim value indicates start, negative stim value
+        # denotes beginning of of the end of the word
+        stim_pwrq_diff_s = stim_pwrq_s.diff().fillna(0).astype(int)
 
         updates = dict(stim_pwrq=stim_pwrq_s, stim_pwrq_diff=stim_pwrq_diff_s,
                        rolling_audio_pwr=rolling_pwr)
@@ -639,9 +658,6 @@ class NorthwesternWords(BaseDataset):
         data_map['remap'][replaces] = k_v_tuple[0]
         return data_map
 
-    #@staticmethod
-    #def add__stim_diff(data_map):
-    #    stim_s = data_map['remap']['stim']
     @staticmethod
     def default_preprocessing(data_map, verbose=False):
         stim_s = data_map[data_map['remap']['stim']]
@@ -685,10 +701,6 @@ class NorthwesternWords(BaseDataset):
 
         #data_map['remap']
         #return dict(start_time_map=start_time_map, stop_time_map=stop_time_map)
-
-    @classmethod
-    def process_ecog(cls, nww, ix):
-        return nww.ecog_df.loc[ix.min():].dropna().iloc[:nww.max_ecog_window_size]
 
     @classmethod
     def make_sample_object(cls, ix, text_label, ecog_df,
@@ -754,7 +766,9 @@ class NorthwesternWords(BaseDataset):
     ######
     # Conversion of MATLAB data structure to map of pandas data objects
     @staticmethod
-    def parse_mat_arr_dict(mat_d, sensor_columns=None, verbose=True):
+    def parse_mat_arr_dict(mat_d, sensor_columns=None,
+                           zero_repr='<ns>',
+                           verbose=True):
         fs_audio = mat_d['fs_audio'][0][0]
         fs_signal = mat_d['fs_signal'][0][0]
         stim_arr = mat_d['stimcode'].reshape(-1).astype('int32')
@@ -763,7 +777,7 @@ class NorthwesternWords(BaseDataset):
         # **0 is neutral, word index starts from 1**?
         word_code_d = {i + 1: w[0] for i, w in enumerate(mat_d['wordcode'].reshape(-1))}
         # Code 0 as no-sound/signal/speech
-        word_code_d[0] = '<ns>'
+        word_code_d[0] = zero_repr
 
         ########
         # Check for repeated words by parsing to Series
@@ -777,12 +791,14 @@ class NorthwesternWords(BaseDataset):
             print("Duplicate words (n=%d): %s"
                   % (len(dup_words), ", ".join(dup_words)))
 
+        # Re-write duplicate words with index so they never collide
         for dw in dup_words:
             for w_ix in word_code_s[word_code_s == dw].index.tolist():
                 new_wrd = dw + ("-%d" % w_ix)
                 word_code_d[w_ix] = new_wrd
                 # if verbose: print(new_wrd)
 
+        # Recreate the word code series to include the new words
         word_code_s = pd.Series(word_code_d, name='word')
         word_code_s.index.name = 'word_index'
 
@@ -804,7 +820,8 @@ class NorthwesternWords(BaseDataset):
         sensor_columns = channel_df.index.tolist() if sensor_columns is None else sensor_columns
         ch_m = (channel_df['code_0'] == 1)
         sensor_columns = [c for c in ch_m[ch_m].index.tolist() if c in sensor_columns]
-        print("Selected sensors: " + (", ".join(map(str, sensor_columns))))
+        print(f"Selected sensors (n={len(sensor_columns)}): "
+              + (", ".join(map(str, sensor_columns))))
 
         ######
         # Audio
@@ -816,19 +833,9 @@ class NorthwesternWords(BaseDataset):
 
         ####
         # TESTING AUTO ADJUSTING MASK
-        #rolling_pwr = audio_s.abs().rolling(48000).max()
-        #stim_auto_m = (stim_s != 0.) & (rolling_pwr.reindex(stim_s.index).fillna(method='ffill') > 0.005)
-        #eq = stim_s.nunique(dropna=False) == stim_s[stim_auto_m].nunique(dropna=False)
-        #if not eq:
-        #    msg = "stim_s and stim_auto not equal: %d != %d" % (stim_s.nunique(False),
-        #                                                        stim_s[stim_auto_m].nunique(False))
-        #    print(msg)
-        #stim_auto_s = pd.Series(np.where(stim_auto_m, stim_s, 0), index=stim_s.index)
-        #stim_auto_diff_s = stim_auto_s.diff().fillna(0).astype(int)
-
-
-
-        ret_d = dict(ecog_all=ecog_df,
+        ret_d = dict(
+            fs_audio=fs_audio, fs_signal=fs_signal,
+            ecog_all=ecog_df,
                      ecog=ecog_df.loc[:, sensor_columns],
                      audio=audio_s,
                      channel_status=channel_df,
