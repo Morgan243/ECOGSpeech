@@ -24,6 +24,7 @@ def make_model(options, nww):
                                  batch_norm=options.batchnorm,
                                  n_bands=options.sn_n_bands,
                                  sn_padding=options.sn_padding,
+                                 dense_width=options.dense_width,
                              fs=nww.ecog_sample_rate)
     return model
 
@@ -94,31 +95,64 @@ def run(options):
 
     print(model)
     ####
-    dl_eval_kws = dict(num_workers=4, batch_size=256, shuffle=False, random_sample=False)
+    dl_eval_kws = dict(num_workers=4, batch_size=256,
+                       shuffle=False, random_sample=False)
     eval_dset_map = dict(train_dl=train_nww.to_dataloader(**dl_eval_kws),
                          cv_dl=cv_nww.to_dataloader(**dl_eval_kws),
                          test_dl=test_nww.to_dataloader(**dl_eval_kws))
 
     print("Building trainer")
-    trainer = base.Trainer(model=model, train_data_gen=train_dl, cv_data_gen=cv_dl)
+    trainer = base.Trainer(model=model, train_data_gen=train_dl,
+                           cv_data_gen=cv_dl)
     print("Training")
-    trainer.train(options.n_epochs)
+    losses = trainer.train(options.n_epochs)
     model.load_state_dict(trainer.get_best_state())
     trainer.model.eval()
 
     outputs_map = trainer.generate_outputs(**eval_dset_map)
     process_outputs(outputs_map)
+    test_perf_map = utils.performance(outputs_map['test_dl']['actuals'],
+                                      outputs_map['test_dl']['preds'] > 0.5)
 
     if options.save_model_path is not None:
         print("Saving model to " + options.save_model_path)
         torch.save(trainer.model.state_dict(), options.save_model_path)
+
+
+###
+    import uuid
+    import time
+    from datetime import datetime
+    from os.path import join as pjoin
+    import json
+    uid = str(uuid.uuid4())
+    t = int(time.time())
+    name = "%d_%s_TL.json" % (t, uid)
+    res_dict = dict(#path=path,
+                    name=name,
+                    datetime=str(datetime.now()), uid=uid,
+                    batch_losses=list(losses),
+                    num_trainable_params=utils.number_of_model_params(model),
+                    num_params=utils.number_of_model_params(model, trainable_only=False),
+                    **test_perf_map,
+                    #evaluation_perf_map=perf_maps,
+                    #**pretrain_res,
+                    #**perf_map,
+        **vars(options))
+
+    if options.result_dir is not None:
+        path = pjoin(options.result_dir, name)
+        print(path)
+        res_dict['path'] = path
+        with open(path, 'w') as f:
+            json.dump(res_dict, f)
 
     return trainer, outputs_map
 
 
 
 default_option_kwargs = [
-    dict(dest='--dense-width', default=64, type=int),
+    dict(dest='--dense-width', default=None, type=int),
     dict(dest='--sn-n-bands', default=2, type=int),
     dict(dest='--sn-kernel-size', default=31, type=int),
     dict(dest='--sn-padding', default=0, type=int),
