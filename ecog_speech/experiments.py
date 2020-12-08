@@ -1,3 +1,8 @@
+import uuid
+import time
+from datetime import datetime
+from os.path import join as pjoin
+import json
 from ecog_speech import data_loader
 import pandas as pd
 import numpy as np
@@ -16,19 +21,144 @@ def process_outputs(output_map):
         print(classification_report(o_map['actuals'], (o_map['preds'] > 0.5)))
 
 def make_model(options, nww):
-    #model = base.BaseMultiSincNN()
-    model = base.BaseMultiSincNN(64, window_size=nww.max_ecog_window_size,
-                                 sn_kernel_size=options.sn_kernel_size,
-                                 dropout=options.dropout,
-                                 dropout2d=options.dropout_2d,
-                                 batch_norm=options.batchnorm,
-                                 n_bands=options.sn_n_bands,
-                                 sn_padding=options.sn_padding,
-                                 dense_width=options.dense_width,
-                             fs=nww.ecog_sample_rate)
+    base_kws = dict(
+        window_size=nww.max_ecog_window_size,
+        dropout=options.dropout,
+        dropout2d=options.dropout_2d,
+        batch_norm=options.batchnorm,
+        dense_width=options.dense_width,
+    )
+
+    if options.model_name == 'base-sn':
+        model = base.BaseMultiSincNN(len(nww.sensor_columns),
+                                     n_bands=options.sn_n_bands,
+                                     n_cnn_filters=options.n_cnn_filters,
+                                     sn_padding=options.sn_padding,
+                                     sn_kernel_size=options.sn_kernel_size,
+                                     fs=nww.ecog_sample_rate,
+                                     **base_kws)
+    elif options.model_name == 'base-cnn':
+        model = base.BaseCNN(len(nww.sensor_columns), **base_kws)
+    else:
+        msg = f"Unknown model name {options.model_name}"
+        raise ValueError(msg)
+
     return model
 
+def make_datasets_and_loaders(options):
+    from torchvision import transforms
+    dl_kws = dict(num_workers=4, batch_size=256,
+                  shuffle=False, random_sample=True)
+    eval_dl_kws = dict(num_workers=4, batch_size=512,
+                  shuffle=False, random_sample=False)
+
+    if options.dataset == 'nww':
+        train_nww = data_loader.NorthwesternWords(power_q=options.power_q,
+                                            patient_tuples=(('Mayo Clinic', 19, 1, 1),
+                                                            # ('Mayo Clinic', 19, 1, 2),
+                                                            # ('Mayo Clinic', 19, 1, 3)
+                                                            ),
+                                            # ecog_window_n=75
+                                            )
+        if options.roll_channels:
+            train_nww.transform = transforms.Compose([
+                data_loader.RollDimension(roll_dim=0,
+                                          max_roll=len(train_nww.sensor_columns) - 1)
+            ])
+        cv_nww = data_loader.NorthwesternWords(patient_tuples=(('Mayo Clinic', 19, 1, 2),),
+                                               power_q=options.power_q)
+        test_nww = data_loader.NorthwesternWords(patient_tuples=(('Mayo Clinic', 19, 1, 3),),
+                                                 power_q=options.power_q)
+
+        dataset_map = dict(train=train_nww, cv=cv_nww, test=test_nww)
+        #dataloader_map = {k: v.to_dataloader(**dl_kws)
+        #                  for k, v in dataset_map.items()}
+        #return dataset_map, dataloader_map
+
+    elif options.dataset == 'chang-nww':
+        train_nww = data_loader.ChangNWW(power_q=options.power_q,
+                                         patient_tuples=(
+                                             ('Mayo Clinic', 19, 1, 2),
+                                             #('Mayo Clinic', 21, 1, 2),
+                                             #('Mayo Clinic', 22, 1, 2),
+                                         ),
+                                            )
+        if options.roll_channels:
+            train_nww.transform = transforms.Compose([
+                data_loader.RollDimension(roll_dim=0,
+                                          max_roll=len(train_nww.sensor_columns) - 1)
+            ])
+
+        cv_nww = data_loader.ChangNWW(power_q=options.power_q,
+                                         patient_tuples=(
+                                             ('Mayo Clinic', 24, 1, 2),
+                                         ))
+
+        test_nww = data_loader.ChangNWW(power_q=options.power_q,
+                                      patient_tuples=(
+                                          ('Mayo Clinic', 25, 1, 2),
+                                      ))
+
+        dataset_map = dict(train=train_nww, cv=cv_nww, test=test_nww)
+    else:
+        msg = f"Unknown dataset: '{options.dataset}'"
+        raise ValueError(msg)
+
+    dataloader_map = {k: v.to_dataloader(**dl_kws)
+                      for k, v in dataset_map.items()}
+    eval_dataloader_map = {k: v.to_dataloader(**eval_dl_kws)
+                                for k, v in dataset_map.items()}
+    return dataset_map, dataloader_map, eval_dataloader_map
+
+
 def run(options):
+    dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options)
+    model = make_model(options, dataset_map['train'])
+    print("Building trainer")
+    trainer = base.Trainer(model=model, train_data_gen=dl_map['train'],
+                           cv_data_gen=dl_map['cv'])
+
+
+    print("Training")
+    losses = trainer.train(options.n_epochs)
+    model.load_state_dict(trainer.get_best_state())
+    trainer.model.eval()
+
+    outputs_map = trainer.generate_outputs(**eval_dl_map)
+    process_outputs(outputs_map)
+    test_perf_map = utils.performance(outputs_map['test']['actuals'],
+                                      outputs_map['test']['preds'] > 0.5)
+
+    if options.save_model_path is not None:
+        print("Saving model to " + options.save_model_path)
+        torch.save(trainer.model.state_dict(), options.save_model_path)
+
+    uid = str(uuid.uuid4())
+    t = int(time.time())
+    name = "%d_%s_TL.json" % (t, uid)
+    res_dict = dict(#path=path,
+                    name=name,
+                    datetime=str(datetime.now()), uid=uid,
+                    batch_losses=list(losses),
+                    num_trainable_params=utils.number_of_model_params(model),
+                    num_params=utils.number_of_model_params(model, trainable_only=False),
+                    **test_perf_map,
+                    #evaluation_perf_map=perf_maps,
+                    #**pretrain_res,
+                    #**perf_map,
+        **vars(options))
+
+    if options.result_dir is not None:
+        path = pjoin(options.result_dir, name)
+        print(path)
+        res_dict['path'] = path
+        with open(path, 'w') as f:
+            json.dump(res_dict, f)
+
+    return trainer, outputs_map
+
+
+def example_run(options):
 
     ######
     # First some preprocessing that's a little hacky since
@@ -120,11 +250,6 @@ def run(options):
 
 
 ###
-    import uuid
-    import time
-    from datetime import datetime
-    from os.path import join as pjoin
-    import json
     uid = str(uuid.uuid4())
     t = int(time.time())
     name = "%d_%s_TL.json" % (t, uid)
@@ -152,10 +277,14 @@ def run(options):
 
 
 default_option_kwargs = [
+    dict(dest='--model-name', default='base-sn', type=str),
+    dict(dest='--dataset', default='nww', type=str),
+
     dict(dest='--dense-width', default=None, type=int),
     dict(dest='--sn-n-bands', default=2, type=int),
     dict(dest='--sn-kernel-size', default=31, type=int),
     dict(dest='--sn-padding', default=0, type=int),
+    dict(dest='--n-cnn-filters', default=None, type=int),
     dict(dest='--dropout', default=0., type=float),
     dict(dest='--dropout-2d', default=False, action="store_true"),
     dict(dest='--batchnorm', default=False, action="store_true"),
@@ -166,6 +295,7 @@ default_option_kwargs = [
     dict(dest='--n-epochs', default=100, type=int),
     dict(dest='--device', default='cuda:0'),
     dict(dest='--save-model-path', default=None),
+    dict(dest='--tag', default=None),
     dict(dest='--result-dir', default=None),
 ]
 
