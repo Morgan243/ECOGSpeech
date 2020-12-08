@@ -95,6 +95,71 @@ class MultiChannelSincNN(torch.nn.Module):
         o = torch.cat(o, self.unsqueeze_dim)
         return o
 
+class BaseCNN(torch.nn.Module):
+    def __init__(self, in_channels, window_size,
+                 dropout=0.,
+                 dropout2d=False,
+                 batch_norm=False,
+                 dense_width=None,
+                 n_cnn_filters=None
+                 #dense_depth=1
+                 ):
+
+        super().__init__()
+        self.dropout = dropout
+        self.activation_cls = torch.nn.SELU
+        #DrpOut = torch.nn.Dropout2d if dropout2d else torch.nn.Dropout
+        self.dropout_cls = torch.nn.Dropout2d if dropout2d else torch.nn.AlphaDropout
+        self.n_cnn_filters = 32 if n_cnn_filters is None else n_cnn_filters
+
+        def make_block(in_ch, out_ch, k_s, s, d, g):
+            b = []
+            if dropout > 0:
+                b.append(self.dropout_cls(self.dropout))
+            b.append(torch.nn.Conv2d(in_ch, out_ch, kernel_size=k_s, stride=s,
+                                     dilation=d, groups=g))
+            if batch_norm:
+                b.append(torch.nn.BatchNorm2d(out_ch))
+            b.append(self.activation_cls())
+            return b
+
+        self.m = torch.nn.Sequential(
+            Unsqueeze(1),
+
+            #MultiChannelSincNN(n_bands, in_channels,
+            #                   padding=sn_padding,
+            #                   kernel_size=sn_kernel_size, fs=fs,
+            #                   per_channel_filter=per_channel_filter),
+
+            *make_block(1, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1),
+            *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=1, g=1),
+            *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(3, 3), s=(1, 1), d=1, g=1),
+            *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(3, 3), s=(1, 1), d=1, g=1),
+            #*make_block(64, 64, k_s=(3, 3), s=(1, 1), d=1, g=1),
+            Flatten(),
+            self.dropout_cls(self.dropout)
+
+        )
+        t_in = torch.rand(32, in_channels, window_size)
+        print("T input shape: " + str(t_in.shape))
+        t_out = self.m(t_in)
+        print("T output shape: " + str(t_out.shape))
+        self.dense_width = dense_width
+        if self.dense_width is not None:
+            self.m.add_module("lin_h0", torch.nn.Linear(t_out.shape[-1], self.dense_width))
+            self.m.add_module('act_h0', self.activation_cls())
+            self.m.add_module("drp_h0", torch.nn.Dropout(self.dropout))
+            self.m.add_module("lin_output", torch.nn.Linear(self.dense_width, 1))
+        else:
+            self.m.add_module("lin_output", torch.nn.Linear(t_out.shape[-1], 1))
+
+        self.m.add_module('sigmoid_output', torch.nn.Sigmoid())
+        self.n_params = utils.number_of_model_params(self.m)
+        utils.print_sequential_arch(self.m, t_in)
+        print("N params: " + str(self.n_params))
+
+    def forward(self, x):
+        return self.m(x)
 
 class BaseMultiSincNN(torch.nn.Module):
     def __init__(self, in_channels, window_size, fs,
@@ -104,6 +169,7 @@ class BaseMultiSincNN(torch.nn.Module):
                  dropout=0.,
                  dropout2d=False,
                  batch_norm=False,
+                 n_cnn_filters=None,
                  dense_width=None,
                  #dense_depth=1
                  ):
@@ -113,6 +179,7 @@ class BaseMultiSincNN(torch.nn.Module):
         self.activation_cls = torch.nn.SELU
         #DrpOut = torch.nn.Dropout2d if dropout2d else torch.nn.Dropout
         self.dropout_cls = torch.nn.Dropout2d if dropout2d else torch.nn.AlphaDropout
+        self.n_cnn_filters = 32 if n_cnn_filters is None else n_cnn_filters
 
         def make_block(in_ch, out_ch, k_s, s, d, g):
             b = []
@@ -133,9 +200,10 @@ class BaseMultiSincNN(torch.nn.Module):
                                kernel_size=sn_kernel_size, fs=fs,
                                per_channel_filter=per_channel_filter),
 
-            *make_block(64, 64, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1),
-            *make_block(64, 64, k_s=(n_bands, 1), s=(1, 1), d=1, g=1),
-            *make_block(64, 64, k_s=(1, 3), s=(1, 3), d=1, g=1),
+            *make_block(in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1),
+            #*make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 5), s=(1, 3), d=(1, 1), g=1),
+            *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(n_bands, 1), s=(1, 1), d=1, g=1),
+            *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1),
             Flatten(),
             self.dropout_cls(self.dropout)
 
@@ -208,6 +276,10 @@ class Trainer:
                         # print("batch {i}")
                         ecog_arr = data_dict['ecog_arr'].to(self.device)
                         # ecog_arr = (ecog_arr/ecog_arr.abs().max(1, keepdim=True).values)
+
+                        if batch_idx == 0:
+                            pass
+                            #print("ECOG SHAPE: " + str(ecog_arr.shape))
 
                         actuals = data_dict['text_arr'].to(self.device)
                         # print("running model")
