@@ -35,7 +35,7 @@ def make_model(options, nww):
                                      n_cnn_filters=options.n_cnn_filters,
                                      sn_padding=options.sn_padding,
                                      sn_kernel_size=options.sn_kernel_size,
-                                     fs=nww.ecog_sample_rate,
+                                     fs=nww.default_ecog_sample_rate,
                                      **base_kws)
     elif options.model_name == 'base-cnn':
         model = base.BaseCNN(len(nww.sensor_columns), **base_kws)
