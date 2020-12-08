@@ -331,12 +331,12 @@ class NorthwesternWords(BaseDataset):
     # num_mfcc = 13
     #signal_key = 'signal'
     sensor_columns = list(range(64))
-    audio_sample_rate = 48000
-    ecog_sample_rate = 1200
+    default_audio_sample_rate = 48000
+    default_ecog_sample_rate = 1200
     ecog_pass_band = attr.ib((70, 250))
 
     # Hack
-    ecog_window_shift_sec = pd.Timedelta(0.5, 's')
+    ecog_window_shift_sec = pd.Timedelta(0.75, 's')
     #ecog_window_step_sec = attr.ib(0.01, factory=lambda s: pd.Timedelta(s, 's'))
     ecog_window_step_sec = pd.Timedelta(0.01, 's')
     ecog_window_n = attr.ib(60)
@@ -350,22 +350,22 @@ class NorthwesternWords(BaseDataset):
 
     # TODO: make the fields mappable from a dictionary of functions
     # Trying this out: define a small data schema class
-    schema_fields = ["ecog", "ecog_arr",
-                     "speech", "speech_arr",
-                     # "mfcc",
-                     "mfcc_arr",
-                     "text", "text_arr"]
-    sample_schema = attr.make_class("NorthwesterWordsSample",
-                                    schema_fields)
-    sample_schema2 = attr.make_class("NorthwesterWordsSample2",
-                                     {f: attr.ib(None) for f in schema_fields})
+#    schema_fields = ["ecog", "ecog_arr",
+#                     "speech", "speech_arr",
+#                     # "mfcc",
+#                     "mfcc_arr",
+#                     "text", "text_arr"]
+#    sample_schema = attr.make_class("NorthwesterWordsSample",
+#                                    schema_fields)
+#    sample_schema2 = attr.make_class("NorthwesterWordsSample2",
+#                                     {f: attr.ib(None) for f in schema_fields})
     selected_word_indices = attr.ib(None)
 
     stim_indexing_source = attr.ib('stim_diff')
     transform = attr.ib(None)
 
     power_threshold = attr.ib(0.007)
-    power_q = attr.ib(0.5)
+    power_q = attr.ib(0.75)
     pre_processing_pipeline = attr.ib(None)
     data_from: 'NorthwesternWords' = attr.ib(None)
 
@@ -399,7 +399,7 @@ class NorthwesternWords(BaseDataset):
             self.pipeline_steps = self.pre_processing_pipeline
 
         if self.data_from is None:
-            self.mfcc_m = torchaudio.transforms.MFCC(self.audio_sample_rate,
+            self.mfcc_m = torchaudio.transforms.MFCC(self.default_audio_sample_rate,
                                                      self.num_mfcc)
 
             ## Data loading
@@ -476,7 +476,6 @@ class NorthwesternWords(BaseDataset):
                                    for i, k in enumerate(self.flat_index_map.keys())],
                                   dtype='object')
 
-
     def __len__(self):
         return len(self.selected_flat_keys)
 
@@ -507,7 +506,7 @@ class NorthwesternWords(BaseDataset):
         ix_k, data_k = self.selected_flat_keys[i]
         t_word_ix = self.flat_index_map[ix_k]
         offs_td = pd.Timedelta(offset_seconds, 's')
-        t_word_slice = slice(t_word_ix.min() - offs_td, t_word_ix.max() - offs_td)
+        t_word_slice = slice(t_word_ix.min() - offs_td, t_word_ix.max() + offs_td)
         display(t_word_slice)
         display(t_word_ix.min() - offs_td)
         # t_word_ix = self.word_index.loc[t_word_ix.min() - offs_td: t_word_ix.max() - offs_td].index
@@ -515,7 +514,7 @@ class NorthwesternWords(BaseDataset):
         # t_word_wav_df = self.speech_df.reindex(t_word_ix)
         ecog_df = self.data_map[data_k]['ecog']
         speech_df = self.data_map[data_k]['audio']
-        word_txt = self.data_map[data_k]['word_code_d'].get(ix_k[0])
+        word_txt = self.data_map[data_k]['word_code_d'].get(ix_k[0], '<no speech>')
 
         t_word_ecog_df = ecog_df.loc[t_word_slice].dropna()
         t_word_wav_df = speech_df.loc[t_word_slice]
@@ -535,7 +534,7 @@ class NorthwesternWords(BaseDataset):
 
         if band is not None:
             plt_df = t_word_ecog_df[scols].pipe(feature_processing.filter, band=band,
-                                                sfreq=self.ecog_sample_rate)
+                                                sfreq=self.default_ecog_sample_rate)
         else:
             plt_df = t_word_ecog_df[scols]
 
@@ -754,7 +753,7 @@ class NorthwesternWords(BaseDataset):
             kws['speech_arr'] = torch.from_numpy(kws['speech'].values).float()
 
         if 'mfcc_arr' in fields:
-            mfcc_f = (torchaudio.transforms.MFCC(cls.audio_sample_rate)
+            mfcc_f = (torchaudio.transforms.MFCC(cls.default_audio_sample_rate)
                       if mfcc_f is None else mfcc_f)
             kws['mfcc_arr'] = mfcc_f(kws['speech_arr'])
 
@@ -803,15 +802,15 @@ class NorthwesternWords(BaseDataset):
         except KeyError:
             #fs_audio = cls.audio_sample_rate
             fs_audio = defaults.get('fs_audio',
-                                    cls.audio_sample_rate)
+                                    cls.default_audio_sample_rate)
 
-        assert fs_audio == cls.audio_sample_rate
+        assert fs_audio == cls.default_audio_sample_rate
 
         try:
             fs_signal = mat_d['fs_signal'][0][0]
         except KeyError:
             fs_signal = defaults.get('fs_signal',
-                                    cls.ecog_sample_rate)
+                                     cls.default_ecog_sample_rate)
 
         stim_arr = mat_d['stimcode'].reshape(-1).astype('int32')
 
@@ -948,7 +947,7 @@ class ChangNWW(NorthwesternWords):
 #                                                 ))
     data_subset = 'Preprocessed/Chang1'
     mat_d_signal_key = 'signal'
-    ecog_sample_rate = 200
+    default_ecog_sample_rate = 200
     patient_tuples = attr.ib(
         (('Mayo Clinic', 19, 1, 2),)
     )
