@@ -6,6 +6,7 @@ import torch
 from torch.utils import data as tdata
 from tqdm.auto import tqdm
 import h5py
+import scipy.io
 
 from BCI2kReader import BCI2kReader as b2k
 from os import environ
@@ -864,12 +865,13 @@ class NorthwesternWords(BaseDataset):
             channel_df = pd.DataFrame(mat_d['electrodes'], columns=chann_code_cols)
 
             # TODO: Use channel columns to set ?
+            #
             sensor_columns = channel_df.index.tolist() if sensor_columns is None else sensor_columns
             ch_m = (channel_df['code_0'] == 1)
             sensor_columns = [c for c in ch_m[ch_m].index.tolist() if c in sensor_columns]
         else:
             channel_df = None
-            sensor_columns = ecog_df.columns.tolist()
+            sensor_columns = ecog_df.columns.tolist() if sensor_columns is None else sensor_columns
             #ch_m = ecog_df.columns.notnull()
 
         print(f"Selected sensors (n={len(sensor_columns)}): "
@@ -919,13 +921,13 @@ class NorthwesternWords(BaseDataset):
         patient = 19 if patient is None else patient
         location = 1 if location is None else location
         session = 1 if session is None else session
+        trial = 1 if trial is None else trial
         sensor_columns = cls.sensor_columns if sensor_columns is None else sensor_columns
 
         if verbose:
             print(f"---{patient}-{session}-{trial}-{location}---")
 
         p = cls.get_data_path(patient, session, trial, location, base_path=base_path)
-        import scipy.io
         mat_d = scipy.io.matlab.loadmat(p)
         if parse_mat_data:
             return cls.parse_mat_arr_dict(mat_d, sensor_columns=sensor_columns,
