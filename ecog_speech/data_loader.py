@@ -419,10 +419,12 @@ class NorthwesternWords(BaseDataset):
 
             ## Data loading ##
             # - Load the data, parsing into pandas data frame/series types
+            # - Only minimal processing into Python objects done here
             data_iter = tqdm(self.patient_tuples, desc="Loading data")
             self.data_map = {l_p_s_t_tuple: self.load_data(*l_p_s_t_tuple,
                                                            verbose=self.verbose)
                              for l_p_s_t_tuple in data_iter}
+            ###-----
 
             ## Sensor check ##
             # Get selected sensors from each dataset into map
@@ -433,12 +435,14 @@ class NorthwesternWords(BaseDataset):
             assert len(self.sensor_counts) == 1
             # Once validated that all sensor columns same length, set it as attribute
             self.sensor_count = self.sensor_counts[0]
+            ###-----
 
             ## Important processing ##
-            # Process each subject in data map through pipeline steps, then
-            # generates the sample indices
+            # - Process each subject in data map through pipeline steps
+            # - After pipeline steps generate the sample indices with callable make_sample_indices
             self._process(self.data_map, self.pipeline_steps,
                           self.make_sample_indices)
+            ###-----
 
         else:
             print("Warning: using naive shared-referencing across objects")
@@ -448,6 +452,8 @@ class NorthwesternWords(BaseDataset):
             self.flat_index_map = self.data_from.flat_index_map
             self.flat_keys = self.data_from.flat_keys
 
+        # select out specific samples from the flat_keys array if selection passed
+        # - Useful if doing one-subject training and want to split data up among datasets for use
         if self.selected_word_indices is not None:
             self.selected_flat_keys = self.flat_keys[self.selected_word_indices]
         else:
@@ -797,9 +803,9 @@ class NorthwesternWords(BaseDataset):
 
     #######
     ## Path handling
-    @classmethod
-    def set_default_base_path(cls, p):
-        cls.default_base_path = p
+#    @classmethod
+#    def set_default_base_path(cls, p):
+#        cls.default_base_path = p
 
     @staticmethod
     def make_filename(patient, session, trial, location='Mayo Clinic'):
@@ -823,6 +829,28 @@ class NorthwesternWords(BaseDataset):
     def parse_mat_arr_dict(cls, mat_d, sensor_columns=None,
                            zero_repr='<ns>', defaults=None,
                            verbose=True):
+        """
+        Convert a raw matlab dataset into Python+Pandas with timeseries indices
+
+        Parameters
+
+        mat_d: dict()
+            Dictionary of data returned from scip.io matlab load
+        sensor_columns : list()
+            List of sensor IDs to use
+        zero_repr : string
+            String code for no-speech/class
+        defaults : dict()
+            Values are generally taken from the matlab dataset,
+            followed by this defaults dict, followed by the class
+            static default values
+        verbose : boolean
+            Print extra information
+
+
+        Returns : dict
+            Extracted and wrangled data and configurations
+        """
         if defaults is None:
             defaults = dict()
 
@@ -966,15 +994,6 @@ class NorthwesternWords(BaseDataset):
 
 @attr.s
 class ChangNWW(NorthwesternWords):
-#    env_key = 'CHANGNWW_DATASET'
-#    default_base_path = environ.get(env_key, # try from environment first
-#                                    # Otherwise, check code-bases host-path map
-#                                    path_map.get(socket.gethostname(),
-#                                                 # Otherwise, have a sane last resort
-#                                                 path.join(pkg_data_dir,
-#                                                           '4-Vetted Datasets',
-#                                                           'Chang1')
-#                                                 ))
     data_subset = 'Preprocessed/Chang1'
     mat_d_signal_key = 'signal'
     default_ecog_sample_rate = 200
