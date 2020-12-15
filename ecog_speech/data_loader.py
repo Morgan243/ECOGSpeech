@@ -368,9 +368,18 @@ class NorthwesternWords(BaseDataset):
     power_threshold = attr.ib(0.007)
     power_q = attr.ib(0.75)
     pre_processing_pipeline = attr.ib(None)
+    # If using one source of data, with different `selected_word_indices`, then
+    # passing the first NWW dataset to all subsequent ones built on the same source data
+    # can save on memory and reading+parsing time
     data_from: 'NorthwesternWords' = attr.ib(None)
 
-    def _make_pipeline_map(self):
+    ###
+    # Add new processing pipelines for NWW here
+    def make_pipeline_map(self):
+        """
+        Pipeline parameters sometimes depend on the configuration of the dataset class,
+        so for now it is bound method (not classmethod or staticmethod).
+        """
         cls = self.__class__
 
         p_map = {
@@ -390,30 +399,44 @@ class NorthwesternWords(BaseDataset):
         return p_map
 
     def __attrs_post_init__(self):
-        self.pipeline_map = self._make_pipeline_map()
+        # Build pipelines based on this NWW dataset state
+        self.pipeline_map = self.make_pipeline_map()
 
+        # If nothing passed, use 'default' pipeline
         if self.pre_processing_pipeline is None:
             self.pipeline_steps = self.pipeline_map['default']
+        # If string passed, use it to select the pipeline in the map
         elif isinstance(self.pre_processing_pipeline, str):
             self.pipeline_steps = self.pipeline_map[self.pre_processing_pipeline]
+        # Otherwise, just assume it will work, that a list of tuple(callable, kws) was passed
         else:
             self.pipeline_steps = self.pre_processing_pipeline
 
+        # If no data sharing, then load and parse data from scratch
         if self.data_from is None:
             self.mfcc_m = torchaudio.transforms.MFCC(self.default_audio_sample_rate,
                                                      self.num_mfcc)
 
-            ## Data loading
-            ## Load the data, parsing into pandas data frame/series types
+            ## Data loading ##
+            # - Load the data, parsing into pandas data frame/series types
             data_iter = tqdm(self.patient_tuples, desc="Loading data")
             self.data_map = {l_p_s_t_tuple: self.load_data(*l_p_s_t_tuple,
                                                            verbose=self.verbose)
                              for l_p_s_t_tuple in data_iter}
+
+            ## Sensor check ##
+            # Get selected sensors from each dataset into map
             self.sensor_map = {k: dmap['sensor_columns']
                                for k, dmap in self.data_map.items()}
+            # Make unique set and assert that they are all the same length
             self.sensor_counts = list(set(map(len, self.sensor_map.values())))
             assert len(self.sensor_counts) == 1
+            # Once validated that all sensor columns same length, set it as attribute
             self.sensor_count = self.sensor_counts[0]
+
+            ## Important processing ##
+            # Process each subject in data map through pipeline steps, then
+            # generates the sample indices
             self._process(self.data_map, self.pipeline_steps,
                           self.make_sample_indices)
 
@@ -493,8 +516,10 @@ class NorthwesternWords(BaseDataset):
 
         #if self.transform is not None:
         #    so.ecog_arr = self.transform(so.ecog_arr)
+        #return {k: v for k, v in attr.asdict(so).items()
+        #        if isinstance(v, torch.Tensor)}
 
-        return {k: v for k, v in attr.asdict(so).items()
+        return {k: v for k, v in so.items()
                 if isinstance(v, torch.Tensor)}
 
     def sample_plot(self, i, band=None,
@@ -760,12 +785,15 @@ class NorthwesternWords(BaseDataset):
 
         if 'text_arr' in fields:
             kws['text'] = '<silence>' if text_label <= 0 else '<speech>'
+            kws['text_arr'] = torch.Tensor([0] if text_label <= 0 else [1])
             # kws['test'] = text_enc_f()
-            kws['text_arr'] = torch.Tensor({'<silence>': [0], '<speech>': [1]}.get(kws['text']))
+            #kws['text_arr'] = torch.Tensor({'<silence>': [0], '<speech>': [1]}.get(kws['text']))
 
-        kws.update({k: None for k in cls.schema_fields if k not in kws})
-        s = cls.sample_schema(**kws)
-        return s
+        return kws
+        #return {f: kws[f]}
+        #kws.update({k: None for k in cls.schema_fields if k not in kws})
+        #s = cls.sample_schema(**kws)
+        #return s
 
     #######
     ## Path handling
