@@ -22,7 +22,7 @@ def process_outputs(output_map):
 
 def make_model(options, nww):
     base_kws = dict(
-        window_size=nww.max_ecog_window_size,
+        window_size=nww.ecog_window_size,
         dropout=options.dropout,
         dropout2d=options.dropout_2d,
         batch_norm=options.batchnorm,

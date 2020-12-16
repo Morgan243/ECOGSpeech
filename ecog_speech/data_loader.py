@@ -345,7 +345,7 @@ class NorthwesternWords(BaseDataset):
     # In terms of audio samples
     # fixed_window_size = attr.ib(audio_sample_rate * 1)
     # fixed_window_step = attr.ib(int(audio_sample_rate * .01))
-    max_ecog_window_size = attr.ib(600)
+    ecog_window_size = attr.ib(600)
     num_mfcc = attr.ib(13)
     verbose = attr.ib(True)
 
@@ -462,6 +462,8 @@ class NorthwesternWords(BaseDataset):
     def _process(self, data_maps, pre_pipeline, sample_index_f):
         self.sample_index_maps = dict()
         for k in data_maps.keys():
+            print("-"*30)
+            print("Processing: " + str(k))
             dmap = data_maps[k]
             for p_i, (p_func, p_kws) in enumerate(pre_pipeline):
                 print(f"[{p_i}] {p_func.__name__}({','.join(p_kws.keys())})")
@@ -492,7 +494,7 @@ class NorthwesternWords(BaseDataset):
             #   with the same source as the stim.
             self.sample_index_maps[k] = sample_index_f(
                 dmap[dmap['remap'][self.stim_indexing_source]],
-                self.max_ecog_window_size,
+                self.ecog_window_size,
                 self.ecog_window_n)
 
         self.flat_index_map = {tuple([wrd_id, ix_i] + list(k_t)): ixes
@@ -510,21 +512,19 @@ class NorthwesternWords(BaseDataset):
         return len(self.selected_flat_keys)
 
     def __getitem__(self, item):
+        # ix_k includes the class and window id
+        # data_k specifies subject dataset in data_map (less granular than ix_k)
         ix_k, data_k = self.selected_flat_keys[item]
         data_d = self.data_map[data_k]
 
+        # Put it all together (TODO: cleanup this interface)
         so = self.make_sample_object(self.flat_index_map[ix_k],
                                      ix_k[0], data_d['ecog'],
                                      data_d['audio'],
                                      ecog_transform=self.transform,
                                      #max_ecog_samples=self.max_ecog_window_size,
                                      mfcc_f=self.mfcc_m)
-
-        #if self.transform is not None:
-        #    so.ecog_arr = self.transform(so.ecog_arr)
-        #return {k: v for k, v in attr.asdict(so).items()
-        #        if isinstance(v, torch.Tensor)}
-
+        # Return anything that is a Torch Tensor
         return {k: v for k, v in so.items()
                 if isinstance(v, torch.Tensor)}
 
@@ -1000,7 +1000,7 @@ class ChangNWW(NorthwesternWords):
     patient_tuples = attr.ib(
         (('Mayo Clinic', 19, 1, 2),)
     )
-    max_ecog_window_size = attr.ib(100)
+    ecog_window_size = attr.ib(100)
     pre_processing_pipeline = attr.ib('minimal')
     data_from: 'NorthwesternWords' = attr.ib(None)
 
@@ -1175,7 +1175,7 @@ class NorthwesternWords_BCI2k(BaseDataset):
 
     @classmethod
     def process_ecog(cls, nww, ix):
-        return nww.ecog_df.loc[ix.min():].dropna().iloc[:nww.max_ecog_window_size]
+        return nww.ecog_df.loc[ix.min():].dropna().iloc[:nww.ecog_window_size]
 
     @classmethod
     def make_sample_object(cls, ix, text_label, ecog_df,
