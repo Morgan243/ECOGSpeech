@@ -3,12 +3,12 @@ import time
 from datetime import datetime
 from os.path import join as pjoin
 import json
-from ecog_speech import data_loader
+from ecog_speech import datasets
 import pandas as pd
 import numpy as np
 import matplotlib
 import torch
-from ecog_speech import data_loader, feature_processing, utils
+from ecog_speech import datasets, feature_processing, utils
 from tqdm.auto import tqdm
 from ecog_speech.models import base
 from sklearn.model_selection import train_test_split
@@ -53,22 +53,22 @@ def make_datasets_and_loaders(options):
                   shuffle=False, random_sample=False)
 
     if options.dataset == 'nww':
-        train_nww = data_loader.NorthwesternWords(power_q=options.power_q,
-                                            patient_tuples=(('Mayo Clinic', 19, 1, 1),
+        train_nww = datasets.NorthwesternWords(power_q=options.power_q,
+                                               patient_tuples=(('Mayo Clinic', 19, 1, 1),
                                                             # ('Mayo Clinic', 19, 1, 2),
                                                             # ('Mayo Clinic', 19, 1, 3)
                                                             ),
-                                            # ecog_window_n=75
-                                            )
+                                               # ecog_window_n=75
+                                               )
         if options.roll_channels:
             train_nww.transform = transforms.Compose([
-                data_loader.RollDimension(roll_dim=0,
-                                          max_roll=len(train_nww.sensor_columns) - 1)
+                datasets.RollDimension(roll_dim=0,
+                                       max_roll=len(train_nww.sensor_columns) - 1)
             ])
-        cv_nww = data_loader.NorthwesternWords(patient_tuples=(('Mayo Clinic', 19, 1, 2),),
-                                               power_q=options.power_q)
-        test_nww = data_loader.NorthwesternWords(patient_tuples=(('Mayo Clinic', 19, 1, 3),),
-                                                 power_q=options.power_q)
+        cv_nww = datasets.NorthwesternWords(patient_tuples=(('Mayo Clinic', 19, 1, 2),),
+                                            power_q=options.power_q)
+        test_nww = datasets.NorthwesternWords(patient_tuples=(('Mayo Clinic', 19, 1, 3),),
+                                              power_q=options.power_q)
 
         dataset_map = dict(train=train_nww, cv=cv_nww, test=test_nww)
         #dataloader_map = {k: v.to_dataloader(**dl_kws)
@@ -76,26 +76,26 @@ def make_datasets_and_loaders(options):
         #return dataset_map, dataloader_map
 
     elif options.dataset == 'chang-nww':
-        train_nww = data_loader.ChangNWW(power_q=options.power_q,
-                                         patient_tuples=(
+        train_nww = datasets.ChangNWW(power_q=options.power_q,
+                                      patient_tuples=(
                                              ('Mayo Clinic', 19, 1, 2),
                                              #('Mayo Clinic', 21, 1, 2),
                                              #('Mayo Clinic', 22, 1, 2),
                                          ),
-                                            )
+                                      )
         if options.roll_channels:
             train_nww.transform = transforms.Compose([
-                data_loader.RollDimension(roll_dim=0,
-                                          max_roll=len(train_nww.sensor_columns) - 1)
+                datasets.RollDimension(roll_dim=0,
+                                       max_roll=len(train_nww.sensor_columns) - 1)
             ])
 
-        cv_nww = data_loader.ChangNWW(power_q=options.power_q,
-                                         patient_tuples=(
+        cv_nww = datasets.ChangNWW(power_q=options.power_q,
+                                   patient_tuples=(
                                              ('Mayo Clinic', 24, 1, 2),
                                          ))
 
-        test_nww = data_loader.ChangNWW(power_q=options.power_q,
-                                      patient_tuples=(
+        test_nww = datasets.ChangNWW(power_q=options.power_q,
+                                     patient_tuples=(
                                           ('Mayo Clinic', 25, 1, 2),
                                       ))
 
@@ -169,18 +169,18 @@ def example_run(options):
 
     # Loads the dataset and uses some feature processing
     # to find areas where speech is happening and label it
-    nww = data_loader.NorthwesternWords(power_q=options.power_q,
-                                        patient_tuples=(('Mayo Clinic', 19, 1, 1),
+    nww = datasets.NorthwesternWords(power_q=options.power_q,
+                                     patient_tuples=(('Mayo Clinic', 19, 1, 1),
                                                         #('Mayo Clinic', 19, 1, 2),
                                                         #('Mayo Clinic', 19, 1, 3)
                                                         ),
-                                        #ecog_window_n=75
-                                        )
+                                     #ecog_window_n=75
+                                     )
     from torchvision import transforms
     transform = None
     if options.roll_channels:
         transform = transforms.Compose([
-            data_loader.RollDimension(roll_dim=0, max_roll=len(nww.sensor_columns) - 1)
+            datasets.RollDimension(roll_dim=0, max_roll=len(nww.sensor_columns) - 1)
         ])
 
     # Word index series is the same length as the speech data
@@ -198,17 +198,17 @@ def example_run(options):
     ######
     # Now we are ready to create our datasets for training and testing
     #####
-    train_nww = data_loader.NorthwesternWords(#selected_word_indices=train_ixes,
+    train_nww = datasets.NorthwesternWords(#selected_word_indices=train_ixes,
         transform=transform,
                                               data_from=nww)
     #cv_nww = data_loader.NorthwesternWords(selected_word_indices=cv_ixes,
     #                                       data_from=nww)
-    cv_nww = data_loader.NorthwesternWords(patient_tuples=(('Mayo Clinic', 19, 1, 2),),
-                                             power_q=options.power_q)
+    cv_nww = datasets.NorthwesternWords(patient_tuples=(('Mayo Clinic', 19, 1, 2),),
+                                        power_q=options.power_q)
     #test_nww = data_loader.NorthwesternWords(selected_word_indices=test_ixes,
     #                                         data_from=nww)
-    test_nww = data_loader.NorthwesternWords(patient_tuples=(('Mayo Clinic', 19, 1, 3),),
-                                             power_q=options.power_q)
+    test_nww = datasets.NorthwesternWords(patient_tuples=(('Mayo Clinic', 19, 1, 3),),
+                                          power_q=options.power_q)
 
     # Get pytorch dataloaders
     dl_kws = dict(num_workers=4, batch_size=256,
@@ -281,7 +281,7 @@ default_option_kwargs = [
     dict(dest='--dataset', default='nww', type=str),
 
     dict(dest='--dense-width', default=None, type=int),
-    dict(dest='--sn-n-bands', default=2, type=int),
+    dict(dest='--sn-n-bands', default=1, type=int),
     dict(dest='--sn-kernel-size', default=31, type=int),
     dict(dest='--sn-padding', default=0, type=int),
     dict(dest='--n-cnn-filters', default=None, type=int),
@@ -290,7 +290,7 @@ default_option_kwargs = [
     dict(dest='--batchnorm', default=False, action="store_true"),
     dict(dest='--roll-channels', default=False, action="store_true"),
 
-    dict(dest='--power-q', default=0.5, type=float),
+    dict(dest='--power-q', default=0.7, type=float),
 
     dict(dest='--n-epochs', default=100, type=int),
     dict(dest='--device', default='cuda:0'),
