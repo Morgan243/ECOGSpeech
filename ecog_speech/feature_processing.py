@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import attr
 
 
 def peak_normalization(arr_s, output_type=int):
@@ -87,3 +88,178 @@ def filter(s, band, sfreq=1000, verbose=False, n_jobs=4,
         ret = filtered_phase_arr
 
     return ret
+
+###
+@attr.s
+class ProcessPipeline:
+    name = attr.ib(None)
+    steps = attr.ib(None)
+
+    def __attrs_post_init__(self):
+        if self.steps is None:
+            self.steps = self.make_steps()
+
+        if self.name is None:
+            self.name = self.__class__.__name__
+
+    def __call__(self, x):
+        _x = x
+        for i, (s_func, s_kws) in enumerate(self.steps):
+            _x = s_func(_x, **s_kws)
+        return _x
+
+    def __rshift__(self, other):
+        if not isinstance(other, ProcessStep):
+            raise ValueError("Online ProcessStep types allowed for now :|")
+
+        self.steps.append((other, dict()))
+        return self
+
+
+@attr.s
+class ProcessStep:
+    name = attr.ib(None)
+
+    input_override = attr.ib(None)
+    input_remap = attr.ib(None)
+    output_remap = attr.ib(None)
+
+    expects = None
+    outputs = None
+
+    def __attrs_post_init__(self):
+        if self.name is None:
+            self.name = self.__class__.__name__
+
+    def __call__(self, x):
+        if self.input_remap is not None:
+            for k, v in  self.input_remap.items():
+                x[k] = x[v]
+
+        if self.input_override is not None:
+            for k, v in self.input_override.items():
+                x[k] = v
+
+        for e in self.expects:
+            if e not in x:
+                raise ValueError(f"Missing input field: {e} (all fields: {', '.join(x.keys())}")
+
+        x_updates = self.step(x)
+        # TODO: maybe deep copy? add parameter for clone?
+        _x = x
+        for k, v in x_updates.items():
+            if k not in self.outputs:
+                raise ValueError(f"Unspecified output {k}")
+            _x[k] = v
+
+        #_x = x
+        #for i, (s_func, s_kws) in enumerate(self.steps):
+        #    _x = s_func(_x, **s_kws)
+
+        if self.output_remap is not None:
+            for k, v in self.output_remap.items():
+                _x[k] = _x[v]
+
+        if self.outputs is not None:
+            for o in self.outputs:
+                if o not in _x:
+                    raise ValueError(f"Missing output field: {e} (all fields: {', '.join(x.keys())}")
+
+        return _x
+
+    def __rshift__(self, other):
+        return ProcessPipeline(steps=[(self, dict()), (other, dict())])
+
+    def step(self, data_map):
+        raise NotImplementedError()
+
+
+class WordStopStartTimeMap(ProcessStep):
+    verbose = attr.ib(False)
+    expects = ['stim', 'stim_diff', 'word_code_d']
+    outputs = ['start_times_d', 'stop_times_d']
+
+    def step(self, data_map):
+        return self.default_preprocessing(data_map, self.verbose)
+
+    @staticmethod
+    def default_preprocessing(data_map, verbose=False):
+        stim_s = data_map['stim']
+        stim_diff_s = data_map['stim_diff']
+        ######
+        # Stim event codes and txt
+        # 0 is neutral, so running difference will identify the onsets
+        # stim_diff_s = stim_s.diff().fillna(0).astype(int)
+        # return dict(stim_diff=stim_diff_s)
+
+        word_code_d = data_map['word_code_d']
+        ######
+        # Stim event codes and txt
+        # 0 is neutral, so running difference will identify the onsets
+        # stim_diff_s = stim_s.diff().fillna(0).astype(int)
+
+        # Grab only the samples at the onset
+        start_times_cd = stim_diff_s.loc[stim_diff_s > 0].astype(int)
+        # start_times_txt = start_times_cd.map(lambda v: word_code_arr[v - 1])
+        start_times_txt = start_times_cd.map(word_code_d)
+
+        stop_times_cd = stim_diff_s.loc[stim_diff_s < 0].astype(int).abs()
+        # stop_times_txt = stop_times_cd.map(lambda v: word_code_arr[v - 1])
+        stop_times_txt = stop_times_cd.map(word_code_d)
+
+        ####
+        start_time_map = {f"{i}-{w}": st
+                          for i, (st, w) in enumerate(start_times_txt.to_dict().items())}
+        stop_time_map = {f"{i}-{w}": st
+                         for i, (st, w) in enumerate(stop_times_txt.to_dict().items())}
+
+        if verbose:
+            print(f"Sample Words: {','.join(list(start_time_map.keys())[:5])}")
+
+        updates = dict(  # stim_diff=stim_diff_s,
+            # stim_auto=stim_auto_s,
+            # stim_auto_diff=stim_auto_diff_s,
+            start_times_d=start_time_map,
+            stop_times_d=stop_time_map)
+        # data_map.update(updates)
+        return updates
+
+
+@attr.s
+class PowerThreshold(ProcessStep):
+    name = 'threshold'
+
+    #input_override = attr.ib(None)
+    threshold = attr.ib(0.007)
+
+    #input_remap = attr.ib(None)#attr.Factory(lambda :dict(stim='stim_pwrt', stim_diff='stim_pwrt_diff')))
+    output_remap = attr.ib(attr.Factory(lambda :dict(stim='stim_pwrt', stim_diff='stim_pwrt_diff')))
+
+    expects = ['audio', 'stim']
+    outputs = ['stim_pwrt', 'stim_pwrt_diff', 'rolling_audio_pwr']
+
+    def step(self, data_map):
+        return self.stim_adjust__power_threshold(data_map, threshold=self.threshold)
+
+    @staticmethod
+    def stim_adjust__power_threshold(data_map, threshold=0.007):
+        audio_s = data_map['audio']
+        stim_s = data_map['stim']
+
+        rolling_pwr = audio_s.abs().rolling(48000).max().reindex(stim_s.index).fillna(method='ffill')
+        stim_auto_m = (stim_s != 0.) & (rolling_pwr > threshold)
+        # Subtract one for no speech (0)
+        eq = (stim_s.nunique(dropna=False) - 1) == stim_s[stim_auto_m].nunique(dropna=False)
+
+        if not eq:
+            msg = "stim_s and stim_auto not equal: %d - 1 != %d" % (stim_s.nunique(False),
+                                                                    stim_s[stim_auto_m].nunique(False))
+            print(msg)
+        stim_pwrt_s = pd.Series(np.where(stim_auto_m, stim_s, 0), index=stim_s.index)
+        stim_pwrt_diff_s = stim_pwrt_s.diff().fillna(0).astype(int)
+
+        updates = dict(stim_pwrt=stim_pwrt_s, stim_pwrt_diff=stim_pwrt_diff_s,
+                       rolling_audio_pwr=rolling_pwr)
+        #remaps = dict(stim='stim_pwrt', stim_diff='stim_pwrt_diff')
+        #return updates, remaps
+        return updates
