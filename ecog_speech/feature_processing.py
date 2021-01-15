@@ -109,11 +109,16 @@ class ProcessPipeline:
         return _x
 
     def __rshift__(self, other):
-        if not isinstance(other, ProcessStep):
-            raise ValueError("Online ProcessStep types allowed for now :|")
 
-        self.steps.append((other, dict()))
-        return self
+        if isinstance(other, ProcessStep):
+            self.steps.append((other, dict()))
+            ret_o = self
+        elif isinstance(other, ProcessPipeline):
+            ret_o = ProcessPipeline(name=f"{self.name}__{other.name}", steps=self.steps + other.steps)
+        else:
+            raise ValueError("Only ProcessStep/Pipeline types allowed for now :|")
+
+        return ret_o
 
 
 @attr.s
