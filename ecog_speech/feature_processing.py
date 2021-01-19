@@ -268,3 +268,130 @@ class PowerThreshold(ProcessStep):
         #remaps = dict(stim='stim_pwrt', stim_diff='stim_pwrt_diff')
         #return updates, remaps
         return updates
+
+
+
+@attr.s
+class PowerQuantile(ProcessStep):
+    q = attr.ib(0.75)
+    trim_sample_n = attr.ib(50)
+
+    output_remap = attr.ib(attr.Factory(lambda :dict(stim='stim_pwrq', stim_diff='stim_pwrq_diff')))
+    expects = ['audio', 'stim']
+    outputs = ['stim_pwrq', 'stim_pwrq_diff', 'rolling_audio_pwr']
+
+    def step(self, data_map):
+        return self.stim_adjust__power_quantile(data_map, self.q, self.trim_sample_n)
+
+    @staticmethod
+    def stim_adjust__power_quantile(data_map, q=0.75, trim_sample_n=50):
+        audio_s = data_map['audio']
+        stim_s = data_map['stim']
+
+        rolling_pwr = audio_s.abs().rolling(48000).mean().reindex(stim_s.index).fillna(method='ffill').fillna(0)
+        # TODO: before taking quantile or grabbing slice, clip ends to avoid positioning at extreme of stim code region
+        #q_thresh_s = rolling_pwr.groupby(stim_s).quantile(q)
+        q_thresh_s = rolling_pwr.groupby(stim_s).apply(lambda s: s.iloc[trim_sample_n:-trim_sample_n].quantile(q))
+        # Label zero doesn't really matter, but set it's threshold to zero
+        q_thresh_s.loc[0] = 0
+
+        # Create a mask of regions where stim code is set and the audio power is above
+        # quantile(q) for the stim region
+        stim_auto_m = (stim_s != 0.) & (rolling_pwr >= stim_s.map(q_thresh_s.to_dict()))
+
+        eq = (stim_s.nunique(dropna=False) - 1) == stim_s[stim_auto_m].nunique(dropna=False)
+
+        if not eq:
+            msg = "stim_s and stim_auto not equal: %d - 1 != %d" % (stim_s.nunique(False),
+                                                                    stim_s[stim_auto_m].nunique(False))
+            print(msg)
+
+        # New stim takes origin stim value only where the mask is set, otherwise 0
+        stim_pwrq_s = pd.Series(np.where(stim_auto_m, stim_s, 0), index=stim_s.index)
+
+        # Diff it: positive stim value indicates start, negative stim value
+        # denotes beginning of of the end of the word
+        stim_pwrq_diff_s = stim_pwrq_s.diff().fillna(0).astype(int)
+
+        updates = dict(stim_pwrq=stim_pwrq_s, stim_pwrq_diff=stim_pwrq_diff_s,
+                       rolling_audio_pwr=rolling_pwr)
+        #remaps = dict(stim='stim_pwrq', stim_diff='stim_pwrq_diff')
+        #return updates, remaps
+        return updates
+
+@attr.s
+class SampleIndicesFromStim(ProcessStep):
+    expects = ['stim_diff']
+    outputs = ['sample_index_map']
+    ecog_window_size = attr.ib(600)
+    ecog_window_n = attr.ib(60)
+    ecog_window_step_sec =  attr.ib(pd.Timedelta(0.01, 's'))
+    ecog_window_shift_sec = attr.ib(pd.Timedelta(0.75, 's'))
+
+    def step(self, data_map):
+        return self.make_sample_indices(data_map, self.ecog_window_size, self.ecog_window_n,
+                                        self.ecog_window_step_sec, self.ecog_window_shift_sec)
+
+    @staticmethod
+    def make_sample_indices(data_map, win_size, ecog_window_n, ecog_window_step_sec, ecog_window_shift_sec):
+        """
+        Group by a label index (repeated label measures, one per sample)
+        to find start and end points, then slice at the appropriate offsets
+        back into the original data to capture the index (not the data).
+
+
+        :param label_index:
+        :param win_size:
+        :param win_step:
+        :return:
+        """
+        label_index = data_map['stim_diff']
+
+        sample_indices = dict()
+        ####
+        # Separate into two sets and loops so that the negative
+        # samples can be derived from the positive samples
+        pos_ix = label_index[label_index > 0]
+        neg_ix = label_index[label_index < 0]
+        pos_grp = pos_ix.groupby(pos_ix)
+        neg_grp = neg_ix.groupby(neg_ix)
+
+        # Positive windows extracted first - this way negative windows
+        # can potentially be extracted based on the postive windows
+        for wrd_id, wave_wrd_values in pos_grp:
+            start_t = wave_wrd_values.index.min() - ecog_window_shift_sec
+
+            sample_indices[wrd_id] = [label_index
+                                          .loc[start_t + i * ecog_window_step_sec:]
+                                          .iloc[:win_size]
+                                          .index
+                                      for i in range(ecog_window_n)]
+
+        for wrd_id, wave_wrd_values in neg_grp:
+            start_t = wave_wrd_values.index.min()  # - cls.ecog_window_shift_sec
+
+            # Where the last positive window ends
+            pos_ix = sample_indices[-wrd_id][-1].max()
+            # Start from positive window if there's overlap
+            if start_t < pos_ix:
+                start_t = pos_ix
+
+            sample_indices[wrd_id] = [label_index
+                                          .loc[start_t + i * ecog_window_step_sec:]
+                                          .iloc[:win_size]
+                                          .index
+                                      for i in range(ecog_window_n)]
+
+        # Hacky, but just remove anything that's not the right side from the end
+        # sample_indices[wrd_id] = [ixes for ixes in sample_indices[wrd_id]
+        #                          if len(ixes) == win_size]
+        sample_indices = {w: [ix for ix in ixes if len(ix) == win_size]
+                          for w, ixes in sample_indices.items()}
+        for w, ixes in sample_indices.items():
+            if len(ixes) == 0:
+                msg = ("Error: word %d had no windows" % w)
+                print(msg)
+
+        # TODO: Compute flat_index_map and flat_keys and return
+
+        return dict(sample_index_map=sample_indices)
