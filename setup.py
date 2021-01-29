@@ -8,5 +8,5 @@ setup(name='ECOGSpeech',
             'BCI2kReader',
             'torchaudio', 'tqdm',
             'numpy', 'pandas',
-            'sklearn',
+            'sklearn', 'mne',
             'attrs'])
