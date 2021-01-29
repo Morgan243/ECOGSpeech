@@ -95,6 +95,11 @@ class MultiChannelSincNN(torch.nn.Module):
         o = torch.cat(o, self.unsqueeze_dim)
         return o
 
+    def get_band_params(self, trainer=None):
+        return [dict(band_hz=snn.band_hz_.clone().cpu().detach().numpy(),
+                     low_hz=snn.low_hz_.clone().cpu().detach().numpy())
+                for snn in self.sinc_nn_list]
+
 class BaseCNN(torch.nn.Module):
     def __init__(self, in_channels, window_size,
                  dropout=0.,
@@ -228,21 +233,73 @@ class BaseMultiSincNN(torch.nn.Module):
     def forward(self, x):
         return self.m(x)
 
+    def get_band_params(self, trainer=None):
+        parameters = list()
+        for i, _m in enumerate(self.m):
+            is_m = isinstance(_m,
+                              MultiChannelSincNN)
+            if is_m:
+                # in case there are multiple...?
+                parameters.append(_m.get_band_params(trainer))
+
+        if len(parameters) == 1:
+            return parameters[0]
+        else:
+            return parameters
+
+
 @attr.attrs
 class Trainer:
-    model = attr.ib()
+    model_map = attr.ib()
+    opt_map = attr.ib()
 
     train_data_gen = attr.ib()
-    optim_kwargs = attr.ib(dict(weight_decay=0.2, lr=0.001))
+    #optim_kwargs = attr.ib(dict(weight_decay=0.2, lr=0.001))
+    learning_rate = attr.ib(0.001)
+    beta1 = attr.ib(0.5)
+
+    criterion = attr.ib(torch.nn.BCELoss())
     cv_data_gen = attr.ib(None)
     epochs_trained = attr.ib(0)
     device = attr.ib(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
 
-    def get_best_state(self):
+    epoch_cb_history = attr.ib(attr.Factory(list), init=False)
+    batch_cb_history = attr.ib(attr.Factory(list), init=False)
+
+
+    default_optim_cls = torch.optim.Adam
+
+    def __attrs_post_init__(self):
+        self.model_map = {k: v.to(self.device) for k, v in self.model_map.items()}
+        #self.opt_map = dict()
+        for k, m in self.model_map.items():
+            m.apply(self.weights_init)
+
+            if k not in self.opt_map:
+                if self.default_optim_cls == torch.optim.Adam:
+                    self.opt_map[k] = self.default_optim_cls(m.parameters(),
+                                                       lr=self.learning_rate,
+                                                       betas=(self.beta1, 0.999))
+                elif self.default_optim_cls == torch.optim.RMSprop:
+                    self.opt_map[k] = self.default_optim_cls(m.parameters(),
+                                                             lr=self.learning_rate)
+
+    def get_best_state(self, model_key='model'):
         if self.best_model_state is not None:
             return self.best_model_state
         else:
-            return self.copy_model_state(self.m)
+            return self.copy_model_state(self.model_map[model_key])
+
+    @staticmethod
+    def weights_init(m):
+        classname = m.__class__.__name__
+        if 'Sinc' in classname:
+            pass
+        elif 'Conv' in classname or 'Linear' in classname:
+            torch.nn.init.normal_(m.weight.data, 0.0, 0.02)
+        elif 'BatchNorm' in classname:
+            torch.nn.init.normal_(m.weight.data, 1.0, 0.02)
+            torch.nn.init.constant_(m.bias.data, 0)
 
     @staticmethod
     def copy_model_state(m):
@@ -252,92 +309,212 @@ class Trainer:
         return s
 
     def train(self, n_epochs, epoch_callbacks=None, batch_callbacks=None,
-              batch_cb_delta=5):
+              batch_cb_delta=3):
 
         epoch_callbacks = dict() if epoch_callbacks is None else epoch_callbacks
         batch_callbacks = dict() if batch_callbacks is None else batch_callbacks
 
-        self.model = self.model.to(self.device)
+        #self.epoch_losses = list()
+        self.train_batch_results = list()
+        self.epoch_results = getattr(self, 'epoch_results', dict(epoch=list(), batch=list()))
 
-        # self.criterion = torch.nn.CrossEntropyLoss()
-        self.criterion = torch.nn.BCELoss()  # weight=torch.tensor(2))
-        self.optim = torch.optim.Adam(self.model.parameters(), **self.optim_kwargs)
-        self.losses = getattr(self, 'losses', list())
-        self.cv_losses = getattr(self, 'cv_losses', list())
-        best_cv = np.inf
-        train_loss = 0
-        with tqdm(total=n_epochs, desc='Train epoch') as epoch_pbar:
+        self.epoch_cb_history += [{k: cb(self) for k, cb in epoch_callbacks.items()}]
+        #self.batch_cb_history += [{k: cb(self) for k, cb in batch_callbacks.items()}]
+        self.batch_cb_history = {k: list() for k in batch_callbacks.keys()}
+
+        self.n_samples = len(self.train_data_gen)
+
+        with tqdm(total=n_epochs,
+                  desc='Training epoch',
+                  dynamic_ncols=True
+                  #ncols='100%'
+                  ) as epoch_pbar:
             for epoch in range(self.epochs_trained, self.epochs_trained + n_epochs):
-                self.model.train()
-                with tqdm(total=len(self.train_data_gen), desc='-loss-') as batch_pbar:
-                    for batch_idx, data_dict in enumerate(self.train_data_gen):
-                        self.model.zero_grad()
+                with tqdm(total=self.n_samples, desc='-loss-', dynamic_ncols=True) as batch_pbar:
+                    for i, data in enumerate(self.train_data_gen):
+                        update_d = self.train_inner_step(epoch, data)
 
-                        # print("batch {i}")
-                        ecog_arr = data_dict['ecog_arr'].to(self.device)
-                        # ecog_arr = (ecog_arr/ecog_arr.abs().max(1, keepdim=True).values)
+                        self.epoch_results['epoch'].append(epoch)
+                        self.epoch_results['batch'].append(i)
 
-                        if batch_idx == 0:
-                            pass
-                            #print("ECOG SHAPE: " + str(ecog_arr.shape))
+                        prog_msgs = list()
+                        for k, v in update_d.items():
+                            # TODO: What about spruious results? Maybe do list of dicts instead?
+                            if k not in self.epoch_results:
+                                self.epoch_results[k] = [v]
+                            else:
+                                self.epoch_results[k].append(v)
 
-                        actuals = data_dict['text_arr'].to(self.device)
-                        # print("running model")
-                        m_output = self.model(ecog_arr)
 
-                        self.optim.zero_grad()
-                        loss = self.criterion(m_output, actuals)
-                        # print("backward")
-                        loss.backward()
-                        self.optim.step()
-                        l = loss.detach().cpu().item()
+                            v_l = np.round(np.mean(self.epoch_results[k][-20:]), 4)
+                            prog_msgs.append(f"{k}: {v_l}")
 
-                        train_loss += l
 
-                        self.losses.append(l)
-                        mu_loss = np.mean(self.losses[-(batch_idx + 1):])
-                        batch_pbar.set_description("%d - Loss: %f"
-                                                   % (epoch, mu_loss))
-
+                        msg = " || ".join(prog_msgs)
+                        # Save Losses for plotting later
+                        #G_losses.append(errG.item())
+                        #D_losses.append(errD.item())
+                        #batch_pbar.set_description("Gen-L: %.3f || Disc-L:%.3f" % (np.mean(G_losses[-20:]),
+                        #                                                           np.mean(D_losses[-20:])))
+                        batch_pbar.set_description(msg)
                         batch_pbar.update(1)
-                    #####
-                    if self.cv_data_gen is not None:
-                        self.model.eval()
-                        with tqdm(total=len(self.cv_data_gen), desc='CV::') as cv_pbar:
-                            with torch.no_grad():
-                                for cv_idx, cv_data_dict in enumerate(self.cv_data_gen):
-                                    cv_X = cv_data_dict['ecog_arr'].to(self.device)
-                                    cv_y = cv_data_dict['text_arr'].to(self.device)
+                        for k, cb in batch_callbacks.items():
+                            self.batch_cb_history[k].append(cb(self))
 
-                                    cv_pred = self.model(cv_X)
-                                    cv_loss = self.criterion(cv_pred, cv_y)
-                                    self.cv_losses.append(cv_loss.detach().cpu().item())
+                        #if not i % batch_cb_delta:
+                        #    self.batch_cb_history.append({k: cb(self) for k, cb in batch_callbacks.items()})
 
-                                    cv_pbar.update(1)
-                                    cv_mean_loss = np.mean(self.cv_losses[-(1 + cv_idx):])
-                                    desc = "CV Loss: %.4f" % cv_mean_loss
-                                    cv_pbar.set_description(desc)
+                #self.epoch_losses.append(dict(gen_losses=G_losses, disc_losses=D_losses))
+                #self.epoch_losses.append(epoch_results)
+                #self.train_batch_results.append(epoch_results)
+                self.epochs_trained += 1
+                self.epoch_cb_history.append({k: cb(self) for k, cb in epoch_callbacks.items()})
+                if self.cv_data_gen:
+                    cv_losses = self.eval(epoch, self.cv_data_gen)
 
-                                if cv_mean_loss < best_cv:
-                                    self.best_model_state = copy_model_state(self.model)
-                                    self.best_model_epoch = epoch
-                                    desc = "CV Loss: %.4f [[NEW BEST]]" % cv_mean_loss
-                                    cv_pbar.set_description(desc)
-                                    best_cv = cv_mean_loss
-
-                        self.model.train()
                 epoch_pbar.update(1)
+        #return self.train_batch_results
+        return self.epoch_results
 
-        return self.losses
+    def eval(self, epoch_i, dataloader):
+        model = self.model_map['model']
+        self.best_cv = getattr(self, 'best_cv', np.inf)
 
-    def generate_outputs(self, **dl_map):
-        self.model.eval()
+        preds_l, actuals_l, loss_l = list(), list(), list()
+        with torch.no_grad():
+            with tqdm(total=len(dataloader), desc="Eval") as pbar:
+                for i, _x in enumerate(dataloader):
+                    preds = model(_x['ecog_arr'].to(self.device))
+                    loss_l.append(self.criterion(preds, _x['text_arr']).detach().cpu().item())
+
+                    pbar.update(1)
+
+                mean_loss = np.mean(loss_l)
+                pbar.set_description("Mean Eval Loss: %.5f" % mean_loss)
+
+                if mean_loss < self.best_cv:
+                    self.best_model_state = copy_model_state(model)
+                    self.best_model_epoch = epoch_i
+                    desc = "CV Loss: %.4f [[NEW BEST]]" % mean_loss
+                    pbar.set_description(desc)
+                    self.best_cv = mean_loss
+        return loss_l
+
+        #return dict(preds=torch.cat(preds_l).detach().cpu().numpy(),
+        #            actuals=torch.cat(actuals_l).detach().cpu().int().numpy())
+
+
+    def train_inner_step(self, epoch_i, data_batch):
+        real_label = 1
+        fake_label = 0
+
+        model = self.model_map['model']
+        #gen_model = self.model_map['gen']
+        optim = self.opt_map['model']
+        #gen_optim = self.opt_map['gen']
+
+        model.zero_grad()
+        optim.zero_grad()
+
+        ecog_arr = data_batch['ecog_arr'].to(self.device)
+        actuals = data_batch['text_arr'].to(self.device)
+        m_output = model(ecog_arr)
+
+        loss = self.criterion(m_output, actuals)
+        # print("backward")
+        loss.backward()
+        optim.step()
+        l = loss.detach().cpu().item()
+        return dict(loss=l)
+
+#    def train_old(self, n_epochs, epoch_callbacks=None, batch_callbacks=None,
+#              batch_cb_delta=5):
+#
+#        epoch_callbacks = dict() if epoch_callbacks is None else epoch_callbacks
+#        batch_callbacks = dict() if batch_callbacks is None else batch_callbacks
+#
+#        self.model = self.model.to(self.device)
+#
+#        # self.criterion = torch.nn.CrossEntropyLoss()
+#        self.criterion = torch.nn.BCELoss()  # weight=torch.tensor(2))
+#        self.optim = torch.optim.Adam(self.model.parameters(), **self.optim_kwargs)
+#        self.losses = getattr(self, 'losses', list())
+#        self.cv_losses = getattr(self, 'cv_losses', list())
+#        best_cv = np.inf
+#        train_loss = 0
+#        with tqdm(total=n_epochs, desc='Train epoch') as epoch_pbar:
+#            for epoch in range(self.epochs_trained, self.epochs_trained + n_epochs):
+#                self.model.train()
+#                with tqdm(total=len(self.train_data_gen), desc='-loss-') as batch_pbar:
+#                    for batch_idx, data_dict in enumerate(self.train_data_gen):
+#                        self.model.zero_grad()
+#
+#                        # print("batch {i}")
+#                        ecog_arr = data_dict['ecog_arr'].to(self.device)
+#                        # ecog_arr = (ecog_arr/ecog_arr.abs().max(1, keepdim=True).values)
+#
+#                        if batch_idx == 0:
+#                            pass
+#                            #print("ECOG SHAPE: " + str(ecog_arr.shape))
+#
+#                        actuals = data_dict['text_arr'].to(self.device)
+#                        # print("running model")
+#                        m_output = self.model(ecog_arr)
+#
+#                        self.optim.zero_grad()
+#                        loss = self.criterion(m_output, actuals)
+#                        # print("backward")
+#                        loss.backward()
+#                        self.optim.step()
+#                        l = loss.detach().cpu().item()
+#
+#                        train_loss += l
+#
+#                        self.losses.append(l)
+#                        mu_loss = np.mean(self.losses[-(batch_idx + 1):])
+#                        batch_pbar.set_description("%d - Loss: %f"
+#                                                   % (epoch, mu_loss))
+#
+#                        batch_pbar.update(1)
+#                    #####
+#                    if self.cv_data_gen is not None:
+#                        self.model.eval()
+#                        with tqdm(total=len(self.cv_data_gen), desc='CV::') as cv_pbar:
+#                            with torch.no_grad():
+#                                for cv_idx, cv_data_dict in enumerate(self.cv_data_gen):
+#                                    cv_X = cv_data_dict['ecog_arr'].to(self.device)
+#                                    cv_y = cv_data_dict['text_arr'].to(self.device)
+#
+#                                    cv_pred = self.model(cv_X)
+#                                    cv_loss = self.criterion(cv_pred, cv_y)
+#                                    self.cv_losses.append(cv_loss.detach().cpu().item())
+#
+#                                    cv_pbar.update(1)
+#                                    cv_mean_loss = np.mean(self.cv_losses[-(1 + cv_idx):])
+#                                    desc = "CV Loss: %.4f" % cv_mean_loss
+#                                    cv_pbar.set_description(desc)
+#
+#                                if cv_mean_loss < best_cv:
+#                                    self.best_model_state = copy_model_state(self.model)
+#                                    self.best_model_epoch = epoch
+#                                    desc = "CV Loss: %.4f [[NEW BEST]]" % cv_mean_loss
+#                                    cv_pbar.set_description(desc)
+#                                    best_cv = cv_mean_loss
+#
+#                        self.model.train()
+#                epoch_pbar.update(1)
+#
+#        return self.losses
+
+    def generate_outputs(self, model_key='model', **dl_map):
+        #self.model.eval()
+        model = self.model_map[model_key].eval()
         output_map = dict()
         with torch.no_grad():
             for dname, dset in dl_map.items():
                 preds_l, actuals_l = list(), list()
                 for _x in tqdm(dset, desc="Eval on %s" % dname):
-                    preds_l.append(self.model(_x['ecog_arr'].to(self.device)))
+                    preds_l.append(model(_x['ecog_arr'].to(self.device)))
                     actuals_l.append(_x['text_arr'])
 
                 output_map[dname] = dict(preds=torch.cat(preds_l).detach().cpu().numpy(),
