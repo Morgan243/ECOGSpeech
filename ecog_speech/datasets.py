@@ -390,8 +390,7 @@ class NorthwesternWords(BaseDataset):
             'threshold':
                 (feature_processing.WordStopStartTimeMap() >>
                  feature_processing.PowerThreshold(threshold=self.power_threshold) >>
-                 samp_ix
-),
+                 samp_ix),
             'quantile':
                 (feature_processing.WordStopStartTimeMap() >>
                  feature_processing.PowerQuantile(q=self.power_q) >>
@@ -424,15 +423,15 @@ class NorthwesternWords(BaseDataset):
             # - Load the data, parsing into pandas data frame/series types
             # - Only minimal processing into Python objects done here
             data_iter = tqdm(self.patient_tuples, desc="Loading data")
-            self.data_map = {l_p_s_t_tuple: self.load_data(*l_p_s_t_tuple,
-                                                           verbose=self.verbose)
-                             for l_p_s_t_tuple in data_iter}
+            self.data_maps = {l_p_s_t_tuple: self.load_data(*l_p_s_t_tuple,
+                                                            verbose=self.verbose)
+                              for l_p_s_t_tuple in data_iter}
             ###-----
 
             ## Sensor check ##
             # Get selected sensors from each dataset into map
             self.sensor_map = {k: dmap['sensor_columns']
-                               for k, dmap in self.data_map.items()}
+                               for k, dmap in self.data_maps.items()}
             # Make unique set and assert that they are all the same length
             self.sensor_counts = list(set(map(len, self.sensor_map.values())))
             assert len(self.sensor_counts) == 1
@@ -443,12 +442,14 @@ class NorthwesternWords(BaseDataset):
             ## Important processing ##
             # - Process each subject in data map through pipeline func
             self.sample_index_maps = dict()
-            for k in self.data_map.keys():
-                dmap = self.data_map[k]
+            for k in self.data_maps.keys():
+                dmap = self.data_maps[k]
                 res_dmap = self.pipeline_f(dmap)
-                self.data_map[k] = res_dmap
+                self.data_maps[k] = res_dmap
                 self.sample_index_maps[k] = res_dmap['sample_index_map']
 
+            # Map full description (word label, window index,...trial key elements..}
+            # to the actual pandas index
             self.flat_index_map = {tuple([wrd_id, ix_i] + list(k_t)): ixes
                                    for k_t, index_map in self.sample_index_maps.items()
                                    for wrd_id, ix_list in index_map.items()
@@ -461,9 +462,9 @@ class NorthwesternWords(BaseDataset):
                                       dtype='object')
 
         else:
-            print("Warning: using naive shared-referencing across objects")
+            print("Warning: using naive shared-referencing across objects - only use when feeling lazy")
             self.mfcc_m = self.data_from.mfcc_m
-            self.data_map = self.data_from.data_map
+            self.data_maps = self.data_from.data_maps
             self.sample_index_maps = self.data_from.sample_index_maps
             self.flat_index_map = self.data_from.flat_index_map
             self.flat_keys = self.data_from.flat_keys
@@ -482,7 +483,7 @@ class NorthwesternWords(BaseDataset):
         # ix_k includes the class and window id
         # data_k specifies subject dataset in data_map (less granular than ix_k)
         ix_k, data_k = self.selected_flat_keys[item]
-        data_d = self.data_map[data_k]
+        data_d = self.data_maps[data_k]
 
         # Put it all together (TODO: cleanup this interface)
         # TODO: Make features, make target methods?
@@ -497,7 +498,8 @@ class NorthwesternWords(BaseDataset):
         so.update(self.get_targets(data_d, self.flat_index_map[ix_k],
                                    ix_k[0]))
 
-        # Return anything that is a Torch Tensor
+        # Return anything that is a Torch Tensor - the torch dataloader will handle
+        # compiling multiple outputs for batch
         return {k: v for k, v in so.items()
                 if isinstance(v, torch.Tensor)}
 
@@ -537,9 +539,9 @@ class NorthwesternWords(BaseDataset):
         # t_word_ix = self.word_index.loc[t_word_ix.min() - offs_td: t_word_ix.max() - offs_td].index
         # t_word_ecog_df = self.ecog_df.reindex(t_word_ix).dropna()
         # t_word_wav_df = self.speech_df.reindex(t_word_ix)
-        ecog_df = self.data_map[data_k]['ecog']
-        speech_df = self.data_map[data_k]['audio']
-        word_txt = self.data_map[data_k]['word_code_d'].get(ix_k[0], '<no speech>')
+        ecog_df = self.data_maps[data_k]['ecog']
+        speech_df = self.data_maps[data_k]['audio']
+        word_txt = self.data_maps[data_k]['word_code_d'].get(ix_k[0], '<no speech>')
 
         t_word_ecog_df = ecog_df.loc[t_word_slice].dropna()
         t_word_wav_df = speech_df.loc[t_word_slice]
@@ -601,11 +603,6 @@ class NorthwesternWords(BaseDataset):
         if 'speech_arr' in fields:
             kws['speech'] = speech_df.reindex(ix)
             kws['speech_arr'] = torch.from_numpy(kws['speech'].values).float()
-
-        if 'mfcc_arr' in fields:
-            mfcc_f = (torchaudio.transforms.MFCC(cls.default_audio_sample_rate)
-                      if mfcc_f is None else mfcc_f)
-            kws['mfcc_arr'] = mfcc_f(kws['speech_arr'])
 
         if 'text_arr' in fields:
             kws['text'] = '<silence>' if text_label <= 0 else '<speech>'
@@ -810,10 +807,74 @@ class ChangNWW(NorthwesternWords):
     patient_tuples = attr.ib(
         (('Mayo Clinic', 19, 1, 2),)
     )
+    #ecog_window_size = attr.ib(100)
+    ecog_window_shift_sec = pd.Timedelta(0.75, 's')
+    #ecog_window_step_sec = attr.ib(0.01, factory=lambda s: pd.Timedelta(s, 's'))
+    ecog_window_step_sec = pd.Timedelta(0.01, 's')
+    ecog_window_n = attr.ib(60)
+
+    # ecog samples
     ecog_window_size = attr.ib(100)
+
     pre_processing_pipeline = attr.ib('minimal')
     data_from: 'NorthwesternWords' = attr.ib(None)
 
+    def make_pipeline_map(self, default='quantile'):
+        """
+        Pipeline parameters sometimes depend on the configuration of the dataset class,
+        so for now it is bound method (not classmethod or staticmethod).
+        """
+        samp_ix = feature_processing.SampleIndicesFromStim(ecog_window_size=self.ecog_window_size,
+                                                           ecog_window_n=self.ecog_window_n,
+                                                           ecog_window_step_sec=self.ecog_window_step_sec,
+                                                           ecog_window_shift_sec=self.ecog_window_shift_sec)
+        mfcc = feature_processing.MFCC(self.num_mfcc)
+
+        p_map = {
+            'threshold':
+                (feature_processing.WordStopStartTimeMap() >>
+                 feature_processing.PowerThreshold(threshold=self.power_threshold) >>
+                 samp_ix >> mfcc),
+            'quantile':
+                (feature_processing.WordStopStartTimeMap() >>
+                 feature_processing.PowerQuantile(q=self.power_q) >>
+                 samp_ix >> mfcc),
+            'minimal': feature_processing.WordStopStartTimeMap() >> samp_ix >> mfcc
+        }
+        p_map['default'] = p_map[default]
+        return p_map
+
+    @staticmethod
+    def get_features(data_map, ix, label, ecog_transform=None):
+        kws = NorthwesternWords.get_features(data_map, ix, label, ecog_transform)
+        return kws
+
+    @staticmethod
+    def get_targets(data_map, ix, label):
+        kws = NorthwesternWords.get_targets(data_map, ix, label)
+        kws['mfcc'] = torch.from_numpy(data_map['mfcc'].loc[ix].values).float()
+        return kws
+
+    @classmethod
+    def load_data(cls, location=None, patient=None, session=None, trial=None, base_path=None,
+                  parse_mat_data=True, sensor_columns=None, verbose=True):
+        #kws = dict(location=lcoa
+        #           )
+        kws = locals()
+        print(kws.keys())
+        no_parse_kws = {k: False if k == 'parse_mat_data' else v
+                        for k, v in kws.items()
+                        if k not in ('cls', '__class__')}
+        chang_data = super(ChangNWW, cls).load_data(**no_parse_kws)
+        nww_data = NorthwesternWords.load_data(**no_parse_kws)
+
+        chang_data['audio'] = nww_data['audio']
+
+        if parse_mat_data:
+            return  cls.parse_mat_arr_dict(chang_data,
+                                           sensor_columns=cls.sensor_columns if sensor_columns is None else sensor_columns,
+                                   verbose=verbose)
+        return chang_data
 
 @attr.s
 class NorthwesternWords_BCI2k(BaseDataset):

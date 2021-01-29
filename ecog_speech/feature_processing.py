@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from scipy import signal as sig
 import attr
 
 
@@ -88,6 +89,31 @@ def filter(s, band, sfreq=1000, verbose=False, n_jobs=4,
         ret = filtered_phase_arr
 
     return ret
+
+def make_hilbert_df(x):
+    """
+    Extracts analytic signal and stores components into a DataFrame
+    - Real and imaginary components
+    - Angle, both wrapped and unwrapped
+
+    :param x:
+    :return:
+    """
+    x_hil = sig.hilbert(x)
+
+    x_hil_real = x_hil.real
+    x_hil_imag = x_hil.imag
+
+    x_hil_angle = np.angle(x_hil)
+    x_hil_phase = np.unwrap(x_hil_angle)
+
+    hilbert_df = pd.DataFrame(dict(z_t_real=x_hil_real, z_t_imag=x_hil_imag,
+                                   z_t_angle=x_hil_angle, z_t_unwrap=x_hil_phase,
+                                   envelope=np.abs(x_hil)
+                                   ),
+                              index=x.index)
+    hilbert_df['signal'] = x
+    return hilbert_df
 
 ###
 @attr.s
@@ -269,8 +295,6 @@ class PowerThreshold(ProcessStep):
         #return updates, remaps
         return updates
 
-
-
 @attr.s
 class PowerQuantile(ProcessStep):
     q = attr.ib(0.75)
@@ -395,3 +419,83 @@ class SampleIndicesFromStim(ProcessStep):
         # TODO: Compute flat_index_map and flat_keys and return
 
         return dict(sample_index_map=sample_indices)
+
+
+from python_speech_features import mfcc
+import torchaudio
+@attr.s
+class MFCC(ProcessStep):
+    # Ecog is used to reindex the MFCC output so it aligns
+    expects = ['audio', 'fs_audio', 'ecog']
+    outputs = ['mfcc']
+    num_mfcc = attr.ib(13)
+
+    #def __attrs_post_init__(self):
+    #    import torchaudio
+    #    self.mfcc_m = torchaudio.transforms.MFCC()
+    def step(self, data_map):
+        sig = data_map['audio']
+        rate = data_map['fs_audio']
+        winstep = 1 / 200
+        winlen = 0.02
+        nfft = 1024
+
+        mfcc_feat = mfcc(sig, rate, winlen=winlen, winstep=winstep, nfft=nfft,
+                         numcep=self.num_mfcc)
+
+        max_t = data_map['ecog'].index.max()
+        mfcc_sample_rate = mfcc_feat.shape[0] / max_t.total_seconds()
+
+        ix = pd.TimedeltaIndex(pd.RangeIndex(0, mfcc_feat.shape[0]) / mfcc_sample_rate, unit='s')
+
+        mfcc_df = pd.DataFrame(mfcc_feat, index=ix, columns=[f"mfcc{i}" for i in range(mfcc_feat.shape[-1])])
+
+        reix_mfcc_df = mfcc_df.reindex(data_map['ecog'].index,
+                                       tolerance=pd.Timedelta(15, unit='ms'),
+                                       method='nearest')
+        return dict(mfcc=reix_mfcc_df)
+
+        #self.mfcc_f = getattr(self, 'mfcc_f',
+        #                      torchaudio.transforms.MFCC(data_map['fs_audio'],
+        #                                                 self.num_mfcc))
+        #return dict(mfcc=self.mfcc_f(data_map['audio']))
+
+
+class ChangSampleIndicesFromStim(ProcessStep):
+    expects = ['start_times_d']
+    outputs = ['sample_index_map']
+
+    ecog_window_size = attr.ib(600)
+    ecog_window_n = attr.ib(60)
+    ecog_window_step_sec =  attr.ib(pd.Timedelta(0.01, 's'))
+    ecog_window_shift_sec = attr.ib(pd.Timedelta(0.75, 's'))
+
+    def step(self, data_map):
+        pass
+
+    @staticmethod
+    def make_sample_indices(data_map, win_size):
+        pass
+
+@attr.s
+class ChangECOGEnvelope(ProcessStep):
+    expects = ['ecog']
+    outputs = ['chang_envelope']
+
+    sfreq = attr.ib(1200)
+
+    def step(self, data_map):
+        return dict(chang_envelope=self.chang_envelope(data_map, sfreq=self.sfreq))
+
+
+    @staticmethod
+    def chang_envelope(data_map, band=(70, 150), sfreq=1200):
+        ecog_df = data_map['ecog']
+        filt_df = ecog_df.apply(lambda s: filter(s, band, sfreq=sfreq))
+        chang_df = filt_df.apply(lambda s: make_hilbert_df(s)['envelope'].rename(f'{s.name}_chang_env'))
+        # Resample to 200 times a second (200HZ)
+        # TODO: Is taking first correct? Or Some ofther method?
+        chang_df = chang_df.resample(str(1 / 200) + 'S').first()
+        return chang_df
+
+
