@@ -1,6 +1,7 @@
 import torch
 import attr
 from tqdm.auto import tqdm
+from ecog_speech.models import base
 
 class Encoder(torch.nn.Module):
     def __init__(self, n_input_channels, n_filters=100,
@@ -14,10 +15,12 @@ class Encoder(torch.nn.Module):
             torch.nn.ReLU(),
         )
         # input: (seq_len, batch, input_size)
-        self.lstm_enc_a_m = torch.nn.LSTM(100, 400, 2, bidirectional=True)
+        self.lstm_enc_a_m = torch.nn.LSTM(100, 400, 2, bidirectional=True,
+                                          batch_first=True)
         # TODO: It's not clear if this is correct - 400x2 to maintain directions,
         #  or are they auto concat internally
-        self.lstm_enc_b_m = torch.nn.LSTM(800, 400, 1, bidirectional=True)
+        self.lstm_enc_b_m = torch.nn.LSTM(800, 400, 1, bidirectional=True,
+                                          batch_first=True)
 
         self.mfcc_output_m = torch.nn.Sequential(
             torch.nn.Linear(800, 255),
@@ -69,7 +72,7 @@ class Decoder(torch.nn.Module):
         )
 
         # The LSTM sees the previous class
-        self.lstm_dec = torch.nn.LSTM(n_classes, 400, bidirectional=True)
+        self.lstm_dec = torch.nn.LSTM(n_classes, 400, bidirectional=True, batch_first=True)
 
         self.output_m = torch.nn.Sequential(
             torch.nn.Linear(800, n_classes),
@@ -83,35 +86,59 @@ class Decoder(torch.nn.Module):
         o = self.output_m(self.lstm_dec(_z, hidden_t)[0])
         return o.squeeze()
 
+class SpeechDetectorDecoder(torch.nn.Module):
+    def __init__(self, n_classes=1):
+        super(SpeechDetectorDecoder, self).__init__()
+        self.n_classes = n_classes
+        # The LSTM sees the previous class
+        self.lstm_dec = torch.nn.LSTM(n_classes, 400, bidirectional=True, batch_first=True)
 
+        self.output_m = torch.nn.Sequential(
+            torch.nn.Linear(800, n_classes),
+            torch.nn.PReLU()
+        )
+
+    def forward(self, x, hidden_t):
+        #return self.
+        #z = self.word_embed_m(x)
+        # X and Z shaped as (batch, features) - LSTM takes it differently
+        #_z = z.reshape(1, -1, self.n_classes)
+        o = self.output_m(self.lstm_dec(x, hidden_t)[0])
+        return o.squeeze()
+
+
+# 3 stack LSTM 150->100->50 hidden nodes in stack with 0.5 dropout between layers. Adam optimizer and only one extra bit of flair in the cross entropy loss function.
+class ChangSpeechDetector(torch.nn.Module):
+    def __init__(self, input_size, n_classes=3):
+        super(ChangSpeechDetector, self).__init__()
+        self.n_classes = n_classes
+        lstm_kws = dict(batch_first=True)
+        self.lstm_l = torch.nn.ModuleList([
+            torch.nn.LSTM(input_size=input_size, hidden_size=150, **lstm_l),
+            torch.nneLSTM(input_size=150, hidden_size=100, **lstm_l),
+            torch.nneLSTM(input_size=100, hidden_size=50, **lstm_l)
+            ])
+
+    def forward(self, x):
+        l_o = x
+        for lstm_m in self.lstm_l:
+            l_o, (l_h, l_c) = lstm_m(l_o)
+        return l_o, (l_h, l_c)
 
 ## WIP
 @attr.attrs
-class Trainer:
-    enc_model = attr.ib()
-    dec_model = attr.ib()
-    train_data_gen = attr.ib()
+class ChangTrainer(base.Trainer):
+    def eval(self, epoch_i, dataloader):
+        pass
 
-    device = attr.ib(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
 
-    def train(self, n_epochs, epoch_callbacks=None, batch_callbacks=None,
-              batch_cb_delta=5):
+    def train_inner_step(self, epoch_i, data_batch):
+        encoder = self.model_map['encoder']
+        ecog = data_batch['ecog_arr']
+        lstm_b_output, hidden_b_t, mfcc_output = encoder(ecog)
+        # Downsample (every 12th sample) and clip to only the first length
+        # TODO: better way to handle the off-by-one or is something already incorrect?
+        mfcc = data_batch['mfcc'][:, ::12, :][:, :mfcc_output.shape[0], :]
 
-        epoch_callbacks = dict() if epoch_callbacks is None else epoch_callbacks
-        batch_callbacks = dict() if batch_callbacks is None else batch_callbacks
+        mfcc_mse_l = torch.nn.functional.mse_loss(mfcc, mfcc_output.transpose(0, 1))
 
-        self.enc_model = self.enc_model.to(self.device)
-        self.dec_model = self.dec_model.to(self.device)
-
-        self.enc_optim = torch.optim.Adam(self.enc_model.parameters())
-        self.dec_optim = torch.optim.Adam(self.dec_model.parameters())
-
-        with tqdm(total=n_epochs, desc='Train epoch') as epoch_pbar:
-            for epoch in range(self.epochs_trained, self.epochs_trained + n_epochs):
-                with tqdm(total=len(self.train_data_gen), desc='-loss-') as batch_pbar:
-                    for i, data_dict in enumerate(self.train_data_gen):
-                        self.enc_model.zero_grad()
-                        self.dec_model.zero_grad()
-
-                        ecog_arr = data_dict['ecog_arr']
-                        lstm_b_output, hidden_b_t, mfcc_output = self.enc_model(ecog_arr)
