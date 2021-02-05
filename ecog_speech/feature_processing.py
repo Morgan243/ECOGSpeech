@@ -461,21 +461,92 @@ class MFCC(ProcessStep):
         #return dict(mfcc=self.mfcc_f(data_map['audio']))
 
 
+@attr.s
 class ChangSampleIndicesFromStim(ProcessStep):
     expects = ['start_times_d']
     outputs = ['sample_index_map']
 
-    ecog_window_size = attr.ib(600)
-    ecog_window_n = attr.ib(60)
-    ecog_window_step_sec =  attr.ib(pd.Timedelta(0.01, 's'))
-    ecog_window_shift_sec = attr.ib(pd.Timedelta(0.75, 's'))
+    # All at 200Hz
+    ecog_window_size = attr.ib(100)
+    #ecog_window_n = attr.ib(60)
+    #ecog_window_step_samp =  attr.ib(1)
+    #ecog_window_step_sec =  attr.ib(pd.Timedelta(0.01, 's'))
+    #ecog_window_shift_sec = attr.ib(pd.Timedelta(0.75, 's'))
 
     def step(self, data_map):
-        pass
+        return self.make_sample_indices(data_map, win_size=self.ecog_window_size)
 
     @staticmethod
     def make_sample_indices(data_map, win_size):
-        pass
+        """
+        [t , t + 0.5s] = no label
+        [t + 0.5s, t+ 1.5s] = speaking
+        [t + 1.5s, t +2s] = no label
+        [t + 2s, t + 3s ] = silence
+        t +3 should be the beginning of the next t stimcode onset
+        """
+        label_index = data_map['stim_diff']
+
+        sample_indices = dict()
+        ####
+        # Separate into two sets and loops so that the negative
+        # samples can be derived from the positive samples
+        pos_ix = label_index[label_index > 0]
+        #neg_ix = label_index[label_index < 0]
+        pos_grp = pos_ix.groupby(pos_ix)
+        #neg_grp = neg_ix.groupby(neg_ix)
+        speak_offset = pd.Timedelta(0.5, 's')
+
+        # Positive windows extracted first - this way negative windows
+        # can potentially be extracted based on the postive windows
+        for wrd_id, wave_wrd_values in pos_grp:
+            start_t = wave_wrd_values.index.min()
+            speaking = label_index.loc[start_t:].iloc[100: 100 + 200]
+            silence = label_index.loc[start_t:].iloc[400: 400 + 200]
+
+
+            #start_t = wave_wrd_values.index.min() - ecog_window_shift_sec
+            # Go through the whole window (200sam, 1s), one sample at a time getting the index
+            silence_indices = [label_index.loc[start_t:].iloc[100 + offs: 100 + offs + win_size].index
+                                for offs in range(200)]
+
+            speaking_indices = [label_index.loc[start_t:].iloc[400 + offs: 400 + offs + win_size].index
+                                for offs in range(200)]
+
+            sample_indices[wrd_id] = silence_indices + speaking_indices
+
+            #speak_start_t = start_t + speak_offset
+            #sample_indices[wrd_id] = [label_index
+            #                              .loc[start_t + i * ecog_window_step_sec:]
+            #                              .iloc[:win_size]
+            #                              .index
+            #                          for i in range(ecog_window_n)]
+
+#        for wrd_id, wave_wrd_values in neg_grp:
+#            start_t = wave_wrd_values.index.min()  # - cls.ecog_window_shift_sec
+#
+#            # Where the last positive window ends
+#            pos_ix = sample_indices[-wrd_id][-1].max()
+#            # Start from positive window if there's overlap
+#            if start_t < pos_ix:
+#                start_t = pos_ix
+#
+#            sample_indices[wrd_id] = [label_index
+#                                          .loc[start_t + i * ecog_window_step_sec:]
+#                                          .iloc[:win_size]
+#                                          .index
+#                                      for i in range(ecog_window_n)]
+
+        # Hacky, but just remove anything that's not the right side from the end
+        #sample_indices = {w: [ix for ix in ixes if len(ix) == win_size]
+        #                  for w, ixes in sample_indices.items()}
+        for w, ixes in sample_indices.items():
+            if len(ixes) == 0:
+                msg = ("Error: word %d had no windows" % w)
+                print(msg)
+
+        # TODO: Compute flat_index_map and flat_keys and return
+        return dict(sample_index_map=sample_indices)
 
 @attr.s
 class ChangECOGEnvelope(ProcessStep):
