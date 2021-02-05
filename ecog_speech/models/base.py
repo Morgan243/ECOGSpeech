@@ -1,6 +1,7 @@
 import attr
 from tqdm.auto import tqdm
 import numpy as np
+import pandas as pd
 import torch
 from ecog_speech import utils
 
@@ -180,6 +181,7 @@ class BaseMultiSincNN(torch.nn.Module):
                  ):
 
         super().__init__()
+        self.fs = fs
         self.dropout = dropout
         self.activation_cls = torch.nn.SELU
         #DrpOut = torch.nn.Dropout2d if dropout2d else torch.nn.Dropout
@@ -248,6 +250,30 @@ class BaseMultiSincNN(torch.nn.Module):
             return parameters
 
 
+    @staticmethod
+    def parse_band_parameter_training_hist(batch_results, fs=1200, min_low_hz=1, min_band_hz=3):
+        channel_param_bandhz_map = dict()
+        channel_param_lowhz_map = dict()
+
+        for bi, batch_list in enumerate(batch_results):
+            for ch_i, ch_res_d in enumerate(batch_list):
+                if ch_i not in channel_param_bandhz_map:
+                    channel_param_bandhz_map[ch_i] = list()
+                    channel_param_lowhz_map[ch_i] = list()
+
+                channel_param_bandhz_map[ch_i].append(ch_res_d['band_hz'].reshape(-1))
+                channel_param_lowhz_map[ch_i].append(ch_res_d['low_hz'].reshape(-1))
+        ###*****
+        lowhz_df_map = {ch_i: pd.DataFrame(d) * fs + min_low_hz
+                        for ch_i, d in channel_param_lowhz_map.items()}
+
+        highhz_df_map = {ch_i: pd.DataFrame(d) * fs + min_band_hz + lowhz_df_map[ch_i]
+                         for ch_i, d in channel_param_bandhz_map.items()}
+
+        centerhz_df_map = {ch_i: (lowhz_df_map[ch_i] + highhz_df_map[ch_i]) / 2
+                           for ch_i in lowhz_df_map.keys()}
+        return lowhz_df_map, highhz_df_map, centerhz_df_map
+
 @attr.attrs
 class Trainer:
     model_map = attr.ib()
@@ -266,8 +292,12 @@ class Trainer:
     epoch_cb_history = attr.ib(attr.Factory(list), init=False)
     batch_cb_history = attr.ib(attr.Factory(list), init=False)
 
-
     default_optim_cls = torch.optim.Adam
+
+    @classmethod
+    def set_default_optim(cls, optim):
+        cls.default_optim_cls = optim
+        return cls
 
     def __attrs_post_init__(self):
         self.model_map = {k: v.to(self.device) for k, v in self.model_map.items()}
@@ -315,14 +345,20 @@ class Trainer:
         batch_callbacks = dict() if batch_callbacks is None else batch_callbacks
 
         #self.epoch_losses = list()
-        self.train_batch_results = list()
-        self.epoch_results = getattr(self, 'epoch_results', dict(epoch=list(), batch=list()))
+        #:w
+        # :w
+        # self.train_batch_results = list()
+        #self.batch_results = getattr(self, 'epoch_results', dict(epoch=list(), batch=list()))
+        #self.epoch_results = getattr(self, 'epoch_results', dict(epoch=list()))
+        self.epoch_batch_res_map = dict()
+        self.epoch_res_map = dict()
 
         self.epoch_cb_history += [{k: cb(self) for k, cb in epoch_callbacks.items()}]
         #self.batch_cb_history += [{k: cb(self) for k, cb in batch_callbacks.items()}]
         self.batch_cb_history = {k: list() for k in batch_callbacks.keys()}
 
         self.n_samples = len(self.train_data_gen)
+        train_loss_key = 'loss'
 
         with tqdm(total=n_epochs,
                   desc='Training epoch',
@@ -330,24 +366,28 @@ class Trainer:
                   #ncols='100%'
                   ) as epoch_pbar:
             for epoch in range(self.epochs_trained, self.epochs_trained + n_epochs):
+                epoch_batch_results = dict()
                 with tqdm(total=self.n_samples, desc='-loss-', dynamic_ncols=True) as batch_pbar:
                     for i, data in enumerate(self.train_data_gen):
                         update_d = self.train_inner_step(epoch, data)
 
-                        self.epoch_results['epoch'].append(epoch)
-                        self.epoch_results['batch'].append(i)
+                        #self.batch_results['epoch'].append(epoch)
+                        #self.batch_results['batch'].append(i)
 
                         prog_msgs = list()
                         for k, v in update_d.items():
                             # TODO: What about spruious results? Maybe do list of dicts instead?
-                            if k not in self.epoch_results:
-                                self.epoch_results[k] = [v]
+                            #if k not in self.batch_results:
+                            if k not in epoch_batch_results:
+                                #self.batch_results[k] = [v]
+                                epoch_batch_results[k] = [v]
                             else:
-                                self.epoch_results[k].append(v)
+                                #self.batch_results[k].append(v)
+                                epoch_batch_results[k].append(v)
 
 
-                            v_l = np.round(np.mean(self.epoch_results[k][-20:]), 4)
-                            prog_msgs.append(f"{k}: {v_l}")
+                            v_l = np.mean(epoch_batch_results[k])
+                            prog_msgs.append(f"{k}: {np.round(v_l, 4)}")
 
 
                         msg = " || ".join(prog_msgs)
@@ -367,17 +407,21 @@ class Trainer:
                 #self.epoch_losses.append(dict(gen_losses=G_losses, disc_losses=D_losses))
                 #self.epoch_losses.append(epoch_results)
                 #self.train_batch_results.append(epoch_results)
+                self.epoch_batch_res_map[epoch] = epoch_batch_results
+                self.epoch_res_map[epoch] = {k: np.mean(v) for k, v in epoch_batch_results.items()}
+
                 self.epochs_trained += 1
                 self.epoch_cb_history.append({k: cb(self) for k, cb in epoch_callbacks.items()})
                 if self.cv_data_gen:
                     cv_losses = self.eval(epoch, self.cv_data_gen)
+                    self.epoch_res_map[epoch]['cv_loss'] = np.mean(cv_losses)
 
                 epoch_pbar.update(1)
         #return self.train_batch_results
-        return self.epoch_results
+        return self.epoch_res_map
 
     def eval(self, epoch_i, dataloader):
-        model = self.model_map['model']
+        model = self.model_map['model'].eval()
         self.best_cv = getattr(self, 'best_cv', np.inf)
 
         preds_l, actuals_l, loss_l = list(), list(), list()
@@ -398,6 +442,8 @@ class Trainer:
                     desc = "CV Loss: %.4f [[NEW BEST]]" % mean_loss
                     pbar.set_description(desc)
                     self.best_cv = mean_loss
+
+        self.model_map['model'].train()
         return loss_l
 
         #return dict(preds=torch.cat(preds_l).detach().cpu().numpy(),
