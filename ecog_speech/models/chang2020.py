@@ -125,12 +125,10 @@ class ChangSpeechDetector(torch.nn.Module):
             l_o, (l_h, l_c) = lstm_m(l_o)
         return l_o, (l_h, l_c)
 
-## WIP
 @attr.attrs
 class ChangTrainer(base.Trainer):
     def eval(self, epoch_i, dataloader):
         pass
-
 
     def train_inner_step(self, epoch_i, data_batch):
         encoder = self.model_map['encoder']
@@ -138,7 +136,24 @@ class ChangTrainer(base.Trainer):
         lstm_b_output, hidden_b_t, mfcc_output = encoder(ecog)
         # Downsample (every 12th sample) and clip to only the first length
         # TODO: better way to handle the off-by-one or is something already incorrect?
-        mfcc = data_batch['mfcc'][:, ::12, :][:, :mfcc_output.shape[0], :]
+        #mfcc = data_batch['mfcc'][:, ::12, :][:, :mfcc_output.shape[0], :]
 
+        #mfcc_mse_l = torch.nn.functional.mse_loss(mfcc, mfcc_output.transpose(0, 1))
+
+
+## WIP
+@attr.attrs
+class ChangMFCCTrainer(base.Trainer):
+    def eval(self, epoch_i, dataloader):
+        pass
+
+    def train_inner_step(self, epoch_i, data_batch):
+        encoder = self.model_map['encoder']
+        ecog = data_batch['ecog_arr']
+        lstm_b_output, hidden_b_t, mfcc_output = encoder(ecog)
+
+        # Downsample (every 12th sample) and clip to only the first length
+        # TODO: better way to handle the off-by-one or is something already incorrect?
+        mfcc = data_batch['mfcc'][:, ::12, :][:, :mfcc_output.shape[0], :]
         mfcc_mse_l = torch.nn.functional.mse_loss(mfcc, mfcc_output.transpose(0, 1))
 

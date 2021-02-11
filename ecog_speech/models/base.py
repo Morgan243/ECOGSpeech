@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import torch
 from ecog_speech import utils
+import matplotlib
 
 def weights_init(m):
     classname = m.__class__.__name__
@@ -274,6 +275,34 @@ class BaseMultiSincNN(torch.nn.Module):
                            for ch_i in lowhz_df_map.keys()}
         return lowhz_df_map, highhz_df_map, centerhz_df_map
 
+
+    @staticmethod
+    def plot_sincnet_batch_results(lowhz_df_map, highhz_df_map, centerhz_df_map):
+        fig, axs = matplotlib.pyplot.subplots(figsize=(10, 9),
+                                              # nrows=len(lowhz_df_map),
+                                              nrows=4, ncols=2,
+                                              sharex=True)
+
+        ix_slice = slice(None, None, 1000)
+        for (ch_i, lowhz_df), (_, highhz_df), (_, centerhz_df) in zip(lowhz_df_map.items(),
+                                                                      highhz_df_map.items(),
+                                                                      centerhz_df_map.items()):
+            ax = axs.reshape(-1)[ch_i]
+            for c in lowhz_df.columns:
+                centerhz_df.loc[ix_slice][c].plot(ax=ax, lw=3)
+                ax.fill_between(centerhz_df.loc[ix_slice].index,
+                                lowhz_df.loc[ix_slice][c],
+                                highhz_df.loc[ix_slice][c],
+                                alpha=0.5)
+            ax.grid(True)
+            ax.set_ylim(0, 110)
+            # ax.set_xlim(0, centerhz_df.shape[0])
+            # ax.set_xlim(0, 35*len(dataloader))
+            # ax.set_title(ch_i)
+            ax.set_ylabel("Channel %d" % ch_i, fontsize=13)
+        fig.tight_layout()
+        return fig, ax
+
 @attr.attrs
 class Trainer:
     model_map = attr.ib()
@@ -429,7 +458,9 @@ class Trainer:
             with tqdm(total=len(dataloader), desc="Eval") as pbar:
                 for i, _x in enumerate(dataloader):
                     preds = model(_x['ecog_arr'].to(self.device))
-                    loss_l.append(self.criterion(preds, _x['text_arr']).detach().cpu().item())
+                    loss_l.append(self.criterion(preds, _x['text_arr']
+                                                 .to(self.device))
+                                  .detach().cpu().item())
 
                     pbar.update(1)
 
@@ -458,6 +489,7 @@ class Trainer:
         #gen_model = self.model_map['gen']
         optim = self.opt_map['model']
         #gen_optim = self.opt_map['gen']
+        model = model.train()
 
         model.zero_grad()
         optim.zero_grad()
@@ -471,6 +503,7 @@ class Trainer:
         loss.backward()
         optim.step()
         l = loss.detach().cpu().item()
+        model = model.eval()
         return dict(loss=l)
 
 #    def train_old(self, n_epochs, epoch_callbacks=None, batch_callbacks=None,
