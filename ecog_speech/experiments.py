@@ -22,7 +22,8 @@ def process_outputs(output_map):
 
 def make_model(options, nww):
     base_kws = dict(
-        window_size=nww.ecog_window_size,
+        #window_size=nww.ecog_window_size,
+        window_size=int(nww.sample_ixer.window_size.total_seconds() * nww.fs_signal),
         dropout=options.dropout,
         dropout2d=options.dropout_2d,
         batch_norm=options.batchnorm,
@@ -35,7 +36,7 @@ def make_model(options, nww):
                                      n_cnn_filters=options.n_cnn_filters,
                                      sn_padding=options.sn_padding,
                                      sn_kernel_size=options.sn_kernel_size,
-                                     fs=nww.default_ecog_sample_rate,
+                                     fs=nww.fs_signal,
                                      **base_kws)
     elif options.model_name == 'base-cnn':
         model = base.BaseCNN(len(nww.sensor_columns), **base_kws)
@@ -115,14 +116,18 @@ def run(options):
     dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options)
     model = make_model(options, dataset_map['train'])
     print("Building trainer")
-    trainer = base.Trainer(model=model, train_data_gen=dl_map['train'],
-                           cv_data_gen=dl_map['cv'])
+    trainer = base.Trainer(dict(model=model), opt_map = dict(),
+                    train_data_gen = dl_map['train'],
+                    cv_data_gen = dl_map['cv'])
+    #trainer = base.Trainer(model=model, train_data_gen=dl_map['train'],
+    #                       cv_data_gen=dl_map['cv'])
 
 
     print("Training")
     losses = trainer.train(options.n_epochs)
     model.load_state_dict(trainer.get_best_state())
-    trainer.model.eval()
+    #trainer.model_map['model'].eval()
+    model.eval()
 
     outputs_map = trainer.generate_outputs(**eval_dl_map)
     process_outputs(outputs_map)
