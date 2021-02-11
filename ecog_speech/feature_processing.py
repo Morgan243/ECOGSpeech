@@ -188,7 +188,9 @@ class ProcessStep:
         #    _x = s_func(_x, **s_kws)
 
         if self.output_remap is not None:
+            print("--")
             for k, v in self.output_remap.items():
+                print(f"remap: {k} <- {v}")
                 _x[k] = _x[v]
 
         if self.outputs is not None:
@@ -344,6 +346,23 @@ class PowerQuantile(ProcessStep):
         return updates
 
 @attr.s
+class SubsampleECOG(ProcessStep):
+    rate = attr.ib(2)
+    expects = ['ecog', 'fs_signal', 'stim', 'stim_diff']
+    outputs = ['ecog_subs', 'fs_signal_subs', 'stim_subs', 'stim_diff_subs']
+
+    output_remap = attr.ib(attr.Factory(lambda : dict(ecog='ecog_subs', fs_signal='fs_signal_subs',
+                                                      stim='stim_subs', stim_diff='stim_diff_subs')))
+
+    def step(self, data_map):
+        x = data_map['ecog']
+        #fs_signal = getattr(self, 'fs_signal', 1. / self.rate)
+        return dict(ecog_subs=x.iloc[::self.rate, ],
+                    stim_subs=data_map['stim'].iloc[::self.rate,],
+                    stim_diff_subs=data_map['stim_diff'].iloc[::self.rate,],
+                    fs_signal_subs=int((1. / self.rate) * data_map['fs_signal']))
+
+@attr.s
 class SampleIndicesFromStim(ProcessStep):
     expects = ['stim_diff']
     outputs = ['sample_index_map']
@@ -463,22 +482,31 @@ class MFCC(ProcessStep):
 
 @attr.s
 class ChangSampleIndicesFromStim(ProcessStep):
-    expects = ['start_times_d']
+    expects = ['start_times_d', 'fs_signal']
     outputs = ['sample_index_map']
 
     # All at 200Hz
-    ecog_window_size = attr.ib(100)
+    #ecog_window_size = attr.ib(100)
     #ecog_window_n = attr.ib(60)
     #ecog_window_step_samp =  attr.ib(1)
     #ecog_window_step_sec =  attr.ib(pd.Timedelta(0.01, 's'))
+    window_size = attr.ib(pd.Timedelta(0.5, 's'))
+    window_size_samples = attr.ib(None)
+
+    label_region_size = attr.ib(pd.Timedelta(1, 's'))
+    stim_silence_offset = attr.ib(pd.Timedelta(2, 's'))
+    stim_speaking_offset = attr.ib(pd.Timedelta(0.5, 's'))
     #ecog_window_shift_sec = attr.ib(pd.Timedelta(0.75, 's'))
 
     def step(self, data_map):
-        return self.make_sample_indices(data_map, win_size=self.ecog_window_size)
+        return self.make_sample_indices(data_map, win_size=self.window_size, label_region_size=self.label_region_size,
+                                        silence_offs=self.stim_silence_offset, speaking_offs=self.stim_speaking_offset)
 
     @staticmethod
-    def make_sample_indices(data_map, win_size):
+    def make_sample_indices(data_map, win_size, label_region_size, silence_offs, speaking_offs):
         """
+        Extract 100 sample windows (i.e. .5 seconds) from speaking and silence regions, use defintions:
+
         [t , t + 0.5s] = no label
         [t + 0.5s, t+ 1.5s] = speaking
         [t + 1.5s, t +2s] = no label
@@ -486,6 +514,11 @@ class ChangSampleIndicesFromStim(ProcessStep):
         t +3 should be the beginning of the next t stimcode onset
         """
         label_index = data_map['stim_diff']
+        fs = data_map['fs_signal']
+
+        max_window_samples = int(fs * win_size.total_seconds())
+        print((fs, win_size))
+        print("Max window size: %d" % max_window_samples)
 
         sample_indices = dict()
         ####
@@ -495,56 +528,47 @@ class ChangSampleIndicesFromStim(ProcessStep):
         #neg_ix = label_index[label_index < 0]
         pos_grp = pos_ix.groupby(pos_ix)
         #neg_grp = neg_ix.groupby(neg_ix)
-        speak_offset = pd.Timedelta(0.5, 's')
+        #speak_offset = pd.Timedelta(0.5, 's')
 
         # Positive windows extracted first - this way negative windows
         # can potentially be extracted based on the postive windows
         for wrd_id, wave_wrd_values in pos_grp:
             start_t = wave_wrd_values.index.min()
-            speaking = label_index.loc[start_t:].iloc[100: 100 + 200]
-            silence = label_index.loc[start_t:].iloc[400: 400 + 200]
+            silence_start_t = start_t + silence_offs
+            speaking_start_t = start_t + speaking_offs
+
+            # Get the indices for each region of interest
+            silence_start_ixes = label_index[silence_start_t: silence_start_t + label_region_size].index.tolist()[:-max_window_samples]
+            speaking_start_ixes = label_index[speaking_start_t: speaking_start_t + label_region_size].index.tolist()[:-max_window_samples]
+
+            # Go through the labeled region indices and pull a window of data
+            silence_indices = [label_index.loc[offs:offs+win_size].iloc[:max_window_samples].index
+                               for offs in silence_start_ixes]
+            sample_indices[-wrd_id] = silence_indices
+
+            speaking_indices = [label_index.loc[offs:offs + win_size].iloc[:max_window_samples].index
+                                for offs in speaking_start_ixes]
+            sample_indices[wrd_id] = speaking_indices
 
 
-            #start_t = wave_wrd_values.index.min() - ecog_window_shift_sec
-            # Go through the whole window (200sam, 1s), one sample at a time getting the index
-            silence_indices = [label_index.loc[start_t:].iloc[100 + offs: 100 + offs + win_size].index
-                                for offs in range(200)]
-
-            speaking_indices = [label_index.loc[start_t:].iloc[400 + offs: 400 + offs + win_size].index
-                                for offs in range(200)]
-
-            sample_indices[wrd_id] = silence_indices + speaking_indices
-
-            #speak_start_t = start_t + speak_offset
-            #sample_indices[wrd_id] = [label_index
-            #                              .loc[start_t + i * ecog_window_step_sec:]
-            #                              .iloc[:win_size]
-            #                              .index
-            #                          for i in range(ecog_window_n)]
-
-#        for wrd_id, wave_wrd_values in neg_grp:
-#            start_t = wave_wrd_values.index.min()  # - cls.ecog_window_shift_sec
-#
-#            # Where the last positive window ends
-#            pos_ix = sample_indices[-wrd_id][-1].max()
-#            # Start from positive window if there's overlap
-#            if start_t < pos_ix:
-#                start_t = pos_ix
-#
-#            sample_indices[wrd_id] = [label_index
-#                                          .loc[start_t + i * ecog_window_step_sec:]
-#                                          .iloc[:win_size]
-#                                          .index
-#                                      for i in range(ecog_window_n)]
-
-        # Hacky, but just remove anything that's not the right side from the end
-        #sample_indices = {w: [ix for ix in ixes if len(ix) == win_size]
-        #                  for w, ixes in sample_indices.items()}
         for w, ixes in sample_indices.items():
             if len(ixes) == 0:
                 msg = ("Error: word %d had no windows" % w)
                 print(msg)
 
+            bad_win_ixes = [ix for ix in ixes if len(ix) != max_window_samples]
+            if len(bad_win_ixes) > 0:
+                msg = ("WARNING: word %d had %d windows with wrong sizes" % (w, len(bad_win_ixes)))
+                print(msg)
+
+            #for ix in ixes:
+            #    if len(ix) != max_window_samples:
+            #        msg = ("Warnging: word %d had window with len %d" % (w, len(ix)))
+            #        print(msg)
+
+        # Hacky, but just remove anything that's not the right side from the end
+        sample_indices = {w: [ix for ix in ixes if len(ix) == max_window_samples]
+                          for w, ixes in sample_indices.items()}
         # TODO: Compute flat_index_map and flat_keys and return
         return dict(sample_index_map=sample_indices)
 
