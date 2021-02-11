@@ -8,7 +8,6 @@ from tqdm.auto import tqdm
 import h5py
 import scipy.io
 
-from BCI2kReader import BCI2kReader as b2k
 from os import environ
 import os
 import attr
@@ -349,24 +348,13 @@ class NorthwesternWords(BaseDataset):
     num_mfcc = attr.ib(13)
     verbose = attr.ib(True)
 
-    # TODO: make the fields mappable from a dictionary of functions
-    # Trying this out: define a small data schema class
-#    schema_fields = ["ecog", "ecog_arr",
-#                     "speech", "speech_arr",
-#                     # "mfcc",
-#                     "mfcc_arr",
-#                     "text", "text_arr"]
-#    sample_schema = attr.make_class("NorthwesterWordsSample",
-#                                    schema_fields)
-#    sample_schema2 = attr.make_class("NorthwesterWordsSample2",
-#                                     {f: attr.ib(None) for f in schema_fields})
     selected_word_indices = attr.ib(None)
 
     #stim_indexing_source = attr.ib('stim_diff')
     transform = attr.ib(None)
 
     power_threshold = attr.ib(0.007)
-    power_q = attr.ib(0.75)
+    power_q = attr.ib(0.70)
     pre_processing_pipeline = attr.ib(None)
     # If using one source of data, with different `selected_word_indices`, then
     # passing the first NWW dataset to all subsequent ones built on the same source data
@@ -375,27 +363,35 @@ class NorthwesternWords(BaseDataset):
 
     ###
     # Add new processing pipelines for NWW here
-    def make_pipeline_map(self, default='quantile'):
+    def make_pipeline_map(self, default='minimal'):
         """
         Pipeline parameters sometimes depend on the configuration of the dataset class,
         so for now it is bound method (not classmethod or staticmethod).
         """
-        samp_ix = feature_processing.SampleIndicesFromStim(ecog_window_size=self.ecog_window_size,
-                                                          ecog_window_n=self.ecog_window_n,
-                                                          ecog_window_step_sec=self.ecog_window_step_sec,
-                                                          ecog_window_shift_sec=self.ecog_window_shift_sec
-                                                           )
+        #samp_ix = feature_processing.SampleIndicesFromStim(ecog_window_size=self.ecog_window_size,
+        #                                                  ecog_window_n=self.ecog_window_n,
+        #                                                  ecog_window_step_sec=self.ecog_window_step_sec,
+        #                                                  ecog_window_shift_sec=self.ecog_window_shift_sec
+        #                                                   )
+        self.sample_ixer = feature_processing.ChangSampleIndicesFromStim()
 
         p_map = {
             'threshold':
-                (feature_processing.WordStopStartTimeMap() >>
-                 feature_processing.PowerThreshold(threshold=self.power_threshold) >>
-                 samp_ix),
+                (
+                    feature_processing.SubsampleECOG() >>
+                    feature_processing.WordStopStartTimeMap() >>
+                    feature_processing.PowerThreshold(threshold=self.power_threshold) >>
+                    self.sample_ixer),
             'quantile':
-                (feature_processing.WordStopStartTimeMap() >>
+                (
+                        feature_processing.SubsampleECOG() >>
+                        feature_processing.WordStopStartTimeMap() >>
                  feature_processing.PowerQuantile(q=self.power_q) >>
-                 samp_ix),
-            'minimal': feature_processing.WordStopStartTimeMap() >> samp_ix
+                 self.sample_ixer),
+            'minimal':
+
+                feature_processing.SubsampleECOG() >>
+                feature_processing.WordStopStartTimeMap() >> self.sample_ixer
         }
         p_map['default'] = p_map[default]
         return p_map
@@ -447,6 +443,9 @@ class NorthwesternWords(BaseDataset):
                 res_dmap = self.pipeline_f(dmap)
                 self.data_maps[k] = res_dmap
                 self.sample_index_maps[k] = res_dmap['sample_index_map']
+                self.fs_signal = getattr(self, 'fs_signal', res_dmap['fs_signal'])
+                if self.fs_signal != res_dmap['fs_signal']:
+                    raise ValueError("Mismatch fs (%s!=%s) on %s" % (self.fs_signal, res_dmap['fs_signal'], str(k)))
 
             # Map full description (word label, window index,...trial key elements..}
             # to the actual pandas index
@@ -561,7 +560,7 @@ class NorthwesternWords(BaseDataset):
 
         if band is not None:
             plt_df = t_word_ecog_df[scols].pipe(feature_processing.filter, band=band,
-                                                sfreq=self.default_ecog_sample_rate)
+                                                sfreq=self.fs_signal)
         else:
             plt_df = t_word_ecog_df[scols]
 
@@ -801,7 +800,8 @@ class NorthwesternWords(BaseDataset):
 
 @attr.s
 class ChangNWW(NorthwesternWords):
-    data_subset = 'Preprocessed/Chang1'
+    #data_subset = 'Preprocessed/Chang1'
+    data_subset = 'Preprocessed/Chang3'
     mat_d_signal_key = 'signal'
     default_ecog_sample_rate = 200
     patient_tuples = attr.ib(
@@ -824,10 +824,11 @@ class ChangNWW(NorthwesternWords):
         Pipeline parameters sometimes depend on the configuration of the dataset class,
         so for now it is bound method (not classmethod or staticmethod).
         """
-        samp_ix = feature_processing.SampleIndicesFromStim(ecog_window_size=self.ecog_window_size,
-                                                           ecog_window_n=self.ecog_window_n,
-                                                           ecog_window_step_sec=self.ecog_window_step_sec,
-                                                           ecog_window_shift_sec=self.ecog_window_shift_sec)
+        #samp_ix = feature_processing.SampleIndicesFromStim(ecog_window_size=self.ecog_window_size,
+        #                                                   ecog_window_n=self.ecog_window_n,
+        #                                                   ecog_window_step_sec=self.ecog_window_step_sec,
+        #                                                   ecog_window_shift_sec=self.ecog_window_shift_sec)
+        samp_ix = feature_processing.ChangSampleIndicesFromStim(ecog_window_size=self.ecog_window_size)
         mfcc = feature_processing.MFCC(self.num_mfcc)
 
         p_map = {
@@ -1122,6 +1123,7 @@ class NorthwesternWords_BCI2k(BaseDataset):
 
     @classmethod
     def load_dat_file(cls, patient=22, session=1, recording=1, base_path=None, as_frame=True):
+        from BCI2kReader import BCI2kReader as b2k
         p = cls.get_data_path(patient=patient, session=session,
                               recording=recording, base_path=base_path)
         r = b2k.BCI2kReader(p)
