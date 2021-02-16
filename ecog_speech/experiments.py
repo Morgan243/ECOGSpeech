@@ -48,7 +48,7 @@ def make_model(options, nww):
 
 def make_datasets_and_loaders(options):
     from torchvision import transforms
-    dl_kws = dict(num_workers=4, batch_size=256,
+    dl_kws = dict(num_workers=4, batch_size=options.batch_size,
                   shuffle=False, random_sample=True)
     eval_dl_kws = dict(num_workers=4, batch_size=512,
                   shuffle=False, random_sample=False)
@@ -298,6 +298,7 @@ default_option_kwargs = [
     dict(dest='--power-q', default=0.7, type=float),
 
     dict(dest='--n-epochs', default=100, type=int),
+    dict(dest='--batch-size', default=256, type=int),
     dict(dest='--device', default='cuda:0'),
     dict(dest='--save-model-path', default=None),
     dict(dest='--tag', default=None),
