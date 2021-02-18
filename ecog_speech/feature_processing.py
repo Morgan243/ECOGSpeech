@@ -538,6 +538,7 @@ class ChangSampleIndicesFromStim(ProcessStep):
             speaking_start_t = start_t + speaking_offs
 
             # Get the indices for each region of interest
+            # NOte on -max_window_samples - this removes the last windows worth since windows starting here would have out of label samples
             silence_start_ixes = label_index[silence_start_t: silence_start_t + label_region_size].index.tolist()[:-max_window_samples]
             speaking_start_ixes = label_index[speaking_start_t: speaking_start_t + label_region_size].index.tolist()[:-max_window_samples]
 

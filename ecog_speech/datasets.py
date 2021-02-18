@@ -1,3 +1,4 @@
+import matplotlib
 import pandas as pd
 from glob import glob
 from os import path
@@ -797,6 +798,51 @@ class NorthwesternWords(BaseDataset):
 
         return mat_d
 
+
+    @classmethod
+    def plot_word_sample_region(cls, data_map, word_code=None, figsize=(15, 5), ax=None):
+        word_code = np.random.choice(list(data_map['word_code_d'].keys())) if word_code is None else word_code
+
+        t_silence_ixes = data_map['sample_index_map'][-word_code]
+        t_speaking_ixes = data_map['sample_index_map'][word_code]
+
+        silence_min_ix, silence_max_ix = t_silence_ixes[0].min(), t_silence_ixes[-1].max()
+
+        speaking_min_ix, speaking_max_ix = t_speaking_ixes[0].min(), t_speaking_ixes[-1].max()
+
+        padding = pd.Timedelta(.75, 's')
+
+        plt_min = min(silence_min_ix, speaking_min_ix) - padding
+        plt_max = max(silence_max_ix, speaking_max_ix) + padding
+        plt_len = plt_max - plt_min
+
+        #####
+        plt_audio = data_map['audio'].loc[plt_min:plt_max]
+
+        silence_s = pd.Series(0, index=plt_audio.index)
+        silence_s.loc[silence_min_ix : silence_max_ix] = 0.95
+
+        speaking_s = pd.Series(0, index=plt_audio.index)
+        speaking_s.loc[speaking_min_ix : speaking_max_ix] = 0.95
+
+        #####
+        if ax is None:
+            fig, ax = matplotlib.pyplot.subplots(figsize=figsize)
+        else:
+            fig = ax.get_figure()
+
+        ax = plt_audio.plot(legend=False, alpha=0.4, color='tab:grey', figsize=(15, 5), label='audio')
+        ax2 = ax.twinx()
+
+        ax2.set_ylim(0.01, 1.1)
+        # ax.axvline(silence_min_ix / pd.Timedelta(1,'s'))
+        (data_map['stim'].reindex(data_map['audio'].index).fillna(method='ffill').loc[plt_min: plt_max] > 0).astype(
+            int).plot(ax=ax2, color='tab:blue', label='original stim')
+        silence_s.plot(ax=ax2, color='red', lw=4, label='silence')
+        speaking_s.plot(ax=ax2, color='green', lw=4, label=f"speaking ('{data_map['word_code_d'][word_code]}')")
+        ax.legend()
+        ax2.legend()
+        return fig, ax
 
 @attr.s
 class ChangNWW(NorthwesternWords):
