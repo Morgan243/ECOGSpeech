@@ -209,9 +209,10 @@ class BaseMultiSincNN(torch.nn.Module):
                                per_channel_filter=per_channel_filter),
 
             *make_block(in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1),
+            *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1),
             #*make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 5), s=(1, 3), d=(1, 1), g=1),
             *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(n_bands, 1), s=(1, 1), d=1, g=1),
-            *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1),
+            *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1),
             Flatten(),
             self.dropout_cls(self.dropout)
 
