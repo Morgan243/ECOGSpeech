@@ -337,15 +337,15 @@ class NorthwesternWords(BaseDataset):
     ecog_pass_band = attr.ib((70, 250))
 
     # Hack
-    ecog_window_shift_sec = pd.Timedelta(0.75, 's')
+    #ecog_window_shift_sec = pd.Timedelta(0.75, 's')
     #ecog_window_step_sec = attr.ib(0.01, factory=lambda s: pd.Timedelta(s, 's'))
-    ecog_window_step_sec = pd.Timedelta(0.01, 's')
-    ecog_window_n = attr.ib(60)
+    #ecog_window_step_sec = pd.Timedelta(0.01, 's')
+    #ecog_window_n = attr.ib(60)
 
     # In terms of audio samples
     # fixed_window_size = attr.ib(audio_sample_rate * 1)
     # fixed_window_step = attr.ib(int(audio_sample_rate * .01))
-    ecog_window_size = attr.ib(600)
+    #ecog_window_size = attr.ib(300)
     num_mfcc = attr.ib(13)
     verbose = attr.ib(True)
 
@@ -445,6 +445,8 @@ class NorthwesternWords(BaseDataset):
                 self.data_maps[k] = res_dmap
                 self.sample_index_maps[k] = res_dmap['sample_index_map']
                 self.fs_signal = getattr(self, 'fs_signal', res_dmap['fs_signal'])
+                self.ecog_window_size = getattr(self, 'ecog_window_size',
+                                                int(self.fs_signal * self.sample_ixer.window_size.total_seconds()))
                 if self.fs_signal != res_dmap['fs_signal']:
                     raise ValueError("Mismatch fs (%s!=%s) on %s" % (self.fs_signal, res_dmap['fs_signal'], str(k)))
 
@@ -800,7 +802,9 @@ class NorthwesternWords(BaseDataset):
 
 
     @classmethod
-    def plot_word_sample_region(cls, data_map, word_code=None, figsize=(15, 5), ax=None):
+    def plot_word_sample_region(cls, data_map, word_code=None, figsize=(15, 5), plot_features=False,
+                                subplot_kwargs=None,
+                                feature_key='ecog', feature_ax=None, ax=None):
         word_code = np.random.choice(list(data_map['word_code_d'].keys())) if word_code is None else word_code
 
         t_silence_ixes = data_map['sample_index_map'][-word_code]
@@ -826,22 +830,36 @@ class NorthwesternWords(BaseDataset):
         speaking_s.loc[speaking_min_ix : speaking_max_ix] = 0.95
 
         #####
-        if ax is None:
-            fig, ax = matplotlib.pyplot.subplots(figsize=figsize)
-        else:
+        feature_ax = None
+        splt_kws = dict() if subplot_kwargs is None else subplot_kwargs
+        if not plot_features and ax is None:
+            fig, ax = matplotlib.pyplot.subplots(figsize=figsize, **splt_kws)
+        elif not plot_features:
             fig = ax.get_figure()
+        elif plot_features and ax is None or feature_ax is None:
+            fig, (ax, feature_ax) = matplotlib.pyplot.subplots(figsize=figsize, nrows=2, **splt_kws)
 
-        ax = plt_audio.plot(legend=False, alpha=0.4, color='tab:grey', figsize=(15, 5), label='audio')
+        ax = plt_audio.plot(legend=False, alpha=0.4, color='tab:grey', figsize=(15, 5), label='audio', ax=ax)
+        ax.set_title(f"Labeled Regions: word_code={word_code}, word='{data_map['word_code_d'][word_code]}'\nSpeaking N={len(t_speaking_ixes)}; Silence N={len(t_speaking_ixes)}")
         ax2 = ax.twinx()
 
-        ax2.set_ylim(0.01, 1.1)
+        ax2.set_ylim(0.05, 1.1)
         # ax.axvline(silence_min_ix / pd.Timedelta(1,'s'))
         (data_map['stim'].reindex(data_map['audio'].index).fillna(method='ffill').loc[plt_min: plt_max] > 0).astype(
             int).plot(ax=ax2, color='tab:blue', label='original stim')
         silence_s.plot(ax=ax2, color='red', lw=4, label='silence')
-        speaking_s.plot(ax=ax2, color='green', lw=4, label=f"speaking ('{data_map['word_code_d'][word_code]}')")
+        speaking_s.plot(ax=ax2, color='green', lw=4, label=f"speaking ")
         ax.legend()
         ax2.legend()
+
+        if feature_ax is not None:
+            feat_df = data_map[feature_key].loc[plt_min: plt_max]
+            feat_df.plot(ax=feature_ax,
+                         cmap='viridis', grid=True,
+                         alpha=0.44, legend=False)
+            feature_ax.set_title(f"Features\nplot shape={feat_df.shape}); window length={len(t_speaking_ixes[0])}")
+
+        fig.tight_layout()
         return fig, ax
 
 @attr.s
@@ -854,10 +872,10 @@ class ChangNWW(NorthwesternWords):
         (('Mayo Clinic', 19, 1, 2),)
     )
     #ecog_window_size = attr.ib(100)
-    ecog_window_shift_sec = pd.Timedelta(0.75, 's')
+    #ecog_window_shift_sec = pd.Timedelta(0.75, 's')
     #ecog_window_step_sec = attr.ib(0.01, factory=lambda s: pd.Timedelta(s, 's'))
-    ecog_window_step_sec = pd.Timedelta(0.01, 's')
-    ecog_window_n = attr.ib(60)
+    #ecog_window_step_sec = pd.Timedelta(0.01, 's')
+    #ecog_window_n = attr.ib(60)
 
     # ecog samples
     ecog_window_size = attr.ib(100)
@@ -874,7 +892,7 @@ class ChangNWW(NorthwesternWords):
         #                                                   ecog_window_n=self.ecog_window_n,
         #                                                   ecog_window_step_sec=self.ecog_window_step_sec,
         #                                                   ecog_window_shift_sec=self.ecog_window_shift_sec)
-        samp_ix = feature_processing.ChangSampleIndicesFromStim(ecog_window_size=self.ecog_window_size)
+        samp_ix = feature_processing.ChangSampleIndicesFromStim()
         mfcc = feature_processing.MFCC(self.num_mfcc)
 
         p_map = {
