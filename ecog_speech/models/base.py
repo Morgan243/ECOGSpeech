@@ -279,6 +279,7 @@ class BaseMultiSincNN(torch.nn.Module):
 
     @staticmethod
     def plot_sincnet_batch_results(lowhz_df_map, highhz_df_map, centerhz_df_map):
+        # TODO: generalize this better
         fig, axs = matplotlib.pyplot.subplots(figsize=(10, 9),
                                               # nrows=len(lowhz_df_map),
                                               nrows=4, ncols=2,
@@ -288,7 +289,13 @@ class BaseMultiSincNN(torch.nn.Module):
         for (ch_i, lowhz_df), (_, highhz_df), (_, centerhz_df) in zip(lowhz_df_map.items(),
                                                                       highhz_df_map.items(),
                                                                       centerhz_df_map.items()):
-            ax = axs.reshape(-1)[ch_i]
+
+            try:
+                ax = axs.reshape(-1)[ch_i]
+            except IndexError as e:
+                # dont try to plot more sensors - no more axes!
+                break
+
             for c in lowhz_df.columns:
                 centerhz_df.loc[ix_slice][c].plot(ax=ax, lw=3)
                 ax.fill_between(centerhz_df.loc[ix_slice].index,
