@@ -517,6 +517,7 @@ class ChangSampleIndicesFromStim(ProcessStep):
         fs = data_map['fs_signal']
 
         max_window_samples = int(fs * win_size.total_seconds())
+        label_region_sample_size = int(fs * label_region_size.total_seconds())
         print((fs, win_size))
         print("Max window size: %d" % max_window_samples)
 
@@ -537,12 +538,17 @@ class ChangSampleIndicesFromStim(ProcessStep):
             silence_start_t = start_t + silence_offs
             speaking_start_t = start_t + speaking_offs
 
-            # Get the indices for each region of interest
+            # Get the window starting indices for each region of interest
             # Note on :-max_window_samples - this removes the last windows worth since windows starting here would have out of label samples
-            silence_start_ixes = (label_index[silence_start_t: silence_start_t + label_region_size]
+#            silence_start_ixes = (label_index[silence_start_t: silence_start_t + label_region_size]
+#                                      .index.tolist()[:-max_window_samples])
+#            speaking_start_ixes = (label_index[speaking_start_t: speaking_start_t + label_region_size]
+#                                       .index.tolist()[:-max_window_samples])
+            silence_start_ixes = (label_index.loc[silence_start_t:].iloc[:label_region_sample_size]
                                       .index.tolist()[:-max_window_samples])
-            speaking_start_ixes = (label_index[speaking_start_t: speaking_start_t + label_region_size]
+            speaking_start_ixes = (label_index[speaking_start_t:].iloc[:label_region_sample_size]
                                        .index.tolist()[:-max_window_samples])
+
 
             # Go through the labeled region indices and pull a window of data
             silence_indices = [label_index.loc[offs:offs+win_size].iloc[:max_window_samples].index
