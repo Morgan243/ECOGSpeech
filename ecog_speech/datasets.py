@@ -840,7 +840,8 @@ class NorthwesternWords(BaseDataset):
             fig, (ax, feature_ax) = matplotlib.pyplot.subplots(figsize=figsize, nrows=2, **splt_kws)
 
         ax = plt_audio.plot(legend=False, alpha=0.4, color='tab:grey', figsize=(15, 5), label='audio', ax=ax)
-        ax.set_title(f"Labeled Regions: word_code={word_code}, word='{data_map['word_code_d'][word_code]}'\nSpeaking N={len(t_speaking_ixes)}; Silence N={len(t_speaking_ixes)}")
+        ax.set_title(f"Labeled Regions: word_code={word_code}, word='{data_map['word_code_d'][word_code]}'\
+        \nSpeaking N windows={len(t_speaking_ixes)}; Silence N windows={len(t_speaking_ixes)}")
         ax2 = ax.twinx()
 
         ax2.set_ylim(0.05, 1.1)
