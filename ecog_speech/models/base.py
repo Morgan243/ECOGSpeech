@@ -346,6 +346,7 @@ class Trainer:
                 if self.default_optim_cls == torch.optim.Adam:
                     self.opt_map[k] = self.default_optim_cls(m.parameters(),
                                                        lr=self.learning_rate,
+                                                             #weight_decay=0.9,
                                                        betas=(self.beta1, 0.999))
                 elif self.default_optim_cls == torch.optim.RMSprop:
                     self.opt_map[k] = self.default_optim_cls(m.parameters(),

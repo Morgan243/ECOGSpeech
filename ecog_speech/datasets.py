@@ -893,19 +893,19 @@ class ChangNWW(NorthwesternWords):
         #                                                   ecog_window_n=self.ecog_window_n,
         #                                                   ecog_window_step_sec=self.ecog_window_step_sec,
         #                                                   ecog_window_shift_sec=self.ecog_window_shift_sec)
-        samp_ix = feature_processing.ChangSampleIndicesFromStim()
-        mfcc = feature_processing.MFCC(self.num_mfcc)
+        self.sample_ixer = feature_processing.ChangSampleIndicesFromStim()
+        self.mfcc = feature_processing.MFCC(self.num_mfcc)
 
         p_map = {
             'threshold':
                 (feature_processing.WordStopStartTimeMap() >>
                  feature_processing.PowerThreshold(threshold=self.power_threshold) >>
-                 samp_ix >> mfcc),
+                 self.sample_ixer >> self.mfcc),
             'quantile':
                 (feature_processing.WordStopStartTimeMap() >>
                  feature_processing.PowerQuantile(q=self.power_q) >>
-                 samp_ix >> mfcc),
-            'minimal': feature_processing.WordStopStartTimeMap() >> samp_ix >> mfcc
+                 self.sample_ixer >> self.mfcc),
+            'minimal': feature_processing.WordStopStartTimeMap() >> self.sample_ixer >> self.mfcc
         }
         p_map['default'] = p_map[default]
         return p_map
