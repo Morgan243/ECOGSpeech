@@ -15,10 +15,14 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 from sklearn.metrics import accuracy_score, f1_score, classification_report, precision_score, recall_score
 
-def process_outputs(output_map):
+def process_outputs(output_map, pretty_print=True):
+    out_d = dict()
     for dname, o_map in output_map.items():
-        print("-"*10 + str(dname) + "-"*10)
-        print(classification_report(o_map['actuals'], (o_map['preds'] > 0.5)))
+        report_str = classification_report(o_map['actuals'], (o_map['preds'] > 0.5))
+        if pretty_print:
+            print("-"*10 + str(dname) + "-"*10)
+            print(report_str)
+
 
 def make_model(options, nww):
     base_kws = dict(
@@ -118,7 +122,8 @@ def run(options):
     print("Building trainer")
     trainer = base.Trainer(dict(model=model), opt_map = dict(),
                     train_data_gen = dl_map['train'],
-                    cv_data_gen = dl_map['cv'])
+                    cv_data_gen = dl_map['cv'],
+                           learning_rate=options.learning_rate)
     #trainer = base.Trainer(model=model, train_data_gen=dl_map['train'],
     #                       cv_data_gen=dl_map['cv'])
 
@@ -136,7 +141,7 @@ def run(options):
 
     if options.save_model_path is not None:
         print("Saving model to " + options.save_model_path)
-        torch.save(trainer.model.state_dict(), options.save_model_path)
+        torch.save(trainer.model.cpu().state_dict(), options.save_model_path)
 
     uid = str(uuid.uuid4())
     t = int(time.time())
@@ -285,6 +290,7 @@ default_option_kwargs = [
     dict(dest='--model-name', default='base-sn', type=str),
     dict(dest='--dataset', default='nww', type=str),
 
+    dict(dest='--learning-rate', default=0.001, type=float),
     dict(dest='--dense-width', default=None, type=int),
     dict(dest='--sn-n-bands', default=1, type=int),
     dict(dest='--sn-kernel-size', default=31, type=int),
