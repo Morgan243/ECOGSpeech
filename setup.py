@@ -9,4 +9,6 @@ setup(name='ECOGSpeech',
             'torchaudio', 'tqdm',
             'numpy', 'pandas',
             'sklearn', 'mne',
-            'attrs'])
+            'attrs',
+            'python_speech_features', 'torchaudio'
+      ])
