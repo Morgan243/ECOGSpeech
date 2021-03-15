@@ -97,10 +97,14 @@ class MultiChannelSincNN(torch.nn.Module):
         o = torch.cat(o, self.unsqueeze_dim)
         return o
 
-    def get_band_params(self, trainer=None):
-        return [dict(band_hz=snn.band_hz_.clone().cpu().detach().numpy(),
-                     low_hz=snn.low_hz_.clone().cpu().detach().numpy())
-                for snn in self.sinc_nn_list]
+    def get_band_params(self, trainer=None, to_numpy=True):
+        params = [dict(band_hz=snn.band_hz_,
+                         low_hz=snn.low_hz_)
+                    for snn in self.sinc_nn_list]
+        if to_numpy:
+            params = [{k:v.clone().cpu().detach().numpy() for k, v in p.items()}
+                      for p in params]
+        return params
 
 class BaseCNN(torch.nn.Module):
     def __init__(self, in_channels, window_size,
@@ -185,6 +189,7 @@ class BaseMultiSincNN(torch.nn.Module):
         self.fs = fs
         self.dropout = dropout
         self.activation_cls = torch.nn.SELU
+        self.per_channel_filter = per_channel_filter
         #DrpOut = torch.nn.Dropout2d if dropout2d else torch.nn.Dropout
         self.dropout_cls = torch.nn.Dropout2d if dropout2d else torch.nn.AlphaDropout
         self.n_cnn_filters = 32 if n_cnn_filters is None else n_cnn_filters
@@ -237,14 +242,15 @@ class BaseMultiSincNN(torch.nn.Module):
     def forward(self, x):
         return self.m(x)
 
-    def get_band_params(self, trainer=None):
+    def get_band_params(self, trainer=None, get_band_kws=None):
+        get_band_kws = dict() if get_band_kws is None else get_band_kws
         parameters = list()
         for i, _m in enumerate(self.m):
             is_m = isinstance(_m,
                               MultiChannelSincNN)
             if is_m:
                 # in case there are multiple...?
-                parameters.append(_m.get_band_params(trainer))
+                parameters.append(_m.get_band_params(trainer, **get_band_kws))
 
         if len(parameters) == 1:
             return parameters[0]
@@ -311,6 +317,16 @@ class BaseMultiSincNN(torch.nn.Module):
         fig.tight_layout()
         return fig, ax
 
+    @staticmethod
+    def bandwidth_regularizer(model, w=0.1):
+        bp_l = model.get_band_params(get_band_kws=dict(to_numpy=False))
+        #bw_arr = np.concatenate([bp_d['band_hz'] for bp_d in bp_l], axis=1).T
+        bw_arr = torch.cat([bp_d['band_hz'].unsqueeze(-1) for bp_d in bp_l], -1).T
+        if not model.per_channel_filter:
+            bw_arr = bw_arr[0]
+
+        return torch.norm(bw_arr) * w
+
 @attr.attrs
 class Trainer:
     model_map = attr.ib()
@@ -328,6 +344,7 @@ class Trainer:
 
     epoch_cb_history = attr.ib(attr.Factory(list), init=False)
     batch_cb_history = attr.ib(attr.Factory(list), init=False)
+    model_regularizer = attr.ib(None)
 
     default_optim_cls = torch.optim.Adam
 
@@ -491,8 +508,9 @@ class Trainer:
 
 
     def train_inner_step(self, epoch_i, data_batch):
-        real_label = 1
-        fake_label = 0
+        #real_label = 1
+        #fake_label = 0
+        res_d = dict()
 
         model = self.model_map['model']
         #gen_model = self.model_map['gen']
@@ -508,12 +526,19 @@ class Trainer:
         m_output = model(ecog_arr)
 
         loss = self.criterion(m_output, actuals)
+
+        if self.model_regularizer is not None:
+            reg_l = self.model_regularizer(model)
+            loss += reg_l
+            res_d['bwreg'] = reg_l.detach().cpu().item()
+
         # print("backward")
         loss.backward()
         optim.step()
         l = loss.detach().cpu().item()
+        res_d['loss'] = l
         model = model.eval()
-        return dict(loss=l)
+        return res_d
 
 #    def train_old(self, n_epochs, epoch_callbacks=None, batch_callbacks=None,
 #              batch_cb_delta=5):
