@@ -120,10 +120,17 @@ def run(options):
     dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options)
     model = make_model(options, dataset_map['train'])
     print("Building trainer")
+    if options.bw_reg_weight > 0:
+        print(f"!!!! Using BW regularizeer W={options.bw_reg_weight} !!!!")
+        reg_f = lambda m: model.bandwidth_regularizer(m, w=options.bw_reg_weight)
+    else:
+        reg_f = None
+
     trainer = base.Trainer(dict(model=model), opt_map = dict(),
-                    train_data_gen = dl_map['train'],
-                    cv_data_gen = dl_map['cv'],
-                           learning_rate=options.learning_rate)
+                           train_data_gen = dl_map['train'],
+                           cv_data_gen = dl_map['cv'],
+                           model_regularizer=reg_f,
+                           learning_rate=options.learning_rate, device=options.device)
     #trainer = base.Trainer(model=model, train_data_gen=dl_map['train'],
     #                       cv_data_gen=dl_map['cv'])
 
@@ -300,6 +307,7 @@ default_option_kwargs = [
     dict(dest='--dropout-2d', default=False, action="store_true"),
     dict(dest='--batchnorm', default=False, action="store_true"),
     dict(dest='--roll-channels', default=False, action="store_true"),
+    dict(dest='--bw-reg-weight', default=0.0, type=float),
 
     dict(dest='--power-q', default=0.7, type=float),
 
