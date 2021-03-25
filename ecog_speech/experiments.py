@@ -35,20 +35,22 @@ def make_model(options, nww):
     )
 
     if options.model_name == 'base-sn':
-        model = base.BaseMultiSincNN(len(nww.sensor_columns),
-                                     n_bands=options.sn_n_bands,
-                                     n_cnn_filters=options.n_cnn_filters,
-                                     sn_padding=options.sn_padding,
-                                     sn_kernel_size=options.sn_kernel_size,
-                                     fs=nww.fs_signal,
-                                     **base_kws)
+        model_kws = dict(in_channels=len(nww.sensor_columns),
+                         n_bands=options.sn_n_bands,
+                         n_cnn_filters=options.n_cnn_filters,
+                         sn_padding=options.sn_padding,
+                         sn_kernel_size=options.sn_kernel_size,
+                         fs=nww.fs_signal,
+                         **base_kws)
+        model = base.BaseMultiSincNN(**model_kws)
     elif options.model_name == 'base-cnn':
-        model = base.BaseCNN(len(nww.sensor_columns), **base_kws)
+        model_kws = dict(in_channels=len(nww.sensor_columns), **base_kws)
+        model = base.BaseCNN(**model_kws)
     else:
         msg = f"Unknown model name {options.model_name}"
         raise ValueError(msg)
 
-    return model
+    return model, model_kws
 
 def make_datasets_and_loaders(options):
     from torchvision import transforms
@@ -118,7 +120,7 @@ def make_datasets_and_loaders(options):
 
 def run(options):
     dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options)
-    model = make_model(options, dataset_map['train'])
+    model, model_kws = make_model(options, dataset_map['train'])
     print("Building trainer")
     if options.bw_reg_weight > 0:
         print(f"!!!! Using BW regularizeer W={options.bw_reg_weight} !!!!")
@@ -159,6 +161,7 @@ def run(options):
                     batch_losses=list(losses),
                     num_trainable_params=utils.number_of_model_params(model),
                     num_params=utils.number_of_model_params(model, trainable_only=False),
+                    model_kws=model_kws,
                     **test_perf_map,
                     #evaluation_perf_map=perf_maps,
                     #**pretrain_res,
@@ -238,7 +241,7 @@ def example_run(options):
     print("Building model")
     # starter test model for detecting speech from brain waves
     # Learn band extraction at the top
-    model = make_model(options, nww)
+    model, model_kws = make_model(options, nww)
 
     print(model)
     ####
@@ -322,6 +325,7 @@ default_option_kwargs = [
 # TODO: Config, CLI, etc
 
 if __name__ == """__main__""":
-    parser = utils.build_argparse(default_option_kwargs, description="ASPEN+MHRG Experiments v1")
+    parser = utils.build_argparse(default_option_kwargs,
+                                  description="ASPEN+MHRG Experiments v1")
     options = parser.parse_args()
     results = run(options)
