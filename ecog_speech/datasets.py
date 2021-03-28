@@ -413,8 +413,9 @@ class NorthwesternWords(BaseDataset):
 
         # If no data sharing, then load and parse data from scratch
         if self.data_from is None:
-            self.mfcc_m = torchaudio.transforms.MFCC(self.default_audio_sample_rate,
-                                                     self.num_mfcc)
+            # Leave this here for now...
+            #self.mfcc_m = torchaudio.transforms.MFCC(self.default_audio_sample_rate,
+            #                                         self.num_mfcc)
 
             ## Data loading ##
             # - Load the data, parsing into pandas data frame/series types
@@ -465,18 +466,13 @@ class NorthwesternWords(BaseDataset):
 
         else:
             print("Warning: using naive shared-referencing across objects - only use when feeling lazy")
-            self.mfcc_m = self.data_from.mfcc_m
+            #self.mfcc_m = self.data_from.mfcc_m
             self.data_maps = self.data_from.data_maps
             self.sample_index_maps = self.data_from.sample_index_maps
             self.flat_index_map = self.data_from.flat_index_map
             self.flat_keys = self.data_from.flat_keys
 
-        # select out specific samples from the flat_keys array if selection passed
-        # - Useful if doing one-subject training and want to split data up among datasets for use
-        if self.selected_word_indices is not None:
-            self.selected_flat_keys = self.flat_keys[self.selected_word_indices]
-        else:
-            self.selected_flat_keys = self.flat_keys
+        self.select(self.selected_word_indices)
 
     def __len__(self):
         return len(self.selected_flat_keys)
@@ -504,6 +500,17 @@ class NorthwesternWords(BaseDataset):
         # compiling multiple outputs for batch
         return {k: v for k, v in so.items()
                 if isinstance(v, torch.Tensor)}
+
+    def select(self, sample_indices):
+        # select out specific samples from the flat_keys array if selection passed
+        # - Useful if doing one-subject training and want to split data up among datasets for use
+        self.selected_word_indices = sample_indices
+        if self.selected_word_indices is not None:
+            self.selected_flat_keys = self.flat_keys[self.selected_word_indices]
+        else:
+            self.selected_flat_keys = self.flat_keys
+
+        return self
 
     @staticmethod
     def get_features(data_map, ix, label, ecog_transform=None):
@@ -637,6 +644,7 @@ class NorthwesternWords(BaseDataset):
     @classmethod
     def parse_mat_arr_dict(cls, mat_d, sensor_columns=None,
                            zero_repr='<ns>', defaults=None,
+                           bad_sensor_method='zero',
                            verbose=True):
         """
         Convert a raw matlab dataset into Python+Pandas with timeseries indices
@@ -670,7 +678,8 @@ class NorthwesternWords(BaseDataset):
             fs_audio = defaults.get('fs_audio',
                                     cls.default_audio_sample_rate)
 
-        assert fs_audio == cls.default_audio_sample_rate
+        #assert fs_audio == cls.default_audio_sample_rate
+        print("Audio FS = " + str(fs_audio))
 
         try:
             fs_signal = mat_d['fs_signal'][0][0]
@@ -728,12 +737,26 @@ class NorthwesternWords(BaseDataset):
         if 'electrodes' in mat_d:
             chann_code_cols = ["code_%d" % e for e in range(mat_d['electrodes'].shape[-1])]
             channel_df = pd.DataFrame(mat_d['electrodes'], columns=chann_code_cols)
+            print("Found electrodes metadata, N trodes = %d" % channel_df.shape[0] )
 
-            # TODO: Use channel columns to set ?
-            #
-            sensor_columns = channel_df.index.tolist() if sensor_columns is None else sensor_columns
+            # Spec the number of sensors that the ecog array mush have
+            required_sensor_columns = channel_df.index.tolist() if sensor_columns is None else sensor_columns
+            # Mask for good sensors
             ch_m = (channel_df['code_0'] == 1)
-            sensor_columns = [c for c in ch_m[ch_m].index.tolist() if c in sensor_columns]
+            #
+            good_sensor_columns = [c for c in ch_m[ch_m].index.tolist() if c in required_sensor_columns]
+            bad_sensor_columns = list(set(required_sensor_columns) - set(good_sensor_columns))
+            if len(bad_sensor_columns) == 0:
+                print("No bad sensors")
+            elif bad_sensor_method == 'zero' and len(bad_sensor_columns) > 0:
+                print("Zeroing %d bad sensor columns: %s" % (len(bad_sensor_columns), str(bad_sensor_columns)))
+                ecog_df.loc[:, bad_sensor_columns] = 0.
+            elif bad_sensor_method == 'ignore':
+                print("Ignoring bad sensors")
+            else:
+                raise ValueError("Unknown bad_sensor_method (use 'zero', 'ignore'): " + str(bad_sensor_method))
+
+
         else:
             channel_df = None
             sensor_columns = ecog_df.columns.tolist() if sensor_columns is None else sensor_columns
@@ -780,7 +803,8 @@ class NorthwesternWords(BaseDataset):
     # Entry point to get data
     @classmethod
     def load_data(cls, location=None, patient=None, session=None, trial=None, base_path=None,
-                  parse_mat_data=True, sensor_columns=None, verbose=True):
+                  parse_mat_data=True, sensor_columns=None, bad_sensor_method='zero',
+                  verbose=True):
 
         location = 'Mayo Clinic' if location is None else location
         patient = 19 if patient is None else patient
@@ -796,6 +820,7 @@ class NorthwesternWords(BaseDataset):
         mat_d = scipy.io.matlab.loadmat(p)
         if parse_mat_data:
             return cls.parse_mat_arr_dict(mat_d, sensor_columns=sensor_columns,
+                                          bad_sensor_method=bad_sensor_method,
                                           verbose=verbose)
 
         return mat_d
@@ -811,7 +836,6 @@ class NorthwesternWords(BaseDataset):
         t_speaking_ixes = data_map['sample_index_map'][word_code]
 
         silence_min_ix, silence_max_ix = t_silence_ixes[0].min(), t_silence_ixes[-1].max()
-
         speaking_min_ix, speaking_max_ix = t_speaking_ixes[0].min(), t_speaking_ixes[-1].max()
 
         padding = pd.Timedelta(.75, 's')
