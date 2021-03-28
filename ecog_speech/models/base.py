@@ -370,7 +370,7 @@ class Trainer:
                                                              lr=self.learning_rate)
 
     def get_best_state(self, model_key='model'):
-        if self.best_model_state is not None:
+        if getattr(self, 'best_model_state', None) is not None:
             return self.best_model_state
         else:
             return self.copy_model_state(self.model_map[model_key])
