@@ -52,93 +52,134 @@ def make_model(options, nww):
 
     return model, model_kws
 
-def make_datasets_and_loaders(options):
+mc_patient_set_map = {
+    19: [('Mayo Clinic', 19, 1, 1),
+         ('Mayo Clinic', 19, 1, 2),
+         ('Mayo Clinic', 19, 1, 3)],
+
+    21: [('Mayo Clinic', 21, 1, 1),
+         ('Mayo Clinic', 21, 1, 2)],
+
+    22: [('Mayo Clinic', 22, 1, 1),
+         ('Mayo Clinic', 22, 1, 2),
+         ('Mayo Clinic', 22, 1, 3)],
+
+    24: [('Mayo Clinic', 24, 1, 2),
+         ('Mayo Clinic', 24, 1, 3),
+         ('Mayo Clinic', 24, 1, 4)],
+
+    25: [('Mayo Clinic', 25, 1, 1),
+         ('Mayo Clinic', 25, 1, 2)],
+
+    26: [('Mayo Clinic', 26, 1, 1),
+         ('Mayo Clinic', 26, 1, 2)],
+}
+all_patient_maps = dict(MC=mc_patient_set_map)
+
+def make_tuples_from_sets_str(sets_str):
+    if sets_str is None:
+        return None
+
+    # e.g. MC-19-0
+    if ',' in sets_str:
+        sets_str_l = sets_str.split(',')
+        return [make_tuples_from_sets_str(s)[0] for s in sets_str_l]
+
+    org, pid, ix = sets_str.split('-')
+    assert pid.isdigit() and ix.isdigit() and org in ('MC',)
+    pmap, pid, ix = all_patient_maps[org], int(pid), int(ix)
+    assert pid in pmap
+    p_list = pmap[pid]
+    return [p_list[ix]]
+
+def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv_data_kws=None, test_data_kws=None):
     from torchvision import transforms
+
+    train_p_tuples = make_tuples_from_sets_str(options.train_sets)
+    cv_p_tuples = make_tuples_from_sets_str(options.cv_sets)
+    test_p_tuples = make_tuples_from_sets_str(options.test_sets)
+    if train_data_kws is None:
+        train_data_kws = dict(patient_tuples=train_p_tuples)
+    if cv_data_kws is None:
+        cv_data_kws = dict(patient_tuples=cv_p_tuples)
+    if test_data_kws is None:
+        test_data_kws = dict(patient_tuples=test_p_tuples)
+
     dl_kws = dict(num_workers=4, batch_size=options.batch_size,
                   shuffle=False, random_sample=True)
     eval_dl_kws = dict(num_workers=4, batch_size=512,
-                  shuffle=False, random_sample=False)
+                       shuffle=False, random_sample=False)
 
-    if options.dataset == 'nww':
-        train_nww = datasets.NorthwesternWords(power_q=options.power_q,
-                                               patient_tuples=(('Mayo Clinic', 19, 1, 1),
-                                                            # ('Mayo Clinic', 19, 1, 2),
-                                                            # ('Mayo Clinic', 19, 1, 3)
-                                                            ),
-                                               # ecog_window_n=75
-                                               )
-        if options.roll_channels:
-            train_nww.transform = transforms.Compose([
-                datasets.RollDimension(roll_dim=0,
-                                       max_roll=len(train_nww.sensor_columns) - 1)
-            ])
-        cv_nww = datasets.NorthwesternWords(patient_tuples=(('Mayo Clinic', 19, 1, 2),),
-                                            power_q=options.power_q)
-        test_nww = datasets.NorthwesternWords(patient_tuples=(('Mayo Clinic', 19, 1, 3),),
-                                              power_q=options.power_q)
-
-        dataset_map = dict(train=train_nww, cv=cv_nww, test=test_nww)
-        #dataloader_map = {k: v.to_dataloader(**dl_kws)
-        #                  for k, v in dataset_map.items()}
-        #return dataset_map, dataloader_map
-
+    if dataset_cls:
+        pass
+    elif options.dataset == 'nww':
+        dataset_cls = datasets.NorthwesternWords
     elif options.dataset == 'chang-nww':
-        train_nww = datasets.ChangNWW(power_q=options.power_q,
-                                      patient_tuples=(
-                                             ('Mayo Clinic', 19, 1, 2),
-                                             #('Mayo Clinic', 21, 1, 2),
-                                             #('Mayo Clinic', 22, 1, 2),
-                                         ),
-                                      )
-        if options.roll_channels:
-            train_nww.transform = transforms.Compose([
-                datasets.RollDimension(roll_dim=0,
-                                       max_roll=len(train_nww.sensor_columns) - 1)
-            ])
-
-        cv_nww = datasets.ChangNWW(power_q=options.power_q,
-                                   patient_tuples=(
-                                             ('Mayo Clinic', 24, 1, 2),
-                                         ))
-
-        test_nww = datasets.ChangNWW(power_q=options.power_q,
-                                     patient_tuples=(
-                                          ('Mayo Clinic', 25, 1, 2),
-                                      ))
-
-        dataset_map = dict(train=train_nww, cv=cv_nww, test=test_nww)
+        dataset_cls = datasets.ChangNWW
     else:
-        msg = f"Unknown dataset: '{options.dataset}'"
-        raise ValueError(msg)
+        raise ValueError("Unknown dataset: %s" % options.dataset)
+
+    dataset_map = dict()
+    print("Using dataset class: %s" % str(dataset_cls))
+    train_nww = dataset_cls(power_q=options.power_q,
+                            **train_data_kws)
+    if options.roll_channels:
+        train_nww.transform = transforms.Compose([
+            datasets.RollDimension(roll_dim=0, min_roll=0,
+                                   max_roll=len(train_nww.sensor_columns) - 1)
+        ])
+
+    dataset_map['train'] = train_nww
+
+    if cv_data_kws['patient_tuples'] is not None:
+        dataset_map['cv'] = dataset_cls(power_q=options.power_q,
+                                         **cv_data_kws)
+    else:
+        from sklearn.model_selection import train_test_split
+        train_ixs, cv_ixes = train_test_split(range(len(train_nww)))
+        cv_nww = dataset_cls(data_from=train_nww).select(cv_ixes)
+        train_nww.select(train_ixs)
+        dataset_map.update(dict(train=train_nww,
+                                cv=cv_nww))
+
+    dataset_map['test'] = dataset_cls(power_q=options.power_q,
+                                        **test_data_kws)
+
+    #dataset_map = dict(train=train_nww, cv=cv_nww, test=test_nww)
 
     dataloader_map = {k: v.to_dataloader(**dl_kws)
                       for k, v in dataset_map.items()}
     eval_dataloader_map = {k: v.to_dataloader(**eval_dl_kws)
                                 for k, v in dataset_map.items()}
+
     return dataset_map, dataloader_map, eval_dataloader_map
 
 
-def run(options):
+def run_simple(options):
     dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options)
     model, model_kws = make_model(options, dataset_map['train'])
     print("Building trainer")
+    reg_f = None
     if options.bw_reg_weight > 0:
         print(f"!!!! Using BW regularizeer W={options.bw_reg_weight} !!!!")
         reg_f = lambda m: model.bandwidth_regularizer(m, w=options.bw_reg_weight)
-    else:
-        reg_f = None
+
+    batch_cb = None
+    if options.track_sinc_params:
+        batch_cb = dict(band_params=model.get_band_params)
+
 
     trainer = base.Trainer(dict(model=model), opt_map = dict(),
-                           train_data_gen = dl_map['train'],
-                           cv_data_gen = dl_map['cv'],
+                           train_data_gen=dl_map['train'],
+                           cv_data_gen=dl_map.get('cv'),
                            model_regularizer=reg_f,
-                           learning_rate=options.learning_rate, device=options.device)
-    #trainer = base.Trainer(model=model, train_data_gen=dl_map['train'],
-    #                       cv_data_gen=dl_map['cv'])
-
+                           learning_rate=options.learning_rate,
+                           device=options.device)
 
     print("Training")
-    losses = trainer.train(options.n_epochs)
+    losses = trainer.train(options.n_epochs,
+                           batch_callbacks=batch_cb,
+                           batch_cb_delta=5)
     model.load_state_dict(trainer.get_best_state())
     #trainer.model_map['model'].eval()
     model.eval()
@@ -150,7 +191,7 @@ def run(options):
 
     if options.save_model_path is not None:
         print("Saving model to " + options.save_model_path)
-        torch.save(trainer.model.cpu().state_dict(), options.save_model_path)
+        torch.save(model.cpu().state_dict(), options.save_model_path)
 
     uid = str(uuid.uuid4())
     t = int(time.time())
@@ -176,6 +217,17 @@ def run(options):
             json.dump(res_dict, f)
 
     return trainer, outputs_map
+
+def run_kfold(options):
+    #nww-kfold-19
+    pass
+
+
+def run(options):
+    if 'kfold' in options.dataset:
+        return run_kfold(options)
+    else:
+        return run_simple(options)
 
 
 def example_run(options):
@@ -299,6 +351,10 @@ def example_run(options):
 default_option_kwargs = [
     dict(dest='--model-name', default='base-sn', type=str),
     dict(dest='--dataset', default='nww', type=str),
+    dict(dest='--train-sets', default='MC-19-0,MC-19-1', type=str),
+    #dict(dest='--cv-sets', default='19-2', type=str),
+    dict(dest='--cv-sets', default=None, type=str),
+    dict(dest='--test-sets', default='MC-19-2', type=str),
 
     dict(dest='--learning-rate', default=0.001, type=float),
     dict(dest='--dense-width', default=None, type=int),
@@ -311,6 +367,8 @@ default_option_kwargs = [
     dict(dest='--batchnorm', default=False, action="store_true"),
     dict(dest='--roll-channels', default=False, action="store_true"),
     dict(dest='--bw-reg-weight', default=0.0, type=float),
+    dict(dest='--track-sinc-params', default=False, action="store_true"),
+    #dict(dest='--batch-callback-delta', default=5, type=int),
 
     dict(dest='--power-q', default=0.7, type=float),
 
