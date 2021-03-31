@@ -41,6 +41,8 @@ def make_model(options, nww):
                          sn_padding=options.sn_padding,
                          sn_kernel_size=options.sn_kernel_size,
                          fs=nww.fs_signal,
+                         cog_attn=options.cog_attn,
+                         in_channel_dropout_rate=options.in_channel_dropout_rate,
                          **base_kws)
         model = base.BaseMultiSincNN(**model_kws)
     elif options.model_name == 'base-cnn':
@@ -92,7 +94,8 @@ def make_tuples_from_sets_str(sets_str):
     p_list = pmap[pid]
     return [p_list[ix]]
 
-def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv_data_kws=None, test_data_kws=None):
+def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv_data_kws=None, test_data_kws=None,
+                              num_dl_workers=8):
     from torchvision import transforms
 
     train_p_tuples = make_tuples_from_sets_str(options.train_sets)
@@ -105,9 +108,9 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     if test_data_kws is None:
         test_data_kws = dict(patient_tuples=test_p_tuples)
 
-    dl_kws = dict(num_workers=4, batch_size=options.batch_size,
+    dl_kws = dict(num_workers=num_dl_workers, batch_size=options.batch_size,
                   shuffle=False, random_sample=True)
-    eval_dl_kws = dict(num_workers=4, batch_size=512,
+    eval_dl_kws = dict(num_workers=num_dl_workers, batch_size=512,
                        shuffle=False, random_sample=False)
 
     if dataset_cls:
@@ -193,6 +196,7 @@ def run_simple(options):
         print("Saving model to " + options.save_model_path)
         torch.save(model.cpu().state_dict(), options.save_model_path)
 
+
     uid = str(uuid.uuid4())
     t = int(time.time())
     name = "%d_%s_TL.json" % (t, uid)
@@ -208,6 +212,18 @@ def run_simple(options):
                     #**pretrain_res,
                     #**perf_map,
         **vars(options))
+
+    if options.track_sinc_params:
+        lowhz_df_map, highhz_df_map, centerhz_df_map = base.BaseMultiSincNN.parse_band_parameter_training_hist(
+            trainer.batch_cb_history['band_params'],
+            fs=model.fs)
+        if model.per_channel_filter:
+            res_dict['low_hz_frame'] = {k: lowhz_df.to_json() for k, lowhz_df in lowhz_df_map.items()}
+            res_dict['high_hz_frame'] = {k: highhz_df.to_json() for k, highhz_df in highhz_df_map.items()}
+        else:
+            res_dict['low_hz_frame'] = lowhz_df_map[0].to_json()
+            res_dict['high_hz_frame'] = highhz_df_map[0].to_json()
+
 
     if options.result_dir is not None:
         path = pjoin(options.result_dir, name)
@@ -364,8 +380,10 @@ default_option_kwargs = [
     dict(dest='--n-cnn-filters', default=None, type=int),
     dict(dest='--dropout', default=0., type=float),
     dict(dest='--dropout-2d', default=False, action="store_true"),
+    dict(dest='--in-channel-dropout-rate', default=0., type=float),
     dict(dest='--batchnorm', default=False, action="store_true"),
     dict(dest='--roll-channels', default=False, action="store_true"),
+    dict(dest='--cog-attn', default=False, action="store_true"),
     dict(dest='--bw-reg-weight', default=0.0, type=float),
     dict(dest='--track-sinc-params', default=False, action="store_true"),
     #dict(dest='--batch-callback-delta', default=5, type=int),
