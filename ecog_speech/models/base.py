@@ -46,6 +46,53 @@ class Unsqueeze(torch.nn.Module):
     def forward(self, x):
         return x.unsqueeze(self.dim)
 
+class Reshape(torch.nn.Module):
+    def __init__(self, shape):
+        super(Reshape, self).__init__()
+        self.shape = shape
+
+    def forward(self, x):
+        return x.reshape(x.shape[0], *self.shape)
+
+class CogAttn(torch.nn.Module):
+    def __init__(self, trailing_dim, in_channels=64, pooling_size=50):
+        print("Cog attn trailing dim: " + str(trailing_dim))
+        print("Cog attn in_channels: " + str(in_channels))
+        super(CogAttn, self).__init__()
+
+        self.sensor_repr_model = torch.nn.Sequential(
+            torch.nn.AvgPool2d((1, pooling_size)),
+            torch.nn.Conv2d(in_channels, in_channels, (1, 3)),
+            Reshape((in_channels, -1)),
+            # torch.nn.Conv1d(64, 64, 20)
+            # base.Flatten(),
+            # torch.nn.Linear(64, 64)
+        )
+        t_x = torch.rand(16, in_channels, *trailing_dim )
+        t_s_out = self.sensor_repr_model(t_x)
+        self.attn_trf = torch.nn.Sequential(torch.nn.Linear(t_s_out.shape[-1], in_channels),
+                                                torch.nn.ReLU())
+#        self.attn_sensor_layers = torch.nn.ModuleList([torch.nn.Sequential(torch.nn.Linear(t_s_out.shape[-1], in_channels),
+#                                                  torch.nn.ReLU())
+#                              for ch in range(in_channels)])
+        self.softmax = torch.nn.Softmax(1)
+
+    def forward(self, x):
+        repr_out = self.sensor_repr_model(x)
+        #attn_sensor_out = torch.cat([self.attn_sensor_layers[ch](repr_out.select(1, ch)).unsqueeze(1)
+        #                             for ch in range(repr_out.shape[1])], 1)
+        attn_sensor_out = torch.cat([self.attn_trf(repr_out.select(1, ch)).unsqueeze(1)
+                                     for ch in range(repr_out.shape[1])], 1)
+
+        attn_softmax = self.softmax(attn_sensor_out)
+        attended_out_l = [(attn_softmax[:, ch, :].unsqueeze(1).unsqueeze(1)
+                           * x.permute(0, 2, 3, 1)).sum(-1, keepdim=True)
+                          for ch in range(attn_softmax.shape[1])
+                          ]
+        y = torch.cat(attended_out_l, -1).permute(0, 3, 1, 2)
+        return y
+        # attended_out.shape
+
 from ecog_speech.models import kaldi_nn
 SincNN = kaldi_nn.SincConv
 
@@ -89,7 +136,6 @@ class MultiChannelSincNN(torch.nn.Module):
             for n in self.sinc_nn_list:
                 n.band_hz_.requires_grad = self.update_params
                 n.low_hz_.requires_grad = self.update_params
-
 
     def forward(self, x):
         o = [blk(x.select(self.channel_dim, i)).unsqueeze(self.unsqueeze_dim)
@@ -182,6 +228,8 @@ class BaseMultiSincNN(torch.nn.Module):
                  batch_norm=False,
                  n_cnn_filters=None,
                  dense_width=None,
+                 cog_attn=False,
+                 in_channel_dropout_rate=0.,
                  #dense_depth=1
                  ):
 
@@ -205,14 +253,29 @@ class BaseMultiSincNN(torch.nn.Module):
             b.append(self.activation_cls())
             return b
 
-        self.m = torch.nn.Sequential(
-            Unsqueeze(2),
+        t_in = torch.rand(32, in_channels, window_size)
+        layer_list = [Unsqueeze(2)]
 
+        if in_channel_dropout_rate > 0:
+            layer_list.append(torch.nn.Dropout2d(in_channel_dropout_rate))
+
+        layer_list.append(
             MultiChannelSincNN(n_bands, in_channels,
                                padding=sn_padding,
                                kernel_size=sn_kernel_size, fs=fs,
                                per_channel_filter=per_channel_filter),
+        )
 
+        if cog_attn:
+            tmp_model = torch.nn.Sequential(*layer_list)
+            t_out = tmp_model(t_in)
+            print("!!-Using attentions-!!")
+            layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), in_channels))
+
+
+        self.m = torch.nn.Sequential(
+
+            *layer_list,
             *make_block(in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1),
             *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1),
             #*make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 5), s=(1, 3), d=(1, 1), g=1),
@@ -222,7 +285,6 @@ class BaseMultiSincNN(torch.nn.Module):
             self.dropout_cls(self.dropout)
 
         )
-        t_in = torch.rand(32, in_channels, window_size)
         t_out = self.m(t_in)
         print(t_out.shape)
         self.dense_width = dense_width
