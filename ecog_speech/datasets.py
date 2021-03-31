@@ -845,7 +845,8 @@ class NorthwesternWords(BaseDataset):
         plt_len = plt_max - plt_min
 
         #####
-        plt_audio = data_map['audio'].loc[plt_min:plt_max]
+        plt_audio = (data_map['audio'].loc[plt_min:plt_max]
+                     .resample('5ms').first().fillna(method='ffill'))
 
         silence_s = pd.Series(0, index=plt_audio.index)
         silence_s.loc[silence_min_ix : silence_max_ix] = 0.95
@@ -864,14 +865,18 @@ class NorthwesternWords(BaseDataset):
             fig, (ax, feature_ax) = matplotlib.pyplot.subplots(figsize=figsize, nrows=2, **splt_kws)
 
         ax = plt_audio.plot(legend=False, alpha=0.4, color='tab:grey', figsize=(15, 5), label='audio', ax=ax)
-        ax.set_title(f"Labeled Regions: word_code={word_code}, word='{data_map['word_code_d'][word_code]}'\
+        ax.set_title(f"Min-ts={plt_min} || Max-ts={plt_max}\n\
+        Labeled Regions: word_code={word_code}, word='{data_map['word_code_d'][word_code]}'\
         \nSpeaking N windows={len(t_speaking_ixes)}; Silence N windows={len(t_speaking_ixes)}")
         ax2 = ax.twinx()
 
         ax2.set_ylim(0.05, 1.1)
         # ax.axvline(silence_min_ix / pd.Timedelta(1,'s'))
-        (data_map['stim'].reindex(data_map['audio'].index).fillna(method='ffill').loc[plt_min: plt_max] > 0).astype(
+        #(data_map['stim'].reindex(data_map['audio'].index).fillna(method='ffill').loc[plt_min: plt_max] > 0).astype(
+        #    int).plot(ax=ax2, color='tab:blue', label='original stim')
+        (data_map['stim'].resample('5ms').first().fillna(method='ffill').loc[plt_min: plt_max] > 0).astype(
             int).plot(ax=ax2, color='tab:blue', label='original stim')
+
         silence_s.plot(ax=ax2, color='red', lw=4, label='silence')
         speaking_s.plot(ax=ax2, color='green', lw=4, label=f"speaking ")
         ax.legend()
