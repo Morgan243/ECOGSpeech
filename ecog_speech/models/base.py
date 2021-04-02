@@ -56,17 +56,17 @@ class Reshape(torch.nn.Module):
 
 class CogAttn(torch.nn.Module):
     def __init__(self, trailing_dim, in_channels=64, pooling_size=50):
-        print("Cog attn trailing dim: " + str(trailing_dim))
+        print("Cog attn trailing dim (..., bands, time): " + str(trailing_dim))
         print("Cog attn in_channels: " + str(in_channels))
         super(CogAttn, self).__init__()
 
         self.sensor_repr_model = torch.nn.Sequential(
+            # Aggregate along time dimension (mean) to downsample
             torch.nn.AvgPool2d((1, pooling_size)),
+            # Convolve along time dimension - i.e. small temporal filters
             torch.nn.Conv2d(in_channels, in_channels, (1, 3)),
+            # flatten out bands and time dimensions, leaving in channels intact
             Reshape((in_channels, -1)),
-            # torch.nn.Conv1d(64, 64, 20)
-            # base.Flatten(),
-            # torch.nn.Linear(64, 64)
         )
         t_x = torch.rand(16, in_channels, *trailing_dim )
         t_s_out = self.sensor_repr_model(t_x)
@@ -81,6 +81,7 @@ class CogAttn(torch.nn.Module):
         repr_out = self.sensor_repr_model(x)
         #attn_sensor_out = torch.cat([self.attn_sensor_layers[ch](repr_out.select(1, ch)).unsqueeze(1)
         #                             for ch in range(repr_out.shape[1])], 1)
+        # TODO: Do this as full width convolution, no padding?
         attn_sensor_out = torch.cat([self.attn_trf(repr_out.select(1, ch)).unsqueeze(1)
                                      for ch in range(repr_out.shape[1])], 1)
 
