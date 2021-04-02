@@ -74,6 +74,18 @@ class RollDimension:
         return ret
 
 @attr.s
+class ShuffleDimension:
+    shuffle_dim = attr.ib(1)
+
+    def __call__(self, sample):
+        sample = np.copy(sample)
+        # TODO/WARNING : probably won't work for more than 2d?
+        sample = np.transpose(sample, [self.shuffle_dim, 0])
+        np.random.shuffle(sample)
+        sample = np.transpose(sample, [self.shuffle_dim, 0])
+        return sample
+
+@attr.s
 class DEAP(BaseDataset):
     env_key = "DEAP_DATASET"
     default_base_path = environ.get(env_key,
