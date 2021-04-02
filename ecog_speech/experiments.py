@@ -126,10 +126,16 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     print("Using dataset class: %s" % str(dataset_cls))
     train_nww = dataset_cls(power_q=options.power_q,
                             **train_data_kws)
-    if options.roll_channels:
+    if options.roll_channels and options.shuffle_channels:
+        raise ValueError("--roll-channels and --shuffle-channels are mutually exclusive")
+    elif options.roll_channels:
         train_nww.transform = transforms.Compose([
             datasets.RollDimension(roll_dim=0, min_roll=0,
                                    max_roll=len(train_nww.sensor_columns) - 1)
+        ])
+    elif options.shuffle_channels:
+        train_nww.transform = transforms.Compose([
+            datasets.ShuffleDimension()
         ])
 
     dataset_map['train'] = train_nww
@@ -192,9 +198,6 @@ def run_simple(options):
     test_perf_map = utils.performance(outputs_map['test']['actuals'],
                                       outputs_map['test']['preds'] > 0.5)
 
-    if options.save_model_path is not None:
-        print("Saving model to " + options.save_model_path)
-        torch.save(model.cpu().state_dict(), options.save_model_path)
 
 
     uid = str(uuid.uuid4())
@@ -203,7 +206,9 @@ def run_simple(options):
     res_dict = dict(#path=path,
                     name=name,
                     datetime=str(datetime.now()), uid=uid,
-                    batch_losses=list(losses),
+                    #batch_losses=list(losses),
+                    batch_losses=losses,
+                    best_model_epoch=trainer.best_model_epoch,
                     num_trainable_params=utils.number_of_model_params(model),
                     num_params=utils.number_of_model_params(model, trainable_only=False),
                     model_kws=model_kws,
@@ -212,6 +217,15 @@ def run_simple(options):
                     #**pretrain_res,
                     #**perf_map,
         **vars(options))
+    if options.save_model_path is not None:
+        import os
+        p = options.save_model_path
+        if os.path.isdir(p):
+            p = os.path.join(p, uid + '.torch')
+        print("Saving model to " + p)
+        torch.save(model.cpu().state_dict(), p)
+        res_dict['save_model_path'] = p
+
 
     if options.track_sinc_params:
         lowhz_df_map, highhz_df_map, centerhz_df_map = base.BaseMultiSincNN.parse_band_parameter_training_hist(
@@ -383,6 +397,7 @@ default_option_kwargs = [
     dict(dest='--in-channel-dropout-rate', default=0., type=float),
     dict(dest='--batchnorm', default=False, action="store_true"),
     dict(dest='--roll-channels', default=False, action="store_true"),
+    dict(dest='--shuffle-channels', default=False, action="store_true"),
     dict(dest='--cog-attn', default=False, action="store_true"),
     dict(dest='--bw-reg-weight', default=0.0, type=float),
     dict(dest='--track-sinc-params', default=False, action="store_true"),
