@@ -54,6 +54,7 @@ do
         --n-epochs=$N_EPOCHS \
         --track-sinc-params \
         --sn-n-bands=$num_bands \
+        --n-cnn-filters=$n_filters \
         --save-model-path=$MODEL_SAVE_DIR \
         --train-sets=${TRAIN_SETS[$i]} \
         --test-sets=${TEST_SETS[$i]} \
