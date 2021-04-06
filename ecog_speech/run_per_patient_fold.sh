@@ -25,6 +25,11 @@ elif [[ $SET_ID == 24 ]]
 then
   TRAIN_SETS=('MC-24-0,MC-24-1' 'MC-24-1,MC-24-2' 'MC-24-2,MC-24-0')
   TEST_SETS=('MC-24-2' 'MC-24-0' 'MC-24-1')
+elif [[ $SET_ID == 25 ]]
+then
+  TRAIN_SETS=('MC-25-0' 'MC-25-1')
+  TEST_SETS=('MC-25-1' 'MC-25-0')
+
 fi
 
 RESULTS_DIR=./results_per_patient
