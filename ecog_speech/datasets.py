@@ -80,10 +80,21 @@ class ShuffleDimension:
     def __call__(self, sample):
         sample = np.copy(sample)
         # TODO/WARNING : probably won't work for more than 2d?
+        # swap the shuffle_dim to the zeroth index
         sample = np.transpose(sample, [self.shuffle_dim, 0])
+        # shuffle on the 0-dim in place
         np.random.shuffle(sample)
+        # Swap the shuffle_dim back - i.e. do same transpose again
         sample = np.transpose(sample, [self.shuffle_dim, 0])
         return sample
+
+@attr.s
+class RandomIntLike:
+    low = attr.ib(0)
+    high = attr.ib(2)
+
+    def __call__(self, sample):
+        return torch.randint(self.low, self.high, sample.shape, device=sample.device).type_as(sample)
 
 @attr.s
 class DEAP(BaseDataset):
@@ -343,7 +354,8 @@ class NorthwesternWords(BaseDataset):
     ))
     # num_mfcc = 13
     #signal_key = 'signal'
-    sensor_columns = list(range(64))
+    sensor_columns = attr.ib(None)
+    default_sensor_columns = list(range(64))
     default_audio_sample_rate = 48000
     default_ecog_sample_rate = 1200
     ecog_pass_band = attr.ib((70, 250))
@@ -365,6 +377,7 @@ class NorthwesternWords(BaseDataset):
 
     #stim_indexing_source = attr.ib('stim_diff')
     transform = attr.ib(None)
+    target_transform = attr.ib(None)
 
     power_threshold = attr.ib(0.007)
     power_q = attr.ib(0.70)
@@ -434,6 +447,7 @@ class NorthwesternWords(BaseDataset):
             # - Only minimal processing into Python objects done here
             data_iter = tqdm(self.patient_tuples, desc="Loading data")
             self.data_maps = {l_p_s_t_tuple: self.load_data(*l_p_s_t_tuple,
+                                                            sensor_columns=self.sensor_columns,
                                                             verbose=self.verbose)
                               for l_p_s_t_tuple in data_iter}
             ###-----
@@ -444,9 +458,15 @@ class NorthwesternWords(BaseDataset):
                                for k, dmap in self.data_maps.items()}
             # Make unique set and assert that they are all the same length
             self.sensor_counts = list(set(map(len, self.sensor_map.values())))
-            assert len(self.sensor_counts) == 1
-            # Once validated that all sensor columns same length, set it as attribute
-            self.sensor_count = self.sensor_counts[0]
+            if len(self.sensor_counts) == 1:
+                # Once validated that all sensor columns same length, set it as attribute
+                self.sensor_count = self.sensor_counts[0]
+                self.selected_columns = list(self.sensor_map.values())[0]
+            else:
+                raise NotImplementedError("underlying datasets have different number of sensor columns")
+                print("Warning: sensor columns don't match - will try to use superset")
+                unique_sensors = {c for k, cols in self.sensor_map.items() for c in cols}
+                #for
             ###-----
 
             ## Important processing ##
@@ -506,7 +526,7 @@ class NorthwesternWords(BaseDataset):
         so = self.get_features(data_d, self.flat_index_map[ix_k],
                                ix_k[0], ecog_transform=self.transform)
         so.update(self.get_targets(data_d, self.flat_index_map[ix_k],
-                                   ix_k[0]))
+                                   ix_k[0], target_transform=self.target_transform))
 
         # Return anything that is a Torch Tensor - the torch dataloader will handle
         # compiling multiple outputs for batch
@@ -539,9 +559,11 @@ class NorthwesternWords(BaseDataset):
         return kws
 
     @staticmethod
-    def get_targets(data_map, ix, label):
+    def get_targets(data_map, ix, label, target_transform=None):
         kws = dict(text='<silence>' if label <= 0 else '<speech>',
                    text_arr=torch.Tensor([0] if label <= 0 else [1]))
+        if target_transform is not None:
+            kws['text_arr'] = target_transform(kws['text_arr'])
         return kws
 
     def sample_plot(self, i, band=None,
@@ -567,7 +589,7 @@ class NorthwesternWords(BaseDataset):
         t_word_ecog_df = ecog_df.loc[t_word_slice].dropna()
         t_word_wav_df = speech_df.loc[t_word_slice]
         #display(t_word_ecog_df.describe())
-        scols = self.sensor_columns
+        scols = self.default_sensor_columns
 
         ecog_std = ecog_df[scols].std()
         cmap = matplotlib.cm.viridis_r
@@ -751,27 +773,38 @@ class NorthwesternWords(BaseDataset):
             channel_df = pd.DataFrame(mat_d['electrodes'], columns=chann_code_cols)
             print("Found electrodes metadata, N trodes = %d" % channel_df.shape[0] )
 
-            # Spec the number of sensors that the ecog array mush have
-            required_sensor_columns = channel_df.index.tolist() if sensor_columns is None else sensor_columns
+            #required_sensor_columns = channel_df.index.tolist() if sensor_columns is None else sensor_columns
             # Mask for good sensors
             ch_m = (channel_df['code_0'] == 1)
-            #
-            good_sensor_columns = [c for c in ch_m[ch_m].index.tolist() if c in required_sensor_columns]
-            bad_sensor_columns = list(set(required_sensor_columns) - set(good_sensor_columns))
-            if len(bad_sensor_columns) == 0:
-                print("No bad sensors")
-            elif bad_sensor_method == 'zero' and len(bad_sensor_columns) > 0:
-                print("Zeroing %d bad sensor columns: %s" % (len(bad_sensor_columns), str(bad_sensor_columns)))
-                ecog_df.loc[:, bad_sensor_columns] = 0.
-            elif bad_sensor_method == 'ignore':
-                print("Ignoring bad sensors")
+            all_valid_sensors = ch_m[ch_m].index.tolist()
+
+            # Spec the number of sensors that the ecog array mush have
+            if sensor_columns is None:
+                required_sensor_columns = channel_df.index.tolist()
+            elif sensor_columns == 'valid':
+                sensor_columns = all_valid_sensors
+                required_sensor_columns = sensor_columns
             else:
-                raise ValueError("Unknown bad_sensor_method (use 'zero', 'ignore'): " + str(bad_sensor_method))
+                required_sensor_columns = sensor_columns
+
+                #
+                good_sensor_columns = [c for c in all_valid_sensors if c in required_sensor_columns]
+                bad_sensor_columns = list(set(required_sensor_columns) - set(good_sensor_columns))
+                if len(bad_sensor_columns) == 0:
+                    print("No bad sensors")
+                elif bad_sensor_method == 'zero' and len(bad_sensor_columns) > 0:
+                    print("Zeroing %d bad sensor columns: %s" % (len(bad_sensor_columns), str(bad_sensor_columns)))
+                    ecog_df.loc[:, bad_sensor_columns] = 0.
+                elif bad_sensor_method == 'ignore':
+                    print("Ignoring bad sensors")
+                else:
+                    raise ValueError("Unknown bad_sensor_method (use 'zero', 'ignore'): " + str(bad_sensor_method))
 
 
         else:
             channel_df = None
             sensor_columns = ecog_df.columns.tolist() if sensor_columns is None else sensor_columns
+            print(f"No 'electrods' key in mat data - using all {len(sensor_columns)} columns")
             #ch_m = ecog_df.columns.notnull()
 
         print(f"Selected sensors (n={len(sensor_columns)}): "
@@ -788,7 +821,6 @@ class NorthwesternWords(BaseDataset):
         else:
             #audio = None
             audio_s = None
-
 
         ####
         # TESTING AUTO ADJUSTING MASK
@@ -823,7 +855,7 @@ class NorthwesternWords(BaseDataset):
         location = 1 if location is None else location
         session = 1 if session is None else session
         trial = 1 if trial is None else trial
-        sensor_columns = cls.sensor_columns if sensor_columns is None else sensor_columns
+        sensor_columns = cls.default_sensor_columns if sensor_columns is None else sensor_columns
 
         if verbose:
             print(f"---{patient}-{session}-{trial}-{location}---")
@@ -979,8 +1011,8 @@ class ChangNWW(NorthwesternWords):
 
         if parse_mat_data:
             return  cls.parse_mat_arr_dict(chang_data,
-                                           sensor_columns=cls.sensor_columns if sensor_columns is None else sensor_columns,
-                                   verbose=verbose)
+                                           sensor_columns=cls.default_sensor_columns if sensor_columns is None else sensor_columns,
+                                           verbose=verbose)
         return chang_data
 
 @attr.s

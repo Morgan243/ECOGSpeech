@@ -35,7 +35,7 @@ def make_model(options, nww):
     )
 
     if options.model_name == 'base-sn':
-        model_kws = dict(in_channels=len(nww.sensor_columns),
+        model_kws = dict(in_channels=len(nww.selected_columns),
                          n_bands=options.sn_n_bands,
                          n_cnn_filters=options.n_cnn_filters,
                          sn_padding=options.sn_padding,
@@ -46,7 +46,7 @@ def make_model(options, nww):
                          **base_kws)
         model = base.BaseMultiSincNN(**model_kws)
     elif options.model_name == 'base-cnn':
-        model_kws = dict(in_channels=len(nww.sensor_columns), **base_kws)
+        model_kws = dict(in_channels=len(nww.selected_columns), **base_kws)
         model = base.BaseCNN(**model_kws)
     else:
         msg = f"Unknown model name {options.model_name}"
@@ -125,23 +125,33 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     dataset_map = dict()
     print("Using dataset class: %s" % str(dataset_cls))
     train_nww = dataset_cls(power_q=options.power_q,
+                            sensor_columns='valid',
                             **train_data_kws)
     if options.roll_channels and options.shuffle_channels:
         raise ValueError("--roll-channels and --shuffle-channels are mutually exclusive")
     elif options.roll_channels:
+        print("-->Rolling channels transform<--")
         train_nww.transform = transforms.Compose([
             datasets.RollDimension(roll_dim=0, min_roll=0,
-                                   max_roll=len(train_nww.sensor_columns) - 1)
+                                   max_roll=len(train_nww.default_sensor_columns) - 1)
         ])
     elif options.shuffle_channels:
+        print("-->Shuffle channels transform<--")
         train_nww.transform = transforms.Compose([
             datasets.ShuffleDimension()
+        ])
+
+    if options.random_labels:
+        print("-->Randomizing target labels<--")
+        train_nww.target_transform = transforms.Compose([
+            datasets.RandomIntLike(low=0, high=2)
         ])
 
     dataset_map['train'] = train_nww
 
     if cv_data_kws['patient_tuples'] is not None:
         dataset_map['cv'] = dataset_cls(power_q=options.power_q,
+                                        sensor_columns=train_nww.selected_columns,
                                          **cv_data_kws)
     else:
         from sklearn.model_selection import train_test_split
@@ -152,6 +162,7 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
                                 cv=cv_nww))
 
     dataset_map['test'] = dataset_cls(power_q=options.power_q,
+                                      sensor_columns=train_nww.selected_columns,
                                         **test_data_kws)
 
     #dataset_map = dict(train=train_nww, cv=cv_nww, test=test_nww)
@@ -282,7 +293,7 @@ def example_run(options):
     transform = None
     if options.roll_channels:
         transform = transforms.Compose([
-            datasets.RollDimension(roll_dim=0, max_roll=len(nww.sensor_columns) - 1)
+            datasets.RollDimension(roll_dim=0, max_roll=len(nww.default_sensor_columns) - 1)
         ])
 
     # Word index series is the same length as the speech data
@@ -385,6 +396,7 @@ default_option_kwargs = [
     #dict(dest='--cv-sets', default='19-2', type=str),
     dict(dest='--cv-sets', default=None, type=str),
     dict(dest='--test-sets', default='MC-19-2', type=str),
+    dict(dest='--random-labels', default=False, action="store_true"),
 
     dict(dest='--learning-rate', default=0.001, type=float),
     dict(dest='--dense-width', default=None, type=int),
