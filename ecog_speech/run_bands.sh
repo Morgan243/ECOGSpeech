@@ -3,7 +3,7 @@
 NUM_BANDS=(1 2 3 4 5)
 #NUM_BANDS=(40 50 60 80 90)
 LEARNING_RATES=(0.001)
-N_EPOCHS=15
+N_EPOCHS=50
 RESULT_DIR='../results'
 
 mkdir -p $RESULT_DIR
@@ -18,6 +18,7 @@ do
                           --model-name='base-sn' \
                           --sn-n-bands=$num_bands \
                           --n-epochs=$N_EPOCHS \
+                          --track-sinc-params \
                           --learning-rate=$lr "$@"
   done
 done
