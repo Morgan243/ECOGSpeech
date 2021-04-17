@@ -40,13 +40,16 @@ def make_model(options, nww):
                          n_cnn_filters=options.n_cnn_filters,
                          sn_padding=options.sn_padding,
                          sn_kernel_size=options.sn_kernel_size,
+                         in_channel_dropout_rate=options.in_channel_dropout_rate,
                          fs=nww.fs_signal,
                          cog_attn=options.cog_attn,
-                         in_channel_dropout_rate=options.in_channel_dropout_rate,
                          **base_kws)
         model = base.BaseMultiSincNN(**model_kws)
     elif options.model_name == 'base-cnn':
-        model_kws = dict(in_channels=len(nww.selected_columns), **base_kws)
+        model_kws = dict(in_channels=len(nww.selected_columns),
+                         in_channel_dropout_rate=options.in_channel_dropout_rate,
+                         n_cnn_filters=options.n_cnn_filters,
+                         **base_kws)
         model = base.BaseCNN(**model_kws)
     else:
         msg = f"Unknown model name {options.model_name}"
