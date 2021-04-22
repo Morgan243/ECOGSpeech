@@ -124,9 +124,10 @@ def run(options):
     ###############
     ### Processing
     model_kws = results['model_kws']
-    loss_df = pd.DataFrame(results['batch_losses'])
+    loss_df = pd.DataFrame(results['batch_losses']).T
     ax = loss_df.plot(figsize=(6, 5), grid=True, lw=3)
-    ax.figure.savefig(os.path.join(base_model_path, "training_losses.pdf"))
+    ax.get_figure().savefig(os.path.join(base_output_path, "training_losses.pdf"))
+    matplotlib.pyplot.clf()
 
     lowhz_df = pd.read_json(results['low_hz_frame']).sort_index()
     highhz_df = pd.read_json(results['high_hz_frame']).sort_index()
@@ -140,8 +141,9 @@ def run(options):
                         highhz_df[c],
                         alpha=0.5)
     ax.grid(True)
-    ax.figure.savefig(os.path.join(base_model_path, "band_param_training_plot.pdf"))
-    # ax.legend(False)
+    ax.get_figure().savefig(os.path.join(base_output_path,
+                                         "band_param_training_plot.pdf"))
+    matplotlib.pyplot.clf()
 
     if options.eval_sets is not None:
         model_path = os.path.join(base_model_path, model_filename)
@@ -170,7 +172,7 @@ def run(options):
         preds_map = eval_nww_model(model, nww, options.eval_win_step_size)
         for ptuple, data_map in nww.data_maps.items():
             print("Plotting " + str(ptuple))
-            ax, fig = plot_model_preds(preds_s=preds_map[ptuple], data_map=data_map,
+            fig, ax = plot_model_preds(preds_s=preds_map[ptuple], data_map=data_map,
                                        sample_index_map=nww.sample_index_maps[ptuple])
             fig.savefig(os.path.join(base_output_path, "prediction_plot_for_%s.pdf" % str(ptuple)))
 
