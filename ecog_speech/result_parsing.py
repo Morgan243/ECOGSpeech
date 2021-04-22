@@ -167,10 +167,11 @@ def run(options):
         #dset_cls = dataset_evaluator_map.get(results['dataset'])
         #dset = dset_cls()
         nww = datasets.NorthwesternWords(patient_tuples=data_k_l)
-        preds = eval_nww_model(model, nww, options.eval_win_step_size)
+        preds_map = eval_nww_model(model, nww, options.eval_win_step_size)
         for ptuple, data_map in nww.data_maps.items():
             print("Plotting " + str(ptuple))
-            ax, fig = plot_model_preds(preds_s=preds, data_map=data_map, sample_index_map=nww.sample_index_maps[ptuple])
+            ax, fig = plot_model_preds(preds_s=preds_map[ptuple], data_map=data_map,
+                                       sample_index_map=nww.sample_index_maps[ptuple])
             fig.savefig(os.path.join(base_output_path, "prediction_plot_for_%s.pdf" % str(ptuple)))
 
 
