@@ -155,7 +155,7 @@ class MultiChannelSincNN(torch.nn.Module):
 
 class BaseCNN(torch.nn.Module):
     def __init__(self, in_channels, window_size,
-                 dropout=0.,
+                 dropout=0., in_channel_dropout_rate=0.,
                  dropout2d=False,
                  batch_norm=False,
                  dense_width=None,
@@ -181,23 +181,22 @@ class BaseCNN(torch.nn.Module):
             b.append(self.activation_cls())
             return b
 
-        self.m = torch.nn.Sequential(
-            Unsqueeze(1),
+        layer_list = [Unsqueeze(1)]
 
-            #MultiChannelSincNN(n_bands, in_channels,
-            #                   padding=sn_padding,
-            #                   kernel_size=sn_kernel_size, fs=fs,
-            #                   per_channel_filter=per_channel_filter),
+        if in_channel_dropout_rate > 0:
+            layer_list.append(torch.nn.Dropout2d(in_channel_dropout_rate))
 
+        layer_list += [
             *make_block(1, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1),
             *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=1, g=1),
             *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(3, 3), s=(1, 1), d=1, g=1),
             *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(3, 3), s=(1, 1), d=1, g=1),
-            #*make_block(64, 64, k_s=(3, 3), s=(1, 1), d=1, g=1),
+            # *make_block(64, 64, k_s=(3, 3), s=(1, 1), d=1, g=1),
             Flatten(),
             self.dropout_cls(self.dropout)
+        ]
 
-        )
+        self.m = torch.nn.Sequential(*layer_list )
         t_in = torch.rand(32, in_channels, window_size)
         print("T input shape: " + str(t_in.shape))
         t_out = self.m(t_in)
