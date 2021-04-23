@@ -67,7 +67,7 @@ def plot_model_preds(preds_s, data_map, sample_index_map):
 
     return fig, ax
 
-def eval_nww_model(model, nww, win_step=1):
+def eval_nww_model(model, nww, win_step=1, device=None):
     model_preds = dict()
     print(f"Running {len(nww.data_maps)} eval data map(s): {', '.join(map(str, nww.data_maps.keys()))}")
     for ptuple, data_map in nww.data_maps.items():
@@ -78,7 +78,11 @@ def eval_nww_model(model, nww, win_step=1):
                                                    for _ix in range(0, ecog_torch_arr.shape[0] - win_size, win_step)],
                                                   batch_size=1024, num_workers=6)
         with torch.no_grad():
-            all_ecog_out = [model(x) for x in tqdm(all_ecog_dl)]
+            # TODO: cleaner way to handle device
+            if device is None:
+                all_ecog_out = [model(x) for x in tqdm(all_ecog_dl)]
+            else:
+                all_ecog_out = [model(x.to(device)) for x in tqdm(all_ecog_dl)]
 
 
         all_ecog_pred_s = pd.Series([_v.item() for v in all_ecog_out for _v in v],
@@ -94,16 +98,14 @@ dataset_evaluator_map = dict(
     nww=eval_nww_model,
 )
 
-def run(options):
-    if options.result_file is None:
-        raise ValueError("Must provide result-file option")
 
+def run_one(options, result_file):
     ###############
     ### Path handling
-    result_base_path, result_filename = os.path.split(options.result_file)
+    result_base_path, result_filename = os.path.split(result_file)
     result_id = result_filename.split('.')[0]
     # Load results to get the file name of the model
-    results = json.load(open(options.result_file))
+    results = json.load(open(result_file))
 
     model_filename = os.path.split(results['save_model_path'])[-1]
     base_model_path = options.base_model_path
@@ -111,15 +113,10 @@ def run(options):
         base_model_path = os.path.join(result_base_path, 'models')
         print("Base model path not give - assuming path '%s'" % base_model_path)
 
-
     base_output_path =  result_id if options.base_output_path is None else options.base_output_path
     from pathlib import Path
     print(f"Creating results dir {base_output_path} if it doesn't already exist")
     Path(base_output_path).mkdir(parents=True, exist_ok=True)
-
-    #import os
-    #if not os.path.exists(base_output_path):
-    #    os.makedirs(base_output_path)
 
     ###############
     ### Processing
@@ -165,16 +162,36 @@ def run(options):
             # mut_state = pickle.load(f)
 
         model.load_state_dict(model_state)
+        model.to(options.device)
 
         #dset_cls = dataset_evaluator_map.get(results['dataset'])
         #dset = dset_cls()
         nww = datasets.NorthwesternWords(patient_tuples=data_k_l)
-        preds_map = eval_nww_model(model, nww, options.eval_win_step_size)
+        preds_map = eval_nww_model(model, nww, options.eval_win_step_size,
+                                   device=options.device)
         for ptuple, data_map in nww.data_maps.items():
             print("Plotting " + str(ptuple))
             fig, ax = plot_model_preds(preds_s=preds_map[ptuple], data_map=data_map,
                                        sample_index_map=nww.sample_index_maps[ptuple])
             fig.savefig(os.path.join(base_output_path, "prediction_plot_for_%s.pdf" % str(ptuple)))
+
+
+def run(options):
+    if options.result_file is None:
+        raise ValueError("Must provide result-file option")
+
+    from glob import glob
+    result_files = list(glob(options.result_file))
+    if len(result_files) == 1:
+        return run_one(options, result_files[0])
+
+    print(f"Producing results on {len(result_files)} result files")
+    original_base_path = str(options.base_output_path)
+    for r in tqdm(result_files):
+        fname = os.path.split(r)[-1].split('.')[0]
+        options.base_output_path = os.path.join(original_base_path, fname)
+        run_one(options, r)
+    #[run_one(options, r) for r in tqdm(result_files)]
 
 
 default_option_kwargs = [
@@ -186,6 +203,7 @@ default_option_kwargs = [
 
     dict(dest="--eval-win-step-size", default=1, type=int),
     dict(dest="--base-output-path", default=None, type=str),
+    dict(dest='--device', default='cuda:0'),
 ]
 if __name__ == """__main__""":
     parser = utils.build_argparse(default_option_kwargs,
