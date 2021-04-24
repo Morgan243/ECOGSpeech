@@ -15,18 +15,9 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 from sklearn.metrics import accuracy_score, f1_score, classification_report, precision_score, recall_score
 
-def process_outputs(output_map, pretty_print=True):
-    out_d = dict()
-    for dname, o_map in output_map.items():
-        report_str = classification_report(o_map['actuals'], (o_map['preds'] > 0.5))
-        if pretty_print:
-            print("-"*10 + str(dname) + "-"*10)
-            print(report_str)
-
 
 def make_model(options, nww):
     base_kws = dict(
-        #window_size=nww.ecog_window_size,
         window_size=int(nww.sample_ixer.window_size.total_seconds() * nww.fs_signal),
         dropout=options.dropout,
         dropout2d=options.dropout_2d,
@@ -57,53 +48,23 @@ def make_model(options, nww):
 
     return model, model_kws
 
-mc_patient_set_map = {
-    19: [('Mayo Clinic', 19, 1, 1),
-         ('Mayo Clinic', 19, 1, 2),
-         ('Mayo Clinic', 19, 1, 3)],
-
-    21: [('Mayo Clinic', 21, 1, 1),
-         ('Mayo Clinic', 21, 1, 2)],
-
-    22: [('Mayo Clinic', 22, 1, 1),
-         ('Mayo Clinic', 22, 1, 2),
-         ('Mayo Clinic', 22, 1, 3)],
-
-    24: [('Mayo Clinic', 24, 1, 2),
-         ('Mayo Clinic', 24, 1, 3),
-         ('Mayo Clinic', 24, 1, 4)],
-
-    25: [('Mayo Clinic', 25, 1, 1),
-         ('Mayo Clinic', 25, 1, 2)],
-
-    26: [('Mayo Clinic', 26, 1, 1),
-         ('Mayo Clinic', 26, 1, 2)],
-}
-all_patient_maps = dict(MC=mc_patient_set_map)
-
-def make_tuples_from_sets_str(sets_str):
-    if sets_str is None:
-        return None
-
-    # e.g. MC-19-0
-    if ',' in sets_str:
-        sets_str_l = sets_str.split(',')
-        return [make_tuples_from_sets_str(s)[0] for s in sets_str_l]
-
-    org, pid, ix = sets_str.split('-')
-    assert pid.isdigit() and ix.isdigit() and org in ('MC',)
-    pmap, pid, ix = all_patient_maps[org], int(pid), int(ix)
-    assert pid in pmap
-    p_list = pmap[pid]
-    return [p_list[ix]]
 
 def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv_data_kws=None, test_data_kws=None,
                               num_dl_workers=8):
     from torchvision import transforms
+    if dataset_cls:
+        pass
+    elif options.dataset == 'nww':
+        dataset_cls = datasets.NorthwesternWords
+    elif options.dataset == 'chang-nww':
+        dataset_cls = datasets.ChangNWW
+    else:
+        raise ValueError("Unknown dataset: %s" % options.dataset)
 
-    train_p_tuples = make_tuples_from_sets_str(options.train_sets)
-    cv_p_tuples = make_tuples_from_sets_str(options.cv_sets)
-    test_p_tuples = make_tuples_from_sets_str(options.test_sets)
+    train_p_tuples = dataset_cls.make_tuples_from_sets_str(options.train_sets)
+    cv_p_tuples = dataset_cls.make_tuples_from_sets_str(options.cv_sets)
+    test_p_tuples = dataset_cls.make_tuples_from_sets_str(options.test_sets)
+
     if train_data_kws is None:
         train_data_kws = dict(patient_tuples=train_p_tuples)
     if cv_data_kws is None:
@@ -116,14 +77,6 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     eval_dl_kws = dict(num_workers=num_dl_workers, batch_size=512,
                        shuffle=False, random_sample=False)
 
-    if dataset_cls:
-        pass
-    elif options.dataset == 'nww':
-        dataset_cls = datasets.NorthwesternWords
-    elif options.dataset == 'chang-nww':
-        dataset_cls = datasets.ChangNWW
-    else:
-        raise ValueError("Unknown dataset: %s" % options.dataset)
 
     dataset_map = dict()
     print("Using dataset class: %s" % str(dataset_cls))
@@ -191,7 +144,6 @@ def run_simple(options):
     if options.track_sinc_params:
         batch_cb = dict(band_params=model.get_band_params)
 
-
     trainer = base.Trainer(dict(model=model), opt_map = dict(),
                            train_data_gen=dl_map['train'],
                            cv_data_gen=dl_map.get('cv'),
@@ -204,16 +156,16 @@ def run_simple(options):
                            batch_callbacks=batch_cb,
                            batch_cb_delta=5)
     model.load_state_dict(trainer.get_best_state())
-    #trainer.model_map['model'].eval()
-    model.eval()
 
+    #####
+    # Produce predictions and score them
+    model.eval()
     outputs_map = trainer.generate_outputs(**eval_dl_map)
-    process_outputs(outputs_map)
+    clf_str_map = utils.make_classification_reports(outputs_map)
     test_perf_map = utils.performance(outputs_map['test']['actuals'],
                                       outputs_map['test']['preds'] > 0.5)
-
-
-
+    #####
+    # Prep a results structure for saving - everything must be json serializable (no array objects)
     uid = str(uuid.uuid4())
     t = int(time.time())
     name = "%d_%s_TL.json" % (t, uid)
@@ -226,6 +178,7 @@ def run_simple(options):
                     num_trainable_params=utils.number_of_model_params(model),
                     num_params=utils.number_of_model_params(model, trainable_only=False),
                     model_kws=model_kws,
+                    clf_reports=clf_str_map,
                     **test_perf_map,
                     #evaluation_perf_map=perf_maps,
                     #**pretrain_res,
@@ -240,7 +193,6 @@ def run_simple(options):
         torch.save(model.cpu().state_dict(), p)
         res_dict['save_model_path'] = p
 
-
     if options.track_sinc_params:
         lowhz_df_map, highhz_df_map, centerhz_df_map = base.BaseMultiSincNN.parse_band_parameter_training_hist(
             trainer.batch_cb_history['band_params'],
@@ -251,7 +203,6 @@ def run_simple(options):
         else:
             res_dict['low_hz_frame'] = lowhz_df_map[0].to_json()
             res_dict['high_hz_frame'] = highhz_df_map[0].to_json()
-
 
     if options.result_dir is not None:
         path = pjoin(options.result_dir, name)
@@ -356,7 +307,7 @@ def example_run(options):
     trainer.model.eval()
 
     outputs_map = trainer.generate_outputs(**eval_dset_map)
-    process_outputs(outputs_map)
+    utils.make_classification_reports(outputs_map)
     test_perf_map = utils.performance(outputs_map['test_dl']['actuals'],
                                       outputs_map['test_dl']['preds'] > 0.5)
 

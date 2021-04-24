@@ -1,4 +1,6 @@
+from sklearn.metrics import classification_report
 from collections import namedtuple
+
 
 def print_sequential_arch(m, t_x):
     for i in range(0, len(m)):
@@ -7,10 +9,12 @@ def print_sequential_arch(m, t_x):
         print(l_preds.shape)
         print("----")
 
+
 def number_of_model_params(m, trainable_only=True):
     p_cnt = sum(p.numel() for p in m.parameters()
                 if (p.requires_grad and trainable_only) or not trainable_only)
     return p_cnt
+
 
 def build_default_options(default_option_kwargs, **overrides):
     opt_keys = [d['dest'].replace('-', '_')[2:]
@@ -19,6 +23,7 @@ def build_default_options(default_option_kwargs, **overrides):
     return Options(*[d['default'] if o not in overrides else overrides[o]
                      for o, d in zip(opt_keys, default_option_kwargs)])
 
+
 def performance(y, preds):
     from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
     return dict(f1=f1_score(y, preds),
@@ -26,6 +31,18 @@ def performance(y, preds):
                 precision=precision_score(y, preds),
                 recall=recall_score(y, preds),
                 )
+
+
+def make_classification_reports(output_map, pretty_print=True):
+    out_d = dict()
+    for dname, o_map in output_map.items():
+        report_str = classification_report(o_map['actuals'], (o_map['preds'] > 0.5))
+        if pretty_print:
+            print("-"*10 + str(dname) + "-"*10)
+            print(report_str)
+        out_d[dname] = report_str
+    return out_d
+
 
 def build_argparse(default_option_kwargs, description=''):
     import argparse
