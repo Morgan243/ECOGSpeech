@@ -199,9 +199,10 @@ def run_one(options, result_file):
 
         for ptuple, data_map in dset.data_maps.items():
             print("Plotting " + str(ptuple))
+            ptuple_str = "-".join(str(v) for v in ptuple)
             fig, ax = plot_model_preds(preds_s=preds_map[ptuple], data_map=data_map,
                                        sample_index_map=dset.sample_index_maps[ptuple])
-            fig.savefig(os.path.join(base_output_path, "prediction_plot_for_%s.pdf" % str(ptuple)))
+            fig.savefig(os.path.join(base_output_path, "prediction_plot_for_%s.pdf" % ptuple_str))
 
 
     # TODO: return something useful - dictionary of results? A class of results?j
