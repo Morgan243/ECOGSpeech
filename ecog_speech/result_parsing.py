@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib
+from matplotlib import pyplot as plt
 from glob import glob
 import os
 import json
@@ -34,7 +35,7 @@ def plot_model_preds(preds_s, data_map, sample_index_map):
     td_win_size = td_ix_max - td_ix_min
 
     n_rows = int((data_map['audio'].index.max() / td_win_size) + 0.5)
-    fig, axs = matplotlib.pyplot.subplots(nrows=n_rows, figsize=(35, 5 * n_rows))
+    fig, axs = plt.subplots(nrows=n_rows, figsize=(35, 5 * n_rows))
 
     ax = None
     for i, ax in enumerate(axs):
@@ -72,6 +73,68 @@ def plot_model_preds(preds_s, data_map, sample_index_map):
 #    nww=eval_nww_model,
 #)
 #
+def plot_training(loss_df, title=None, ax=None):
+    ax = loss_df.plot(figsize=(6, 5), grid=True, lw=3, ax=ax)
+    ax.set_ylabel('Loss Value', fontsize=13)
+    ax.set_xlabel('Epoch', fontsize=13)
+    if title is not None:
+        ax.set_title(title, fontsize=15)
+    #plt.clf()
+    return ax
+
+
+def plot_sensor_band_training(lowhz_df, centerhz_df, highhz_df,
+                              title=None, ax=None):
+    for c in lowhz_df.columns:
+        ax = centerhz_df[c].plot(figsize=(15, 6), lw=3, ax=ax)
+        ax.fill_between(centerhz_df.index,
+                        lowhz_df[c],
+                        highhz_df[c],
+                        alpha=0.5)
+    if title is not None:
+        ax.set_title(title, fontsize=15)
+    ax.set_ylabel('Hz', fontsize=13)
+    # TODO: Can we map this to actual batches?
+    ax.set_xlabel('Batch Sample Index', fontsize=13)
+    ax.grid(True)
+    #plt.clf()
+    return ax
+
+
+def multi_plot_training(loss_df, lowhz_df, centerhz_df,  highhz_df,
+                        title=None,
+                        axs=None):
+    fig = None
+    if axs is None:
+        fig, axs = plt.subplots(nrows=2, figsize=(10, 10))
+    axs = axs.reshape(-1)
+
+    ax_i = 0
+    loss_ax = plot_training(loss_df, ax=axs[ax_i])
+    ax_i += 1
+    hz_ax = plot_sensor_band_training(lowhz_df, centerhz_df, highhz_df, ax=axs[ax_i])
+
+    if fig is None:
+        fig = axs[0].get_figure()
+
+    if title is not None:
+        fig.suptitle(title, fontsize=15)
+
+    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+    return fig, {'loss_ax': loss_ax, 'hz_ax': hz_ax}
+
+def make_hz_frame_from_results(results):
+    lowhz_df = pd.read_json(results['low_hz_frame']).sort_index()
+    highhz_df = pd.read_json(results['high_hz_frame']).sort_index()
+    centerhz_df = (highhz_df + lowhz_df) / 2.
+    return lowhz_df, centerhz_df, highhz_df
+
+
+def make_loss_frame_from_results(results):
+    df = pd.DataFrame(results['batch_losses']).T
+    df.index.name = 'epoch'
+    return df
+
 
 def run_one(options, result_file):
     ###############
@@ -87,7 +150,7 @@ def run_one(options, result_file):
         base_model_path = os.path.join(result_base_path, 'models')
         print("Base model path not give - assuming path '%s'" % base_model_path)
 
-    base_output_path =  result_id if options.base_output_path is None else options.base_output_path
+    base_output_path = result_id if options.base_output_path is None else options.base_output_path
     from pathlib import Path
     print(f"Creating results dir {base_output_path} if it doesn't already exist")
     Path(base_output_path).mkdir(parents=True, exist_ok=True)
@@ -95,26 +158,21 @@ def run_one(options, result_file):
     ###############
     ### Processing
     model_kws = results['model_kws']
-    loss_df = pd.DataFrame(results['batch_losses']).T
-    ax = loss_df.plot(figsize=(6, 5), grid=True, lw=3)
-    ax.get_figure().savefig(os.path.join(base_output_path, "training_losses.pdf"))
-    matplotlib.pyplot.clf()
-
-    lowhz_df = pd.read_json(results['low_hz_frame']).sort_index()
-    highhz_df = pd.read_json(results['high_hz_frame']).sort_index()
-    centerhz_df = (highhz_df + lowhz_df) / 2.
-
-    ax = None
-    for c in lowhz_df.columns:
-        ax = centerhz_df[c].plot(figsize=(15, 6), lw=3, ax=ax)
-        ax.fill_between(centerhz_df.index,
-                        lowhz_df[c],
-                        highhz_df[c],
-                        alpha=0.5)
-    ax.grid(True)
-    ax.get_figure().savefig(os.path.join(base_output_path,
-                                         "band_param_training_plot.pdf"))
-    matplotlib.pyplot.clf()
+    #loss_df = pd.DataFrame(results['batch_losses']).T
+    loss_df = make_loss_frame_from_results(results)
+    lowhz_df, centerhz_df, highhz_df = make_hz_frame_from_results(results)
+    kwarg_str = ", ".join(["%s=%s" % (str(k), str(v)) if (i % 5) or i ==0 else "\n%s=%s" % (str(k), str(v))
+                          for i, (k, v) in enumerate(results['model_kws'].items())])
+    perf_str = '|| '.join(['%s=%s' % (str(k), str(np.round(results[k], 3))) for k in ['accuracy', 'precision', 'recall']])
+    title = (f"({results['uid']})\ntrain:[{results['train_sets']}] || cv:[{results['cv_sets']}] || test:[{results['test_sets']}] \n\
+    Num Params={results['num_params']} || {perf_str}\n\
+    {results['model_name']}({kwarg_str})")
+    #print(title)
+    #title = f"Model {results['']}"
+    fig, ax_map = multi_plot_training(loss_df, lowhz_df, centerhz_df, highhz_df, title=None)
+    ax_map['loss_ax'].set_title(title, fontsize=15)
+    fig.tight_layout()
+    fig.savefig(os.path.join(base_output_path, "training_plots.pdf"))
 
     if options.eval_sets is not None:
         model_path = os.path.join(base_model_path, model_filename)
