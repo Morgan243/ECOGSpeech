@@ -352,6 +352,31 @@ class NorthwesternWords(BaseDataset):
                               #('Mayo Clinic', 22, 1, 3),
                               #('Mayo Clinic', 22, 1, 4),
     ))
+
+    mc_patient_set_map = {
+        19: [('Mayo Clinic', 19, 1, 1),
+             ('Mayo Clinic', 19, 1, 2),
+             ('Mayo Clinic', 19, 1, 3)],
+
+        21: [('Mayo Clinic', 21, 1, 1),
+             ('Mayo Clinic', 21, 1, 2)],
+
+        22: [('Mayo Clinic', 22, 1, 1),
+             ('Mayo Clinic', 22, 1, 2),
+             ('Mayo Clinic', 22, 1, 3)],
+
+        24: [('Mayo Clinic', 24, 1, 2),
+             ('Mayo Clinic', 24, 1, 3),
+             ('Mayo Clinic', 24, 1, 4)],
+
+        25: [('Mayo Clinic', 25, 1, 1),
+             ('Mayo Clinic', 25, 1, 2)],
+
+        26: [('Mayo Clinic', 26, 1, 1),
+             ('Mayo Clinic', 26, 1, 2)],
+    }
+    all_patient_maps = dict(MC=mc_patient_set_map)
+
     # num_mfcc = 13
     #signal_key = 'signal'
     sensor_columns = attr.ib(None)
@@ -359,12 +384,6 @@ class NorthwesternWords(BaseDataset):
     default_audio_sample_rate = 48000
     default_ecog_sample_rate = 1200
     ecog_pass_band = attr.ib((70, 250))
-
-    # Hack
-    #ecog_window_shift_sec = pd.Timedelta(0.75, 's')
-    #ecog_window_step_sec = attr.ib(0.01, factory=lambda s: pd.Timedelta(s, 's'))
-    #ecog_window_step_sec = pd.Timedelta(0.01, 's')
-    #ecog_window_n = attr.ib(60)
 
     # In terms of audio samples
     # fixed_window_size = attr.ib(audio_sample_rate * 1)
@@ -935,6 +954,28 @@ class NorthwesternWords(BaseDataset):
 
         fig.tight_layout()
         return fig, ax
+
+    @classmethod
+    def make_tuples_from_sets_str(cls, sets_str):
+        """
+        Process a string representation of the patient tuples, e.g.: 'MC-19-0,MC-19-1'
+        """
+        if sets_str is None:
+            return None
+
+        # e.g. MC-19-0
+        if ',' in sets_str:
+            sets_str_l = sets_str.split(',')
+            # Recurse
+            return [cls.make_tuples_from_sets_str(s)[0] for s in sets_str_l]
+
+        org, pid, ix = sets_str.split('-')
+        assert pid.isdigit() and ix.isdigit() and org in ('MC',)
+        pmap, pid, ix = cls.all_patient_maps[org], int(pid), int(ix)
+        assert pid in pmap
+        p_list = pmap[pid]
+        return [p_list[ix]]
+
 
 @attr.s
 class ChangNWW(NorthwesternWords):
