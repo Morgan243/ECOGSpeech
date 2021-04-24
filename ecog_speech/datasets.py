@@ -995,7 +995,7 @@ class NorthwesternWords(BaseDataset):
         model_preds = dict()
         print(f"Running {len(self.data_maps)} eval data map(s): {', '.join(map(str, self.data_maps.keys()))}")
         for ptuple, data_map in self.data_maps.items():
-            ecog_torch_arr = torch.from_numpy(data_map['ecog'].values)
+            ecog_torch_arr = torch.from_numpy(data_map['ecog'].values).float()
             # TODO: seems like there should be a better way to do this
             all_ecog_dl = torch.utils.data.DataLoader([ecog_torch_arr[_ix:_ix + self.ecog_window_size].T
                                                        for _ix in
