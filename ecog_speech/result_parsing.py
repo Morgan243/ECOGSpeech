@@ -9,6 +9,7 @@ from ecog_speech.models import base
 from tqdm.auto import tqdm
 import torch
 
+
 def plot_model_preds(preds_s, data_map, sample_index_map):
     plt_stim_s = data_map['stim']
     #t_indices_s = {wrd_id: (nww.sample_index_maps[data_k].get(wrd_id), nww.sample_index_maps[data_k].get(-wrd_id))
@@ -67,37 +68,10 @@ def plot_model_preds(preds_s, data_map, sample_index_map):
 
     return fig, ax
 
-def eval_nww_model(model, nww, win_step=1, device=None):
-    model_preds = dict()
-    print(f"Running {len(nww.data_maps)} eval data map(s): {', '.join(map(str, nww.data_maps.keys()))}")
-    for ptuple, data_map in nww.data_maps.items():
-        ecog_torch_arr = torch.from_numpy(data_map['ecog'].values)
-        win_size = nww.ecog_window_size
-        # TODO: seems like there should be a better way to do this
-        all_ecog_dl = torch.utils.data.DataLoader([ecog_torch_arr[_ix:_ix + win_size].T
-                                                   for _ix in range(0, ecog_torch_arr.shape[0] - win_size, win_step)],
-                                                  batch_size=1024, num_workers=6)
-        with torch.no_grad():
-            # TODO: cleaner way to handle device
-            if device is None:
-                all_ecog_out = [model(x) for x in tqdm(all_ecog_dl)]
-            else:
-                all_ecog_out = [model(x.to(device)) for x in tqdm(all_ecog_dl)]
-
-
-        all_ecog_pred_s = pd.Series([_v.item() for v in all_ecog_out for _v in v],
-                                    index=data_map['ecog'].iloc[
-                                        range(win_size, ecog_torch_arr.shape[0], win_step)].index,
-                                    name='pred_proba')
-        #model_preds[ptuple] = all_ecog_out
-        model_preds[ptuple] = all_ecog_pred_s
-
-    return model_preds
-
-dataset_evaluator_map = dict(
-    nww=eval_nww_model,
-)
-
+#dataset_evaluator_map = dict(
+#    nww=eval_nww_model,
+#)
+#
 
 def run_one(options, result_file):
     ###############
@@ -146,35 +120,33 @@ def run_one(options, result_file):
         model_path = os.path.join(base_model_path, model_filename)
         print("Loading model located at: " + str(model_path))
 
-        #eval_set_str = dict(test="test_sets", cv="cv_sets", train="train_sets").get(options.eval_sets,
-        #                                                                            options.eval_sets)
+        # Handle if the user puts in train/cv/test, otherwise use the string as given
         eval_set_str = {k: results[k + "_sets"] for k in ["test", "cv", "train"]}.get(options.eval_sets,
                                                                                       options.eval_sets)
 
-        data_k_l = experiments.make_tuples_from_sets_str(eval_set_str)
-
+        dataset_cls = datasets.BaseDataset.get_dataset_by_name(results['dataset'])
+        data_k_l = dataset_cls.make_tuples_from_sets_str(eval_set_str)
+        dset = dataset_cls(patient_tuples=data_k_l)
 
         model = base.BaseMultiSincNN(**model_kws)
 
-        # with open('../ecog_speech/test_results/t_cog_attn_model_2.torch', 'rb') as f:
         with open(model_path, 'rb') as f:
             model_state = torch.load(f)
-            # mut_state = pickle.load(f)
 
         model.load_state_dict(model_state)
         model.to(options.device)
 
-        #dset_cls = dataset_evaluator_map.get(results['dataset'])
-        #dset = dset_cls()
-        nww = datasets.NorthwesternWords(patient_tuples=data_k_l)
-        preds_map = eval_nww_model(model, nww, options.eval_win_step_size,
-                                   device=options.device)
-        for ptuple, data_map in nww.data_maps.items():
+        preds_map = dset.eval_model(model, options.eval_win_step_size,
+                                    device=options.device)
+
+        for ptuple, data_map in dset.data_maps.items():
             print("Plotting " + str(ptuple))
             fig, ax = plot_model_preds(preds_s=preds_map[ptuple], data_map=data_map,
-                                       sample_index_map=nww.sample_index_maps[ptuple])
+                                       sample_index_map=dset.sample_index_maps[ptuple])
             fig.savefig(os.path.join(base_output_path, "prediction_plot_for_%s.pdf" % str(ptuple)))
 
+
+    # TODO: return something useful - dictionary of results? A class of results?j
 
 def run(options):
     if options.result_file is None:
@@ -208,5 +180,5 @@ default_option_kwargs = [
 if __name__ == """__main__""":
     parser = utils.build_argparse(default_option_kwargs,
                                   description="ASPEN+MHRG Result Parsing")
-    options = parser.parse_args()
-    results = run(options)
+    m_options = parser.parse_args()
+    results = run(m_options)

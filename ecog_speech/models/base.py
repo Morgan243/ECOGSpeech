@@ -568,7 +568,6 @@ class Trainer:
         #return dict(preds=torch.cat(preds_l).detach().cpu().numpy(),
         #            actuals=torch.cat(actuals_l).detach().cpu().int().numpy())
 
-
     def train_inner_step(self, epoch_i, data_batch):
         #real_label = 1
         #fake_label = 0
@@ -602,85 +601,24 @@ class Trainer:
         model = model.eval()
         return res_d
 
-#    def train_old(self, n_epochs, epoch_callbacks=None, batch_callbacks=None,
-#              batch_cb_delta=5):
-#
-#        epoch_callbacks = dict() if epoch_callbacks is None else epoch_callbacks
-#        batch_callbacks = dict() if batch_callbacks is None else batch_callbacks
-#
-#        self.model = self.model.to(self.device)
-#
-#        # self.criterion = torch.nn.CrossEntropyLoss()
-#        self.criterion = torch.nn.BCELoss()  # weight=torch.tensor(2))
-#        self.optim = torch.optim.Adam(self.model.parameters(), **self.optim_kwargs)
-#        self.losses = getattr(self, 'losses', list())
-#        self.cv_losses = getattr(self, 'cv_losses', list())
-#        best_cv = np.inf
-#        train_loss = 0
-#        with tqdm(total=n_epochs, desc='Train epoch') as epoch_pbar:
-#            for epoch in range(self.epochs_trained, self.epochs_trained + n_epochs):
-#                self.model.train()
-#                with tqdm(total=len(self.train_data_gen), desc='-loss-') as batch_pbar:
-#                    for batch_idx, data_dict in enumerate(self.train_data_gen):
-#                        self.model.zero_grad()
-#
-#                        # print("batch {i}")
-#                        ecog_arr = data_dict['ecog_arr'].to(self.device)
-#                        # ecog_arr = (ecog_arr/ecog_arr.abs().max(1, keepdim=True).values)
-#
-#                        if batch_idx == 0:
-#                            pass
-#                            #print("ECOG SHAPE: " + str(ecog_arr.shape))
-#
-#                        actuals = data_dict['text_arr'].to(self.device)
-#                        # print("running model")
-#                        m_output = self.model(ecog_arr)
-#
-#                        self.optim.zero_grad()
-#                        loss = self.criterion(m_output, actuals)
-#                        # print("backward")
-#                        loss.backward()
-#                        self.optim.step()
-#                        l = loss.detach().cpu().item()
-#
-#                        train_loss += l
-#
-#                        self.losses.append(l)
-#                        mu_loss = np.mean(self.losses[-(batch_idx + 1):])
-#                        batch_pbar.set_description("%d - Loss: %f"
-#                                                   % (epoch, mu_loss))
-#
-#                        batch_pbar.update(1)
-#                    #####
-#                    if self.cv_data_gen is not None:
-#                        self.model.eval()
-#                        with tqdm(total=len(self.cv_data_gen), desc='CV::') as cv_pbar:
-#                            with torch.no_grad():
-#                                for cv_idx, cv_data_dict in enumerate(self.cv_data_gen):
-#                                    cv_X = cv_data_dict['ecog_arr'].to(self.device)
-#                                    cv_y = cv_data_dict['text_arr'].to(self.device)
-#
-#                                    cv_pred = self.model(cv_X)
-#                                    cv_loss = self.criterion(cv_pred, cv_y)
-#                                    self.cv_losses.append(cv_loss.detach().cpu().item())
-#
-#                                    cv_pbar.update(1)
-#                                    cv_mean_loss = np.mean(self.cv_losses[-(1 + cv_idx):])
-#                                    desc = "CV Loss: %.4f" % cv_mean_loss
-#                                    cv_pbar.set_description(desc)
-#
-#                                if cv_mean_loss < best_cv:
-#                                    self.best_model_state = copy_model_state(self.model)
-#                                    self.best_model_epoch = epoch
-#                                    desc = "CV Loss: %.4f [[NEW BEST]]" % cv_mean_loss
-#                                    cv_pbar.set_description(desc)
-#                                    best_cv = cv_mean_loss
-#
-#                        self.model.train()
-#                epoch_pbar.update(1)
-#
-#        return self.losses
+    @classmethod
+    def eval_model_on_dataloader(cls, model, dl, device):
+        model_in_training = model.training
+        preds_l, actuals_l = list(), list()
+        with torch.no_grad():
+            model.eval()
+            for _x in tqdm(dl, desc="Eval on %s" % dl.__class__.__name__):
+                preds_l.append(model(_x['ecog_arr'].to(device)))
+                actuals_l.append(_x['text_arr'])
 
+        # Leave the model state in whatever it came in as
+        if model_in_training:
+            model.train()
+
+    # TODO: This requires and instance of the trainer, which is unecessary for evaluation
+    #       Consider separating this into a more simple static/class method that accepts
+    #       a model and dataloader (or dataset? dataloader adds batching and other aspects...)
+    # - First pass at this in eval_model_on_dataloader
     def generate_outputs(self, model_key='model', **dl_map):
         #self.model.eval()
         model = self.model_map[model_key].eval()

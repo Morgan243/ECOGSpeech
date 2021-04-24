@@ -52,6 +52,18 @@ class BaseDataset(tdata.Dataset):
     def with_env_key(cls, env_key):
         pass
 
+    @staticmethod
+    def get_dataset_by_name(dataset_name):
+        # Could be done with simple dictionary, but in function
+        # can do minor processing on the name if needed
+        if dataset_name == 'nww':
+            dataset_cls = NorthwesternWords
+        elif dataset_name == 'chang-nww':
+            dataset_cls = ChangNWW
+        else:
+            raise ValueError("Unknown dataset: %s" % dataset_name)
+        return dataset_cls
+
 
 @attr.s
 class RollDimension:
@@ -976,6 +988,36 @@ class NorthwesternWords(BaseDataset):
         p_list = pmap[pid]
         return [p_list[ix]]
 
+    # TODO: This may be better placed with the Trainer class, as that's where most
+    #       of the model+dataset coupling happens. In other words, the dataset shouldn't
+    #       have to know how a model is going to use it, but the trainer must know this to train
+    def eval_model(self, model, win_step=1, device=None):
+        model_preds = dict()
+        print(f"Running {len(self.data_maps)} eval data map(s): {', '.join(map(str, self.data_maps.keys()))}")
+        for ptuple, data_map in self.data_maps.items():
+            ecog_torch_arr = torch.from_numpy(data_map['ecog'].values)
+            # TODO: seems like there should be a better way to do this
+            all_ecog_dl = torch.utils.data.DataLoader([ecog_torch_arr[_ix:_ix + self.ecog_window_size].T
+                                                       for _ix in
+                                                       range(0, ecog_torch_arr.shape[0] - self.ecog_window_size, win_step)],
+                                                      batch_size=1024, num_workers=6)
+            with torch.no_grad():
+                # TODO: cleaner way to handle device
+                if device is None:
+                    all_ecog_out = [model(x) for x in tqdm(all_ecog_dl)]
+                else:
+                    all_ecog_out = [model(x.to(device)) for x in tqdm(all_ecog_dl)]
+
+            # TODO: When we take a windows prediction - seems like it should represent
+            # the prediction at the end of that window...?
+            ix_range = range(self.ecog_window_size, ecog_torch_arr.shape[0], win_step)
+            #ix_range = range(0, ecog_torch_arr.shape[0] - self.ecog_window_size, win_step)
+            all_ecog_pred_s = pd.Series([_v.item() for v in all_ecog_out for _v in v],
+                                        index=data_map['ecog'].iloc[ix_range].index,
+                                        name='pred_proba')
+            model_preds[ptuple] = all_ecog_pred_s
+
+        return model_preds
 
 @attr.s
 class ChangNWW(NorthwesternWords):

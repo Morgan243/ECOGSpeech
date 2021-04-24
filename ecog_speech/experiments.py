@@ -52,14 +52,8 @@ def make_model(options, nww):
 def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv_data_kws=None, test_data_kws=None,
                               num_dl_workers=8):
     from torchvision import transforms
-    if dataset_cls:
-        pass
-    elif options.dataset == 'nww':
-        dataset_cls = datasets.NorthwesternWords
-    elif options.dataset == 'chang-nww':
-        dataset_cls = datasets.ChangNWW
-    else:
-        raise ValueError("Unknown dataset: %s" % options.dataset)
+    if dataset_cls is None:
+        dataset_cls = datasets.BaseDataset.get_dataset_by_name(options.dataset)
 
     train_p_tuples = dataset_cls.make_tuples_from_sets_str(options.train_sets)
     cv_p_tuples = dataset_cls.make_tuples_from_sets_str(options.cv_sets)
@@ -384,5 +378,5 @@ default_option_kwargs = [
 if __name__ == """__main__""":
     parser = utils.build_argparse(default_option_kwargs,
                                   description="ASPEN+MHRG Experiments v1")
-    options = parser.parse_args()
-    results = run(options)
+    m_options = parser.parse_args()
+    results = run(m_options)
