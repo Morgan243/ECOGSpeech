@@ -143,6 +143,12 @@ def run_one(options, result_file):
     result_id = result_filename.split('.')[0]
     # Load results to get the file name of the model
     results = json.load(open(result_file))
+    if options.eval_filter is not None:
+        should_continue = eval(options.eval_filter, dict(r=results))
+        if not should_continue:
+            print("Skipping result at %s because filter returned False" % result_file)
+            return None
+
 
     model_filename = os.path.split(results['save_model_path'])[-1]
     base_model_path = options.base_model_path
@@ -184,9 +190,19 @@ def run_one(options, result_file):
 
         dataset_cls = datasets.BaseDataset.get_dataset_by_name(results['dataset'])
         data_k_l = dataset_cls.make_tuples_from_sets_str(eval_set_str)
-        dset = dataset_cls(patient_tuples=data_k_l)
+        dset = dataset_cls(patient_tuples=data_k_l,
+                           # TODO: This may hide problems or cause issues?
+                           sensor_columns=list(range(model_kws['in_channels'])))
 
-        model = base.BaseMultiSincNN(**model_kws)
+        if results['model_name'] == 'base-sn':
+            model = base.BaseMultiSincNN(**model_kws)
+        elif results['model_name'] == 'tnorm-base-sn':
+            model = base.TimeNormBaseMultiSincNN(**model_kws)
+        elif results['model_name'] == 'base-cnn':
+            model = base.BaseCNN(**model_kws)
+        else:
+            raise ValueError(f"Unrecognized model_name: {results['model_name']} in {result_file})")
+
 
         with open(model_path, 'rb') as f:
             model_state = torch.load(f)
@@ -202,7 +218,9 @@ def run_one(options, result_file):
             ptuple_str = "-".join(str(v) for v in ptuple)
             fig, ax = plot_model_preds(preds_s=preds_map[ptuple], data_map=data_map,
                                        sample_index_map=dset.sample_index_maps[ptuple])
-            fig.savefig(os.path.join(base_output_path, "prediction_plot_for_%s.pdf" % ptuple_str))
+            fig_filename = os.path.join(base_output_path, "prediction_plot_for_%s.pdf" % ptuple_str)
+            print("Saving to " + str(fig_filename))
+            fig.savefig(fig_filename)
 
 
     # TODO: return something useful - dictionary of results? A class of results?j
@@ -221,7 +239,8 @@ def run(options):
     for r in tqdm(result_files):
         fname = os.path.split(r)[-1].split('.')[0]
         options.base_output_path = os.path.join(original_base_path, fname)
-        run_one(options, r)
+        res = run_one(options, r)
+
     #[run_one(options, r) for r in tqdm(result_files)]
 
 
@@ -234,6 +253,7 @@ default_option_kwargs = [
 
     dict(dest="--eval-win-step-size", default=1, type=int),
     dict(dest="--base-output-path", default=None, type=str),
+    dict(dest="--eval-filter", default=None, type=str),
     dict(dest='--device', default='cuda:0'),
 ]
 if __name__ == """__main__""":
