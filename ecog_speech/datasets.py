@@ -493,6 +493,7 @@ class NorthwesternWords(BaseDataset):
                 # Once validated that all sensor columns same length, set it as attribute
                 self.sensor_count = self.sensor_counts[0]
                 self.selected_columns = list(self.sensor_map.values())[0]
+                print(f"Selected {len(self.selected_columns)} sensors")
             else:
                 raise NotImplementedError("underlying datasets have different number of sensor columns")
                 print("Warning: sensor columns don't match - will try to use superset")
