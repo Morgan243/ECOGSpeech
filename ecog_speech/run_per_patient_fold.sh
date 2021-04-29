@@ -32,7 +32,13 @@ then
 
 fi
 
-RESULTS_DIR=./results_per_patient
+if [ -n "$RESULTS_DIR" ]; then
+  echo "RESULT DIR ALREADY SET: $RESULTS_DIR"
+else
+  echo "RESULT DIR NOT SET"
+  RESULTS_DIR=./results_per_patient
+fi
+
 MODEL_SAVE_DIR=${RESULTS_DIR}/models
 mkdir -p $RESULTS_DIR
 mkdir -p $MODEL_SAVE_DIR
