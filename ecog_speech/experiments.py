@@ -36,6 +36,17 @@ def make_model(options, nww):
                          cog_attn=options.cog_attn,
                          **base_kws)
         model = base.BaseMultiSincNN(**model_kws)
+    elif options.model_name == 'tnorm-base-sn':
+        model_kws = dict(in_channels=len(nww.selected_columns),
+                         n_bands=options.sn_n_bands,
+                         n_cnn_filters=options.n_cnn_filters,
+                         sn_padding=options.sn_padding,
+                         sn_kernel_size=options.sn_kernel_size,
+                         in_channel_dropout_rate=options.in_channel_dropout_rate,
+                         fs=nww.fs_signal,
+                         cog_attn=options.cog_attn,
+                         **base_kws)
+        model = base.TimeNormBaseMultiSincNN(**model_kws)
     elif options.model_name == 'base-cnn':
         model_kws = dict(in_channels=len(nww.selected_columns),
                          in_channel_dropout_rate=options.in_channel_dropout_rate,
@@ -350,7 +361,7 @@ default_option_kwargs = [
     dict(dest='--dense-width', default=None, type=int),
     dict(dest='--sn-n-bands', default=1, type=int),
     dict(dest='--sn-kernel-size', default=31, type=int),
-    dict(dest='--sn-padding', default=0, type=int),
+    dict(dest='--sn-padding', default=15, type=int),
     dict(dest='--n-cnn-filters', default=None, type=int),
     dict(dest='--dropout', default=0., type=float),
     dict(dest='--dropout-2d', default=False, action="store_true"),

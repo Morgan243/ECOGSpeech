@@ -46,6 +46,15 @@ class Unsqueeze(torch.nn.Module):
     def forward(self, x):
         return x.unsqueeze(self.dim)
 
+
+class Squeeze(torch.nn.Module):
+    def __init__(self):
+        super(Squeeze, self).__init__()
+
+    def forward(self, x):
+        return x.squeeze()
+
+
 class Reshape(torch.nn.Module):
     def __init__(self, shape):
         super(Reshape, self).__init__()
@@ -230,61 +239,35 @@ class BaseMultiSincNN(torch.nn.Module):
                  dense_width=None,
                  cog_attn=False,
                  in_channel_dropout_rate=0.,
+                 make_block_override=None,
+                 activation_cls=None,
                  #dense_depth=1
                  ):
 
         super().__init__()
         self.fs = fs
+        self.in_channels = in_channels
+        self.window_size = window_size
+        self.n_bands = n_bands
+        self.sn_kernel_size = sn_kernel_size
+        self.sn_padding = sn_padding
+        self.batch_norm = batch_norm
+        self.cog_attn = cog_attn
+        self.in_channel_dropout_rate = in_channel_dropout_rate
+        self.make_block_override = make_block_override
         self.dropout = dropout
-        self.activation_cls = torch.nn.SELU
+        self.activation_cls = torch.nn.SELU if activation_cls is None else activation_cls
         self.per_channel_filter = per_channel_filter
         #DrpOut = torch.nn.Dropout2d if dropout2d else torch.nn.Dropout
-        self.dropout_cls = torch.nn.Dropout2d if dropout2d else torch.nn.AlphaDropout
+        #self.dropout_cls = torch.nn.Dropout2d if dropout2d else torch.nn.AlphaDropout
+        self.dropout_cls = torch.nn.Dropout2d if dropout2d else torch.nn.Dropout
         self.n_cnn_filters = 32 if n_cnn_filters is None else n_cnn_filters
 
-        def make_block(in_ch, out_ch, k_s, s, d, g):
-            b = []
-            if dropout > 0:
-                b.append(self.dropout_cls(self.dropout))
-            b.append(torch.nn.Conv2d(in_ch, out_ch, kernel_size=k_s, stride=s,
-                                     dilation=d, groups=g))
-            if batch_norm:
-                b.append(torch.nn.BatchNorm2d(out_ch))
-            b.append(self.activation_cls())
-            return b
+        self.t_in = t_in = torch.rand(32, self.in_channels, self.window_size)
+        self.layer_list = self.make_cnn_layer_list()
 
-        t_in = torch.rand(32, in_channels, window_size)
-        layer_list = [Unsqueeze(2)]
+        self.m = torch.nn.Sequential(*self.layer_list)
 
-        if in_channel_dropout_rate > 0:
-            layer_list.append(torch.nn.Dropout2d(in_channel_dropout_rate))
-
-        layer_list.append(
-            MultiChannelSincNN(n_bands, in_channels,
-                               padding=sn_padding,
-                               kernel_size=sn_kernel_size, fs=fs,
-                               per_channel_filter=per_channel_filter),
-        )
-
-        if cog_attn:
-            tmp_model = torch.nn.Sequential(*layer_list)
-            t_out = tmp_model(t_in)
-            print("!!-Using attentions-!!")
-            layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), in_channels))
-
-
-        self.m = torch.nn.Sequential(
-
-            *layer_list,
-            *make_block(in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1),
-            *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1),
-            #*make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 5), s=(1, 3), d=(1, 1), g=1),
-            *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(n_bands, 1), s=(1, 1), d=1, g=1),
-            *make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1),
-            Flatten(),
-            self.dropout_cls(self.dropout)
-
-        )
         t_out = self.m(t_in)
         print(t_out.shape)
         self.dense_width = dense_width
@@ -300,6 +283,45 @@ class BaseMultiSincNN(torch.nn.Module):
         self.n_params = utils.number_of_model_params(self.m)
         utils.print_sequential_arch(self.m, t_in)
         print("N params: " + str(self.n_params))
+
+    def make_cnn_layer_list(self):
+        def make_block(in_ch, out_ch, k_s, s, d, g):
+            b = []
+            if self.dropout > 0:
+                b.append(self.dropout_cls(self.dropout))
+            b.append(torch.nn.Conv2d(in_ch, out_ch, kernel_size=k_s, stride=s,
+                                     dilation=d, groups=g))
+            if self.batch_norm:
+                b.append(torch.nn.BatchNorm2d(out_ch))
+            b.append(self.activation_cls())
+            return b
+        if self.make_block_override is not None:
+            make_block = self.make_block_override
+
+        layer_list = [Unsqueeze(2)]
+
+        if self.in_channel_dropout_rate > 0:
+            layer_list.append(torch.nn.Dropout2d(self.in_channel_dropout_rate))
+
+        layer_list.append(
+            MultiChannelSincNN(self.n_bands, self.in_channels,
+                               padding=self.sn_padding,
+                               kernel_size=self.sn_kernel_size, fs=self.fs,
+                               per_channel_filter=self.per_channel_filter),
+        )
+
+        if self.cog_attn:
+            tmp_model = torch.nn.Sequential(*layer_list)
+            t_out = tmp_model(self.t_in)
+            print("!!-Using attentions-!!")
+            layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
+
+        layer_list += make_block(self.in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1)
+        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1),
+        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1),
+        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1),
+        layer_list += [Flatten(), self.dropout_cls(self.dropout)]
+        return layer_list
 
     def forward(self, x):
         return self.m(x)
@@ -388,6 +410,71 @@ class BaseMultiSincNN(torch.nn.Module):
             bw_arr = bw_arr[0]
 
         return torch.norm(bw_arr) * w
+
+
+class MultiDim_BNorm1D(torch.nn.Module):
+    """Use to norm on the last dim across multiple indices in another dim - basically 1d norm on 2d data"""
+    def __init__(self, n_sensors, n_bands, norm_dim=1):
+        super(MultiDim_BNorm1D, self).__init__()
+        self.norm_dim = norm_dim
+        # One temporal normalization per n_norms (n bands)
+        self.bnorms = torch.nn.ModuleList([torch.nn.BatchNorm1d(n_bands) for n in range(n_sensors)])
+
+    def forward(self, x):
+        o = torch.cat([bn(x.select(self.norm_dim, i)).unsqueeze(self.norm_dim) for i, bn in enumerate(self.bnorms)],
+                      dim=self.norm_dim)
+        return o
+        # return x.squeeze()
+
+
+class TimeNormBaseMultiSincNN(BaseMultiSincNN):
+    def make_cnn_layer_list(self):
+        def make_block(in_ch, out_ch, k_s, s, d, g, dropout=self.dropout, batch_norm=self.batch_norm):
+            b = []
+            if dropout > 0:
+                b.append(self.dropout_cls(dropout))
+            b.append(torch.nn.Conv2d(in_ch, out_ch, kernel_size=k_s, stride=s,
+                                     dilation=d, groups=g))
+            if batch_norm:
+                # b.append(torch.nn.BatchNorm2d(out_ch))
+                # b.append(base.Unsqueeze(-2))
+                # b.append(base.Reshape(-1, 1, ))
+                b.append(MultiDim_BNorm1D(out_ch, self.n_bands))
+                # b.append(torch.nn.BatchNorm2d(out_ch))
+                # b.append(base.Squeeze())
+            b.append(self.activation_cls())
+            return b
+
+        if self.make_block_override is not None:
+            make_block = self.make_block_override
+
+        layer_list = [Unsqueeze(2)]
+
+        if self.in_channel_dropout_rate > 0:
+            layer_list.append(torch.nn.Dropout2d(self.in_channel_dropout_rate))
+
+        layer_list.append(
+            MultiChannelSincNN(self.n_bands, self.in_channels,
+                               padding=self.sn_padding,
+                               kernel_size=self.sn_kernel_size, fs=self.fs,
+                               per_channel_filter=self.per_channel_filter),
+        )
+
+        if self.cog_attn:
+            tmp_model = torch.nn.Sequential(*layer_list)
+            t_out = tmp_model(self.t_in)
+            print("!!-Using attentions-!!")
+            layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
+
+        layer_list += make_block(self.in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1)
+        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1)
+        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,
+                                 batch_norm=False)
+        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,
+                                 batch_norm=False)
+        layer_list += [Flatten(), self.dropout_cls(self.dropout)]
+        return layer_list
+
 
 @attr.attrs
 class Trainer:
