@@ -47,8 +47,8 @@ NUM_BANDS=(1 2 4 8)
 N_FILTERS=(16 32 64)
 
 N_EPOCHS=15
-MODEL_NAME='base-sn'
-DATASET='nww'
+#MODEL_NAME='base-sn'
+#DATASET='nww'
 
 for num_bands in "${NUM_BANDS[@]}"
 do
@@ -62,8 +62,6 @@ do
       # Last line includes any extra arguments after the set ID
       python experiments.py \
         --result-dir=$RESULTS_DIR \
-        --dataset=$DATASET \
-        --model-name=$MODEL_NAME \
         --n-epochs=$N_EPOCHS \
         --track-sinc-params \
         --sn-n-bands=$num_bands \
@@ -73,7 +71,9 @@ do
         --test-sets=${TEST_SETS[$i]} \
         "${@:2}"
 
+        #--dataset=$DATASET \
         #--batchnorm \
+        #--model-name=$MODEL_NAME \
         #--roll-channels \
         #--cv-sets=MC-24-0 \
         #--in-channel-dropout-rate=$IN_CHANNEL_DROPOUT \
