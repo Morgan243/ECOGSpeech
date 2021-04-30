@@ -256,7 +256,8 @@ class BaseMultiSincNN(torch.nn.Module):
         self.in_channel_dropout_rate = in_channel_dropout_rate
         self.make_block_override = make_block_override
         self.dropout = dropout
-        self.activation_cls = torch.nn.SELU if activation_cls is None else activation_cls
+        #self.activation_cls = torch.nn.SELU if activation_cls is None else activation_cls
+        self.activation_cls = torch.nn.PReLU if activation_cls is None else activation_cls
         self.per_channel_filter = per_channel_filter
         #DrpOut = torch.nn.Dropout2d if dropout2d else torch.nn.Dropout
         #self.dropout_cls = torch.nn.Dropout2d if dropout2d else torch.nn.AlphaDropout
