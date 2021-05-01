@@ -115,6 +115,8 @@ def make_hilbert_df(x):
     hilbert_df['signal'] = x
     return hilbert_df
 
+
+
 ###
 @attr.s
 class ProcessPipeline:

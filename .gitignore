@@ -1,3 +1,5 @@
 *.pdf
 *.ipynb
 *.csv
+*.hdf
+__pycache__/

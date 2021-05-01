@@ -146,8 +146,12 @@ def run_simple(options):
         reg_f = lambda m: model.bandwidth_regularizer(m, w=options.bw_reg_weight)
 
     batch_cb = None
-    if options.track_sinc_params:
+    sn_params_tracked = False
+    if options.track_sinc_params and 'sn' in options.model_name:
+        sn_params_tracked = True
         batch_cb = dict(band_params=model.get_band_params)
+    elif options.track_sinc_params:
+        print("--track-sinc-params was set, but not using an SN model - ignoring!")
 
     trainer = base.Trainer(dict(model=model), opt_map = dict(),
                            train_data_gen=dl_map['train'],
@@ -198,7 +202,8 @@ def run_simple(options):
         torch.save(model.cpu().state_dict(), p)
         res_dict['save_model_path'] = p
 
-    if options.track_sinc_params:
+    #if options.track_sinc_params:
+    if sn_params_tracked:
         lowhz_df_map, highhz_df_map, centerhz_df_map = base.BaseMultiSincNN.parse_band_parameter_training_hist(
             trainer.batch_cb_history['band_params'],
             fs=model.fs)
