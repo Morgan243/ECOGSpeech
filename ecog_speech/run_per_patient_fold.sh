@@ -29,54 +29,59 @@ elif [[ $SET_ID == 25 ]]
 then
   TRAIN_SETS=('MC-25-0' 'MC-25-1')
   TEST_SETS=('MC-25-1' 'MC-25-0')
-
 fi
 
 if [ -n "$RESULTS_DIR" ]; then
-  echo "RESULT DIR ALREADY SET: $RESULTS_DIR"
+  echo "RESULTS_DIR ALREADY SET: $RESULTS_DIR"
 else
-  echo "RESULT DIR NOT SET"
   RESULTS_DIR=./results_per_patient
+  echo "RESULTS_DIR SET TO DEFAULT: $RESULTS_DIR"
 fi
 
-MODEL_SAVE_DIR=${RESULTS_DIR}/models
+if [ -n "$N_EPOCHS" ]; then
+  echo "N_EPOCHS ALREADY SET: $N_EPOCHS"
+else
+  N_EPOCHS=15
+  echo "N_EPOCHS SET TO DEFAULT $N_EPOCHS"
+fi
+
+if [ -n "$MODEL_SAVE_DIR" ]; then
+  echo "MODEL_SAVE_DIR ALREADY SET: $MODEL_SAVE_DIR"
+else
+  MODEL_SAVE_DIR=${RESULTS_DIR}/models
+  echo "MODEL_SAVE_DIR SET TO DEFAULT: $MODEL_SAVE_DIR"
+fi
+
+
 mkdir -p $RESULTS_DIR
 mkdir -p $MODEL_SAVE_DIR
 
 NUM_BANDS=(1 2 4 8)
 N_FILTERS=(16 32 64)
 
-N_EPOCHS=15
-#MODEL_NAME='base-sn'
-#DATASET='nww'
 
-for num_bands in "${NUM_BANDS[@]}"
+for (( i=0; i<${#TRAIN_SETS[*]}; i++ ));
 do
-  for n_filters in "${N_FILTERS[@]}"
-  do
-    for (( i=0; i<${#TRAIN_SETS[*]}; i++ ));
-    do
-      echo "Train: ${TRAIN_SETS[$i]}"
-      echo "Test: ${TEST_SETS[$i]}"
+  echo "Train: ${TRAIN_SETS[$i]}"
+  echo "Test: ${TEST_SETS[$i]}"
 
-      # Last line includes any extra arguments after the set ID
-      python experiments.py \
-        --result-dir=$RESULTS_DIR \
-        --n-epochs=$N_EPOCHS \
-        --track-sinc-params \
-        --sn-n-bands=$num_bands \
-        --n-cnn-filters=$n_filters \
-        --save-model-path=$MODEL_SAVE_DIR \
-        --train-sets=${TRAIN_SETS[$i]} \
-        --test-sets=${TEST_SETS[$i]} \
-        "${@:2}"
+  # Last line includes any extra arguments after the set ID
+  python experiments.py \
+    --result-dir=$RESULTS_DIR \
+    --n-epochs=$N_EPOCHS \
+    --save-model-path=$MODEL_SAVE_DIR \
+    --train-sets=${TRAIN_SETS[$i]} \
+    --test-sets=${TEST_SETS[$i]} \
+    "${@:2}"
 
-        #--dataset=$DATASET \
-        #--batchnorm \
-        #--model-name=$MODEL_NAME \
-        #--roll-channels \
-        #--cv-sets=MC-24-0 \
-        #--in-channel-dropout-rate=$IN_CHANNEL_DROPOUT \
-    done
-  done
+    #--track-sinc-params \
+    #--sn-n-bands=$num_bands \
+    #--n-cnn-filters=$n_filters \
+
+    #--dataset=$DATASET \
+    #--batchnorm \
+    #--model-name=$MODEL_NAME \
+    #--roll-channels \
+    #--cv-sets=MC-24-0 \
+    #--in-channel-dropout-rate=$IN_CHANNEL_DROPOUT \
 done
