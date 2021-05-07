@@ -94,7 +94,7 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
         print("-->Rolling channels transform<--")
         train_nww.transform = transforms.Compose([
             datasets.RollDimension(roll_dim=0, min_roll=0,
-                                   max_roll=len(train_nww.default_sensor_columns) - 1)
+                                   max_roll=train_nww.sensor_count - 1)
         ])
     elif options.shuffle_channels:
         print("-->Shuffle channels transform<--")
