@@ -477,27 +477,40 @@ class NorthwesternWords(BaseDataset):
             # - Load the data, parsing into pandas data frame/series types
             # - Only minimal processing into Python objects done here
             data_iter = tqdm(self.patient_tuples, desc="Loading data")
-            self.data_maps = {l_p_s_t_tuple: self.load_data(*l_p_s_t_tuple,
+            mat_data_maps = {l_p_s_t_tuple: self.load_data(*l_p_s_t_tuple,
                                                             sensor_columns=self.sensor_columns,
+                                                            parse_mat_data=False,
                                                             verbose=self.verbose)
                               for l_p_s_t_tuple in data_iter}
+            good_and_bad_tuple_d = {l_p_s_t_tuple: self.identify_good_and_bad_sensors(mat_d, self.sensor_columns)
+                                        for l_p_s_t_tuple, mat_d in mat_data_maps.items()}
+            self.selected_columns = sorted(list({_gs for k, (gs, bs) in good_and_bad_tuple_d.items()
+                                                 for _gs in gs}))
+            self.sensor_count = len(self.selected_columns)
+            #data_iter = tqdm(self.patient_tuples, desc="parsing data")
+            self.data_maps = {l_p_s_t_tuple: self.parse_mat_arr_dict(mat_d, self.selected_columns)
+                              for l_p_s_t_tuple, mat_d in tqdm(mat_data_maps.items(), desc='Parsing data')}
             ###-----
 
             ## Sensor check ##
             # Get selected sensors from each dataset into map
-            self.sensor_map = {k: dmap['sensor_columns']
-                               for k, dmap in self.data_maps.items()}
+            #self.sensor_map = {k: dmap['sensor_columns']
+            #                   for k, dmap in self.data_maps.items()}
             # Make unique set and assert that they are all the same length
-            self.sensor_counts = list(set(map(len, self.sensor_map.values())))
-            if len(self.sensor_counts) == 1:
-                # Once validated that all sensor columns same length, set it as attribute
-                self.sensor_count = self.sensor_counts[0]
-                self.selected_columns = list(self.sensor_map.values())[0]
-                print(f"Selected {len(self.selected_columns)} sensors")
-            else:
-                raise NotImplementedError("underlying datasets have different number of sensor columns")
-                print("Warning: sensor columns don't match - will try to use superset")
-                unique_sensors = {c for k, cols in self.sensor_map.items() for c in cols}
+            #self.sensor_counts = list(set(map(len, self.sensor_map.values())))
+            #if len(self.sensor_counts) == 1:
+            #    # Once validated that all sensor columns same length, set it as attribute
+            #    self.sensor_count = self.sensor_counts[0]
+            #    self.selected_columns = list(self.sensor_map.values())[0]
+            #else:
+            #    #raise NotImplementedError("underlying datasets have different number of sensor columns")
+            #    print("Warning: sensor columns don't match - will try to use superset")
+            #    unique_sensors = sorted(list({c for k, cols in self.sensor_map.items() for c in cols}))
+            #    self.sensor_count = len(unique_sensors)
+            #    self.selected_columns = unique_sensors
+
+            assert self.sensor_count == len(self.selected_columns)
+            print(f"Selected {len(self.selected_columns)} sensors")
                 #for
             ###-----
 
@@ -589,6 +602,51 @@ class NorthwesternWords(BaseDataset):
             np_ecog_arr = ecog_transform(np_ecog_arr)
         kws['ecog_arr'] = torch.from_numpy(np_ecog_arr).float()  # / 10.
         return kws
+
+    @classmethod
+    def identify_good_and_bad_sensors(cls, mat_d, sensor_columns=None, ):
+        if 'electrodes' in mat_d:
+            chann_code_cols = ["code_%d" % e for e in range(mat_d['electrodes'].shape[-1])]
+            channel_df = pd.DataFrame(mat_d['electrodes'], columns=chann_code_cols)
+            print("Found electrodes metadata, N trodes = %d" % channel_df.shape[0] )
+
+            #required_sensor_columns = channel_df.index.tolist() if sensor_columns is None else sensor_columns
+            # Mask for good sensors
+            ch_m = (channel_df['code_0'] == 1)
+            all_valid_sensors = ch_m[ch_m].index.tolist()
+
+            # Spec the number of sensors that the ecog array mush have
+            if sensor_columns is None:
+                required_sensor_columns = channel_df.index.tolist()
+            elif sensor_columns == 'valid':
+                sensor_columns = all_valid_sensors
+                required_sensor_columns = sensor_columns
+            else:
+                required_sensor_columns = sensor_columns
+
+                #
+            good_sensor_columns = [c for c in all_valid_sensors if c in required_sensor_columns]
+            bad_sensor_columns = list(set(required_sensor_columns) - set(good_sensor_columns))
+
+                #if len(bad_sensor_columns) == 0:
+                #    print("No bad sensors")
+                #elif bad_sensor_method == 'zero' and len(bad_sensor_columns) > 0:
+                #    print("Zeroing %d bad sensor columns: %s" % (len(bad_sensor_columns), str(bad_sensor_columns)))
+                #    ecog_df.loc[:, bad_sensor_columns] = 0.
+                #elif bad_sensor_method == 'ignore':
+                #    print("Ignoring bad sensors")
+                #else:
+                #    raise ValueError("Unknown bad_sensor_method (use 'zero', 'ignore'): " + str(bad_sensor_method))
+        else:
+            good_sensor_columns = None
+            bad_sensor_columns = None
+
+        return good_sensor_columns, bad_sensor_columns
+            #channel_df = None
+            #sensor_columns = ecog_df.columns.tolist() if sensor_columns is None else sensor_columns
+            #print(f"No 'electrods' key in mat data - using all {len(sensor_columns)} columns")
+            #ch_m = ecog_df.columns.notnull()
+
 
     @staticmethod
     def get_targets(data_map, ix, label, target_transform=None):
