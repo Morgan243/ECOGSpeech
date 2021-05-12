@@ -1519,18 +1519,19 @@ class SincConv(nn.Module):
         #self.band_hz_ = self.band_hz_ - (high - self.max_hz)
         #self.band_hz_.clamp_max(self.max_hz - (self.min_band_hz/self.sample_rate))
 
-        try:
+        f_times_t = torch.matmul(low, self.n_)
+        #try:
             #print(low)
             #print(low.shape)
             #print(self.n_)
             #print(self.n_.shape)
-            f_times_t = torch.matmul(low, self.n_)
-        except RuntimeError:
-            print(low)
-            print(low.shape)
-            print(self.n_)
-            print(self.n_.shape)
-            raise
+        #    f_times_t = torch.matmul(low, self.n_)
+        #except RuntimeError:
+        #    print(low)
+        #    print(low.shape)
+        #    print(self.n_)
+        #    print(self.n_.shape)
+        #    raise
 
         low_pass1 = 2 * low * self.sinc(2 * math.pi * f_times_t * self.sample_rate)
 
