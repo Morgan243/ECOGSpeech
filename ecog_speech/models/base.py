@@ -134,7 +134,8 @@ class MultiChannelSincNN(torch.nn.Module):
         else:
             # Each channel uses the same filtering net
             self.sinc_nn = SincNN(**sinc_kwargs)
-            self.sinc_nn_list = [self.sinc_nn] * num_channels
+            # TODO: Are there issues making this a module list? Duplicate modules?
+            self.sinc_nn_list = torch.nn.ModuleList([self.sinc_nn] * num_channels)
 
         self.set_update(update)
 
