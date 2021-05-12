@@ -482,10 +482,13 @@ class NorthwesternWords(BaseDataset):
                                                             parse_mat_data=False,
                                                             verbose=self.verbose)
                               for l_p_s_t_tuple in data_iter}
-            good_and_bad_tuple_d = {l_p_s_t_tuple: self.identify_good_and_bad_sensors(mat_d, self.sensor_columns)
-                                        for l_p_s_t_tuple, mat_d in mat_data_maps.items()}
-            self.selected_columns = sorted(list({_gs for k, (gs, bs) in good_and_bad_tuple_d.items()
-                                                 for _gs in gs}))
+            if self.sensor_columns is None or isinstance(self.sensor_columns, str):
+                good_and_bad_tuple_d = {l_p_s_t_tuple: self.identify_good_and_bad_sensors(mat_d, self.sensor_columns)
+                                            for l_p_s_t_tuple, mat_d in mat_data_maps.items()}
+                self.selected_columns = sorted(list({_gs for k, (gs, bs) in good_and_bad_tuple_d.items()
+                                                     for _gs in gs}))
+            else:
+                self.selected_columns = self.sensor_columns
             self.sensor_count = len(self.selected_columns)
             #data_iter = tqdm(self.patient_tuples, desc="parsing data")
             self.data_maps = {l_p_s_t_tuple: self.parse_mat_arr_dict(mat_d, self.selected_columns)
