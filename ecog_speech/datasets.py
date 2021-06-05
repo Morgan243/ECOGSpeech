@@ -19,6 +19,7 @@ from ecog_speech import feature_processing
 path_map = dict()
 pkg_data_dir = os.path.join(os.path.split(os.path.abspath(__file__))[0], '../data')
 
+os.environ['WANDB_CONSOLE'] = 'off'
 
 ## TODO
 # - Datasets
@@ -349,7 +350,6 @@ class NorthwesternWords(BaseDataset):
                                                  ))
     data_subset = 'Data'# attr.ib('Data')
     mat_d_signal_key = 'ECOG_signal'
-    base_path = attr.ib(None)
     # TODO: named tuple
     patient_tuples = attr.ib((
                               ('Mayo Clinic', 19, 1, 1),
@@ -364,6 +364,7 @@ class NorthwesternWords(BaseDataset):
                               #('Mayo Clinic', 22, 1, 3),
                               #('Mayo Clinic', 22, 1, 4),
     ))
+    base_path = attr.ib(None)
 
     mc_patient_set_map = {
         19: [('Mayo Clinic', 19, 1, 1),
@@ -395,7 +396,7 @@ class NorthwesternWords(BaseDataset):
     default_sensor_columns = list(range(64))
     default_audio_sample_rate = 48000
     default_ecog_sample_rate = 1200
-    ecog_pass_band = attr.ib((70, 250))
+    #ecog_pass_band = attr.ib((70, 250))
 
     # In terms of audio samples
     # fixed_window_size = attr.ib(audio_sample_rate * 1)
@@ -478,43 +479,39 @@ class NorthwesternWords(BaseDataset):
             # - Only minimal processing into Python objects done here
             data_iter = tqdm(self.patient_tuples, desc="Loading data")
             mat_data_maps = {l_p_s_t_tuple: self.load_data(*l_p_s_t_tuple,
-                                                            sensor_columns=self.sensor_columns,
+                                                            #sensor_columns=self.sensor_columns,
+                                                           # IMPORTANT: Don't parse data yet
                                                             parse_mat_data=False,
                                                             verbose=self.verbose)
                               for l_p_s_t_tuple in data_iter}
+
+            ###
+            # Sensor selection logic - based on the patients loaded - which sensors do we use?
             if self.sensor_columns is None or isinstance(self.sensor_columns, str):
                 good_and_bad_tuple_d = {l_p_s_t_tuple: self.identify_good_and_bad_sensors(mat_d, self.sensor_columns)
                                             for l_p_s_t_tuple, mat_d in mat_data_maps.items()}
-                self.selected_columns = sorted(list({_gs for k, (gs, bs) in good_and_bad_tuple_d.items()
-                                                     for _gs in gs}))
+                self.sensor_columns = 'union' if self.sensor_columns is None else self.sensor_columns
+                # UNION: Select all good sensors from all inputs, zeros will be filled for those missing
+                if self.sensor_columns == 'union':
+                    self.selected_columns = sorted(list({_gs for k, (gs, bs) in good_and_bad_tuple_d.items()
+                                                         for _gs in gs}))
+                # INTERSECTION: Select only sensors that are rated good in all inputs
+                elif self.sensor_columns == 'intersection' or self.sensor_columns == 'valid':
+                    s = [set(gs) for k, (gs, bs) in good_and_bad_tuple_d.items()]
+                    self.selected_columns = sorted(list(s[0].intersection(*s[1:])))
+                else:
+                    raise ValueError("Unknown snsor columns argument: " + str(self.sensor_columns))
+                print("Selected columns with -%s- method: %s" % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
             else:
                 self.selected_columns = self.sensor_columns
             self.sensor_count = len(self.selected_columns)
-            #data_iter = tqdm(self.patient_tuples, desc="parsing data")
+
+            # Finish processing the data mapping loaded from the mat data files
             self.data_maps = {l_p_s_t_tuple: self.parse_mat_arr_dict(mat_d, self.selected_columns)
                               for l_p_s_t_tuple, mat_d in tqdm(mat_data_maps.items(), desc='Parsing data')}
             ###-----
-
-            ## Sensor check ##
-            # Get selected sensors from each dataset into map
-            #self.sensor_map = {k: dmap['sensor_columns']
-            #                   for k, dmap in self.data_maps.items()}
-            # Make unique set and assert that they are all the same length
-            #self.sensor_counts = list(set(map(len, self.sensor_map.values())))
-            #if len(self.sensor_counts) == 1:
-            #    # Once validated that all sensor columns same length, set it as attribute
-            #    self.sensor_count = self.sensor_counts[0]
-            #    self.selected_columns = list(self.sensor_map.values())[0]
-            #else:
-            #    #raise NotImplementedError("underlying datasets have different number of sensor columns")
-            #    print("Warning: sensor columns don't match - will try to use superset")
-            #    unique_sensors = sorted(list({c for k, cols in self.sensor_map.items() for c in cols}))
-            #    self.sensor_count = len(unique_sensors)
-            #    self.selected_columns = unique_sensors
-
             assert self.sensor_count == len(self.selected_columns)
             print(f"Selected {len(self.selected_columns)} sensors")
-                #for
             ###-----
 
             ## Important processing ##
@@ -593,11 +590,11 @@ class NorthwesternWords(BaseDataset):
         return self
 
     @staticmethod
-    def get_features(data_map, ix, label, ecog_transform=None):
+    def get_features(data_map, ix, label=None, ecog_transform=None, index_loc=False):
         ecog_df = data_map['ecog']
         kws = dict()
 
-        kws['ecog'] = ecog_df.loc[ix]
+        kws['ecog'] = ecog_df.loc[ix] if not index_loc else ecog_df.iloc[ix]
         # Transpose to keep time as last index for torch
         np_ecog_arr = kws['ecog'].values.T
         if ecog_transform is not None:
@@ -627,29 +624,27 @@ class NorthwesternWords(BaseDataset):
             else:
                 required_sensor_columns = sensor_columns
 
-                #
+            #
             good_sensor_columns = [c for c in all_valid_sensors if c in required_sensor_columns]
             bad_sensor_columns = list(set(required_sensor_columns) - set(good_sensor_columns))
-
-                #if len(bad_sensor_columns) == 0:
-                #    print("No bad sensors")
-                #elif bad_sensor_method == 'zero' and len(bad_sensor_columns) > 0:
-                #    print("Zeroing %d bad sensor columns: %s" % (len(bad_sensor_columns), str(bad_sensor_columns)))
-                #    ecog_df.loc[:, bad_sensor_columns] = 0.
-                #elif bad_sensor_method == 'ignore':
-                #    print("Ignoring bad sensors")
-                #else:
-                #    raise ValueError("Unknown bad_sensor_method (use 'zero', 'ignore'): " + str(bad_sensor_method))
         else:
             good_sensor_columns = None
             bad_sensor_columns = None
 
         return good_sensor_columns, bad_sensor_columns
-            #channel_df = None
-            #sensor_columns = ecog_df.columns.tolist() if sensor_columns is None else sensor_columns
-            #print(f"No 'electrods' key in mat data - using all {len(sensor_columns)} columns")
-            #ch_m = ecog_df.columns.notnull()
 
+    def get_indices(self, key='ecog', only_longest=False):
+        ix_map = {ptuple: dmap[key].index
+                  for ptuple, dmap in self.data_maps.items()}
+
+        if only_longest:
+            ptuple = longest = longest_k = None
+            for ptuple, ix in ix_map.items():
+                if longest is None or len(ix) > len(longest):
+                    longest, longest_k = ix, ptuple
+            return ptuple, longest
+        else:
+            return ix_map
 
     @staticmethod
     def get_targets(data_map, ix, label, target_transform=None):
@@ -861,6 +856,7 @@ class NorthwesternWords(BaseDataset):
         #####
         # Channels/sensors status
         # TODO: What are appropriate names for these indicators
+        bad_sensor_columns = None
         if 'electrodes' in mat_d:
             chann_code_cols = ["code_%d" % e for e in range(mat_d['electrodes'].shape[-1])]
             channel_df = pd.DataFrame(mat_d['electrodes'], columns=chann_code_cols)
@@ -926,6 +922,7 @@ class NorthwesternWords(BaseDataset):
                      stim=stim_s,
                      stim_diff=stim_diff_s,
                      sensor_columns=sensor_columns,
+            bad_sensor_columns=bad_sensor_columns,
                      #stim_diff=stim_diff_s,
                      #stim_auto=stim_auto_s,
                      #stim_auto_diff=stim_auto_diff_s,
@@ -1050,36 +1047,34 @@ class NorthwesternWords(BaseDataset):
         p_list = pmap[pid]
         return [p_list[ix]]
 
-    # TODO: This may be better placed with the Trainer class, as that's where most
-    #       of the model+dataset coupling happens. In other words, the dataset shouldn't
-    #       have to know how a model is going to use it, but the trainer must know this to train
-    def eval_model(self, model, win_step=1, device=None):
-        model_preds = dict()
-        print(f"Running {len(self.data_maps)} eval data map(s): {', '.join(map(str, self.data_maps.keys()))}")
-        for ptuple, data_map in self.data_maps.items():
+    def to_eval_replay_dataloader(self, patient_k=None, win_step=1, batch_size=1024, num_workers=4,
+                                  ecog_transform=None, target_transform=None):
+        if patient_k is None:
+            patient_k = list(self.data_maps.keys())
+        elif not isinstance(patient_k, list):
+            patient_k = [patient_k]
+
+        dl_map = dict()
+        for k in patient_k:
+            data_map = self.data_maps[k]
             ecog_torch_arr = torch.from_numpy(data_map['ecog'].values).float()
-            # TODO: seems like there should be a better way to do this
-            all_ecog_dl = torch.utils.data.DataLoader([ecog_torch_arr[_ix:_ix + self.ecog_window_size].T
-                                                       for _ix in
-                                                       range(0, ecog_torch_arr.shape[0] - self.ecog_window_size, win_step)],
-                                                      batch_size=1024, num_workers=6)
-            with torch.no_grad():
-                # TODO: cleaner way to handle device
-                if device is None:
-                    all_ecog_out = [model(x) for x in tqdm(all_ecog_dl)]
-                else:
-                    all_ecog_out = [model(x.to(device)) for x in tqdm(all_ecog_dl)]
+            outputs = list()
+            for _iix in range(0, ecog_torch_arr.shape[0] - self.ecog_window_size, win_step):
+                _ix = slice(_iix, _iix + self.ecog_window_size)
+                feats = self.get_features(data_map, _ix, ecog_transform=ecog_transform, index_loc=True)
+                # TODO: Just grabbing the max stim wode in the range - better or more useful way to do this?
+                targets = self.get_targets(data_map, None, label=data_map['stim'].iloc[_ix].max())
+                so = dict(**feats, **targets)
+                so = {k: v for k, v in so.items()
+                        if isinstance(v, torch.Tensor)}
+                outputs.append(so)
+            t_dl = torch.utils.data.DataLoader(outputs, batch_size=batch_size, num_workers=num_workers)
+            dl_map[k] = t_dl
 
-            # TODO: When we take a windows prediction - seems like it should represent
-            # the prediction at the end of that window...?
-            ix_range = range(self.ecog_window_size, ecog_torch_arr.shape[0], win_step)
-            #ix_range = range(0, ecog_torch_arr.shape[0] - self.ecog_window_size, win_step)
-            all_ecog_pred_s = pd.Series([_v.item() for v in all_ecog_out for _v in v],
-                                        index=data_map['ecog'].iloc[ix_range].index,
-                                        name='pred_proba')
-            model_preds[ptuple] = all_ecog_pred_s
-
-        return model_preds
+        ret = dl_map
+        #if len(ret) == 1:
+        #    ret = list(dl_map.values())[0]
+        return ret
 
 @attr.s
 class ChangNWW(NorthwesternWords):
