@@ -489,6 +489,8 @@ class Trainer:
     beta1 = attr.ib(0.5)
 
     criterion = attr.ib(torch.nn.BCELoss())
+    extra_criteria = attr.ib(None) # regularizers here
+
     cv_data_gen = attr.ib(None)
     epochs_trained = attr.ib(0)
     device = attr.ib(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
@@ -550,21 +552,14 @@ class Trainer:
         epoch_callbacks = dict() if epoch_callbacks is None else epoch_callbacks
         batch_callbacks = dict() if batch_callbacks is None else batch_callbacks
 
-        #self.epoch_losses = list()
-        #:w
-        # :w
-        # self.train_batch_results = list()
-        #self.batch_results = getattr(self, 'epoch_results', dict(epoch=list(), batch=list()))
-        #self.epoch_results = getattr(self, 'epoch_results', dict(epoch=list()))
         self.epoch_batch_res_map = dict()
         self.epoch_res_map = dict()
 
         self.epoch_cb_history += [{k: cb(self) for k, cb in epoch_callbacks.items()}]
-        #self.batch_cb_history += [{k: cb(self) for k, cb in batch_callbacks.items()}]
         self.batch_cb_history = {k: list() for k in batch_callbacks.keys()}
 
         self.n_samples = len(self.train_data_gen)
-        train_loss_key = 'loss'
+        #train_loss_key = 'loss'
 
         with tqdm(total=n_epochs,
                   desc='Training epoch',
@@ -577,57 +572,64 @@ class Trainer:
                     for i, data in enumerate(self.train_data_gen):
                         update_d = self.train_inner_step(epoch, data)
 
-                        #self.batch_results['epoch'].append(epoch)
-                        #self.batch_results['batch'].append(i)
-
                         prog_msgs = list()
                         for k, v in update_d.items():
-                            # TODO: What about spruious results? Maybe do list of dicts instead?
-                            #if k not in self.batch_results:
+                            # TODO: What about spruious results - can't quite infer epoch?
+                            #  Maybe do list of dicts instead?
+                            # if this result key hasn't been seen, init a list of values
                             if k not in epoch_batch_results:
-                                #self.batch_results[k] = [v]
                                 epoch_batch_results[k] = [v]
+                            # eLse, just append the new value
                             else:
-                                #self.batch_results[k].append(v)
                                 epoch_batch_results[k].append(v)
-
-
+                            # Expecting numerics due to this code - take mean of the metric/loss
                             v_l = np.mean(epoch_batch_results[k])
-                            prog_msgs.append(f"{k}: {np.round(v_l, 4)}")
-
+                            # build up the prog bar description string
+                            prog_msgs.append(f"{k}: {np.round(v_l, 6)}")
 
                         msg = " || ".join(prog_msgs)
-                        # Save Losses for plotting later
-                        #G_losses.append(errG.item())
-                        #D_losses.append(errD.item())
-                        #batch_pbar.set_description("Gen-L: %.3f || Disc-L:%.3f" % (np.mean(G_losses[-20:]),
-                        #                                                           np.mean(D_losses[-20:])))
                         batch_pbar.set_description(msg)
                         batch_pbar.update(1)
-                        for k, cb in batch_callbacks.items():
-                            self.batch_cb_history[k].append(cb(self))
+                        if batch_cb_delta is None or (not i % batch_cb_delta):
+                            for k, cb in batch_callbacks.items():
+                                self.batch_cb_history[k].append(cb(self))
 
-                        #if not i % batch_cb_delta:
-                        #    self.batch_cb_history.append({k: cb(self) for k, cb in batch_callbacks.items()})
-
-                #self.epoch_losses.append(dict(gen_losses=G_losses, disc_losses=D_losses))
-                #self.epoch_losses.append(epoch_results)
-                #self.train_batch_results.append(epoch_results)
                 self.epoch_batch_res_map[epoch] = epoch_batch_results
                 self.epoch_res_map[epoch] = {k: np.mean(v) for k, v in epoch_batch_results.items()}
 
                 self.epochs_trained += 1
                 self.epoch_cb_history.append({k: cb(self) for k, cb in epoch_callbacks.items()})
+                # Produce eval results if a cv dataloader was given
                 if self.cv_data_gen:
-                    cv_losses = self.eval(epoch, self.cv_data_gen)
+                    cv_losses = self._eval(epoch, self.cv_data_gen)
                     self.epoch_res_map[epoch]['cv_loss'] = np.mean(cv_losses)
+                    #cv_o_map, new_best = self._eval(epoch, self.cv_data_gen)
+                    #self.epoch_res_map[epoch]['cv_loss'] = np.mean(cv_o_map['loss'])
+                    #if new_best:
+                    #    print(f"[[ NEW BEST: {self.best_cv} ]]")
 
                 epoch_pbar.update(1)
-        #return self.train_batch_results
         return self.epoch_res_map
 
-    def eval(self, epoch_i, dataloader):
-        model = self.model_map['model'].eval()
+    # Reuses trainer.generate_outputs(), but not being used
+    def _eval_v2(self, epoch_i, dataloader, model_key='model'):
+        output_map = self.generate_outputs(model_key, CV=dataloader)['CV']
+        mean_loss = np.mean(output_map['loss'])
+        self.best_cv = getattr(self, 'best_cv', np.inf)
+        new_best = mean_loss < self.best_cv
+        if new_best:
+            self.best_model_state = copy_model_state(self.model_map[model_key])
+            self.best_model_epoch = epoch_i
+            self.best_cv = mean_loss
+
+        return output_map, new_best
+
+    def _eval(self, epoch_i, dataloader, model_key='model'):
+        """
+        trainer's internal method for evaluating losses,
+        snapshotting best models and printing results to screen
+        """
+        model = self.model_map[model_key].eval()
         self.best_cv = getattr(self, 'best_cv', np.inf)
 
         preds_l, actuals_l, loss_l = list(), list(), list()
@@ -635,21 +637,28 @@ class Trainer:
             with tqdm(total=len(dataloader), desc="Eval") as pbar:
                 for i, _x in enumerate(dataloader):
                     preds = model(_x['ecog_arr'].to(self.device))
-                    loss_l.append(self.criterion(preds, _x['text_arr']
-                                                 .to(self.device))
-                                  .detach().cpu().item())
+                    actuals = _x['text_arr'].to(self.device)
+                    loss = self.criterion(preds, actuals)
+
+                    loss_l.append(loss.detach().cpu().item())
 
                     pbar.update(1)
 
                 mean_loss = np.mean(loss_l)
-                pbar.set_description("Mean Eval Loss: %.5f" % mean_loss)
-
-                if mean_loss < self.best_cv:
+                desc = "Mean Eval Loss: %.5f" % mean_loss
+                if self.model_regularizer is not None:
+                    reg_l = self.model_regularizer(model)
+                    desc += (" (+ %.6f reg loss = %.6f)" % (reg_l, mean_loss + reg_l))
+                else:
+                    reg_l = 0.
+                overall_loss = (mean_loss + reg_l)
+                if overall_loss < self.best_cv:
                     self.best_model_state = copy_model_state(model)
                     self.best_model_epoch = epoch_i
-                    desc = "CV Loss: %.4f [[NEW BEST]]" % mean_loss
-                    pbar.set_description(desc)
-                    self.best_cv = mean_loss
+                    self.best_cv = overall_loss
+                    desc += "[[NEW BEST]]"
+
+                pbar.set_description(desc)
 
         self.model_map['model'].train()
         return loss_l
@@ -658,8 +667,10 @@ class Trainer:
         #            actuals=torch.cat(actuals_l).detach().cpu().int().numpy())
 
     def train_inner_step(self, epoch_i, data_batch):
-        #real_label = 1
-        #fake_label = 0
+        """
+        Core training method - gradient descent - provided the epoch number and a batch of data and
+        must return a dictionary of losses.
+        """
         res_d = dict()
 
         model = self.model_map['model']
@@ -690,36 +701,54 @@ class Trainer:
         model = model.eval()
         return res_d
 
-    @classmethod
-    def eval_model_on_dataloader(cls, model, dl, device):
-        model_in_training = model.training
-        preds_l, actuals_l = list(), list()
-        with torch.no_grad():
-            model.eval()
-            for _x in tqdm(dl, desc="Eval on %s" % dl.__class__.__name__):
-                preds_l.append(model(_x['ecog_arr'].to(device)))
-                actuals_l.append(_x['text_arr'])
-
-        # Leave the model state in whatever it came in as
-        if model_in_training:
-            model.train()
-
-    # TODO: This requires and instance of the trainer, which is unecessary for evaluation
-    #       Consider separating this into a more simple static/class method that accepts
-    #       a model and dataloader (or dataset? dataloader adds batching and other aspects...)
-    # - First pass at this in eval_model_on_dataloader
     def generate_outputs(self, model_key='model', **dl_map):
-        #self.model.eval()
+        """
+        Evaluate a model the trainer has on a dictionary of dataloaders.
+        """
         model = self.model_map[model_key].eval()
+        return self.generate_outputs_from_model(model, dl_map, criterion=self.criterion, device=self.device)
+
+    @classmethod
+    def generate_outputs_from_model(cls, model, dl_map, criterion=None, device=None) -> dict:
+        """
+        Produce predictions and targets for a mapping of dataloaders. B/c the trainer
+        must know how to pair predictions and targets to train, this is implemented here.
+        If model is in training mode, model is returned in training mode
+
+        model: torch model
+        dl_map: dictionary of dataloaders to eval on
+
+        returns:
+        output_map[dl_map_key][{"preds", "actuals"}]
+        """
+        model_in_training = model.training
+        if device:
+            model.to(device)
+
+        model.eval()
         output_map = dict()
         with torch.no_grad():
             for dname, dset in dl_map.items():
-                preds_l, actuals_l = list(), list()
-                for _x in tqdm(dset, desc="Eval on %s" % dname):
-                    preds_l.append(model(_x['ecog_arr'].to(self.device)))
+                preds_l, actuals_l, criterion_l = list(), list(), list()
+                for _x in tqdm(dset, desc="Eval on [%s]" % str(dname)):
+                    _x_in = _x['ecog_arr']
+                    _y = _x['text_arr']
+                    if device:
+                        _x_in = _x_in.to(device)
+                        _y = _y.to(device)
+
+                    preds_l.append(model(_x_in))
                     actuals_l.append(_x['text_arr'])
+                    if criterion is not None:
+                        criterion_l.append(criterion(preds_l[-1], _y))
 
                 output_map[dname] = dict(preds=torch.cat(preds_l).detach().cpu().numpy(),
                                          actuals=torch.cat(actuals_l).detach().cpu().int().numpy())
-        return output_map
+                                         #loss=torch.cat(criterion_l).detach().cpu().numpy())
+                if criterion is not None:
+                    output_map[dname]['loss'] = torch.Tensor(criterion_l).detach().cpu().numpy()
 
+        if model_in_training:
+            model.train()
+
+        return output_map
