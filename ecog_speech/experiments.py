@@ -183,6 +183,7 @@ def run_simple(options):
                     datetime=str(datetime.now()), uid=uid,
                     #batch_losses=list(losses),
                     batch_losses=losses,
+                    train_selected_columns=dataset_map['train'].selected_columns,
                     best_model_epoch=trainer.best_model_epoch,
                     num_trainable_params=utils.number_of_model_params(model),
                     num_params=utils.number_of_model_params(model, trainable_only=False),
