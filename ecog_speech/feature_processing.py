@@ -166,7 +166,7 @@ class ProcessStep:
 
     def __call__(self, x):
         if self.input_remap is not None:
-            for k, v in  self.input_remap.items():
+            for k, v in self.input_remap.items():
                 x[k] = x[v]
 
         if self.input_override is not None:
@@ -484,7 +484,8 @@ class MFCC(ProcessStep):
 
 @attr.s
 class ChangSampleIndicesFromStim(ProcessStep):
-    expects = ['start_times_d', 'fs_signal']
+    #expects = ['start_times_d', 'fs_signal']
+    expects = ['stim_diff', 'fs_signal']
     outputs = ['sample_index_map']
 
     # All at 200Hz
