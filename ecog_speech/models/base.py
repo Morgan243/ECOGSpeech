@@ -686,18 +686,19 @@ class Trainer:
         actuals = data_batch['text_arr'].to(self.device)
         m_output = model(ecog_arr)
 
-        loss = self.criterion(m_output, actuals)
+        crit_loss = self.criterion(m_output, actuals)
+        res_d['crit_loss'] = crit_loss.detach().cpu().item()
 
         if self.model_regularizer is not None:
             reg_l = self.model_regularizer(model)
-            loss += reg_l
             res_d['bwreg'] = reg_l.detach().cpu().item()
+        else:
+            reg_l = 0
 
-        # print("backward")
+        loss = crit_loss + reg_l
+        res_d['total_loss'] = loss.detach().cpu().item()
         loss.backward()
         optim.step()
-        l = loss.detach().cpu().item()
-        res_d['loss'] = l
         model = model.eval()
         return res_d
 
