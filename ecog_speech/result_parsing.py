@@ -29,11 +29,21 @@ def make_outputs(sn_model, in_batch_arr):
     return sn_out, out
 
 
-def wrangle_data_from_word_idx(data_map, wrd_ix, model=None):
+def swap_tdelta_to_total_seconds_index(df):
+    return (df.rename_axis(index='tdelta').reset_index()
+            .pipe(lambda _df: _df.assign(Seconds=_df['tdelta'].dt.total_seconds())).set_index('Seconds').drop('tdelta', axis=1))
+
+
+def wrangle_and_plot_pred_inspect(model, nww: datasets.NorthwesternWords, wrd_ix: int,
+                                  sens_to_plt=None, patient_tuple=None):
+    import seaborn as sns
+
     #test_nww_word_id = {mname: wrd_ix for mname, _nww in test_nww_map.items()}
     # test_nww_sample_ix_maps, test_pos_wrd_ix_l_map, test_neg_wrd_ix_l_map = map_model_words(test_nww_map, test_nww_word_id)
     # samp_ix_map = t_nww.sample_index_maps[next(iter(_t_nww.sample_index_maps.keys()))]
-    samp_ix_map = next(iter(t_nww.sample_index_maps.values()))
+    patient_tuple = next(iter(nww.data_maps.keys())) if patient_tuple is None else patient_tuple
+    data_map = nww.data_maps[patient_tuple]
+    samp_ix_map = next(iter(nww.sample_index_maps.values()))
     pos_win_ixes, neg_win_ixes = samp_ix_map[wrd_ix], samp_ix_map[-wrd_ix]
 
     ###----
@@ -79,6 +89,132 @@ def wrangle_data_from_word_idx(data_map, wrd_ix, model=None):
                                    for s_i, band_hil_df in sens_band_hilb_df_map.items()]).set_index(['sensor', 'ts'])
     contig_hilbert_df.columns.rename('envelope', inplace=True)
 
+    ##-----
+    n_largest_target_corr_df = contig_hilbert_df.apply(
+        lambda s: s.unstack().T.join(model_pred_s).corr()[model_pred_s.name].drop([model_pred_s.name]).abs().nlargest())
+
+    if sens_to_plt is None:
+        sens_to_plt = n_largest_target_corr_df.notnull().sum(1).nlargest().index.tolist()
+
+    # n_largest_target_corr_df
+    ##------
+    fs = 600
+    fft_freq = np.fft.rfftfreq(300, 1.0 / fs)
+    ##-----
+    plt_sens_fft_arr = torch.fft.rfft(sn_out).abs()[:, sens_to_plt, :, :]
+    # plt_sens_fft_arr = torch.fft.rfft(t_ecog_arr).abs()[:, sens_to_plt, :]
+    plt_avg_fft_arr = plt_sens_fft_arr.mean(1)  # .squeeze()
+
+    # plt_avg_fft_df = pd.DataFrame(plt_avg_fft_arr.detach().numpy(), index=t_ix, columns=fft_freq)
+    ##-----
+
+    plt_audio_s = swap_tdelta_to_total_seconds_index(audio_win_s)
+
+    plt_out_s = swap_tdelta_to_total_seconds_index(model_pred_s)[model_pred_s.name]
+
+    plt_stim_s = swap_tdelta_to_total_seconds_index(stim_win_s)[stim_win_s.name]
+
+    ##--------------
+    sub_bands = len(contig_hilbert_df.columns)
+    nrows = 1 + sub_bands * 2
+    plt_ratio = 1. / sub_bands
+    print("Nrows " + str(nrows))
+    fig, axs = matplotlib.pyplot.subplots(nrows=nrows, figsize=(18, 3.1 * (4)),
+                                          # sharex='col',
+                                          constrained_layout=True,
+                                          gridspec_kw={'height_ratios': ([plt_ratio] * sub_bands * 2) + [1.3]},
+                                          squeeze=False)
+    # cbar_ax = fig.add_axes([1, .76, .01, .2])
+    axs = axs.reshape(-1)
+    max_y = 1.2
+    ###---
+    ax_i = 0
+    for i, c in enumerate(contig_hilbert_df.columns.tolist()):
+        ax = sns.heatmap(contig_hilbert_df.loc[sens_to_plt][[c]].unstack(0).rolling(15).mean().T, annot=False,
+                         robust=True, cbar=True,
+                         cmap='inferno',
+                         # cmap='cividis',
+                         # cmap='jet',
+                         ax=axs[ax_i],  # cbar_ax=cbar_ax
+                         )
+        ax.set_xticks([])
+        ax.set_xlabel('')
+        # if i==0:
+        if contig_hilbert_df.shape[1] == 1 or contig_hilbert_df.shape[1] // 2 == i:
+            ax.set_ylabel('Band-Sensor', fontsize=10)
+        else:
+            ax.set_ylabel('')
+        ax.tick_params(axis='y', rotation=0)
+        ax.tick_params(labelsize=11)
+
+        #
+        ax_i += 1
+
+    low_hz = np.abs(model.get_band_params()[0]['low_hz'] * 600)[:, 0]  # .squeeze()
+    band_hz = np.abs(model.get_band_params()[0]['band_hz'] * 600)[:, 0]  # .squeeze()
+    print("Low hz shape: " + str(model.get_band_params()[0]['low_hz'].shape))
+    for i in range(plt_avg_fft_arr.shape[1]):
+        plt_avg_fft_df = pd.DataFrame(plt_avg_fft_arr.select(1, i).detach().numpy(), index=t_ix, columns=fft_freq)
+        hz_slice = slice(np.floor(low_hz[i]), np.ceil(low_hz[i] + max(band_hz[i], 3)))
+        print(hz_slice)
+        ax = sns.heatmap(plt_avg_fft_df.rolling(15).mean().T.loc[hz_slice].sort_index(ascending=False), annot=False,
+                         robust=True, cbar=True,
+                         cmap='viridis',
+                         # cmap='cividis',
+                         # cmap='jet',
+                         ax=axs[ax_i],  # cbar_ax=fig.add_axes([1, .52, .01, .2])
+                         )
+        ax.set_xticks([])
+        ax.set_xlabel('')
+        if plt_avg_fft_arr.shape[1] == 1 or plt_avg_fft_arr.shape[1] // 2 == i:
+            ax.set_ylabel('Spectra (Hz)', fontsize=10)
+        ax.tick_params(axis='y', rotation=0)
+        ax.tick_params(labelsize=11)
+
+        ax_i += 1
+
+    ## Model prediction with error fill
+    model_mean = plt_out_s.rolling(15).mean()
+    model_std = plt_out_s.rolling(15).std()
+
+    ax = model_mean.plot(ax=axs[ax_i], color='tab:blue', alpha=1, lw=3.5, label='Model E(P(Speaking))')
+    ax.fill_between(plt_out_s.index, model_mean + model_std, model_mean - model_std, alpha=0.2, color='tab:blue')
+
+    ## Mark where stimulus cue was
+    ax.vlines(plt_stim_s[plt_stim_s == wrd_ix].index.min(), 0, max_y, color='tab:purple', lw=5, label='Stimulus Onset',
+              ls='-.')
+
+    ## Aggregat audio a bit - so many samples makes the plot complex/time consuming
+    ax2 = ax.twinx()
+    ax2 = plt_audio_s.rolling(10).mean().plot(ax=ax2, color='grey', alpha=0.5, label='Speech Waveform', legend=False)
+    ax2.set_yticks([])  # don't care about audio value?
+
+    ## Speaking Region
+    ax.fill_betweenx([0, max_y], pos_start.total_seconds(), pos_end.total_seconds(),
+                     color='tab:green', alpha=0.3, label='Labeled Speaking Region')
+
+    # ax.vlines(pos_start.total_seconds(), 0, 1, color='tab:green', lw=5, ls='-', label='Start of First Speaking Window')
+    ax.vlines(pos_win_ixes[0].max().total_seconds(), 0, max_y, color='tab:green', lw=5, ls='--',
+              label='End of First Speaking Window')
+
+    ax.fill_betweenx([0, max_y], neg_start.total_seconds(), neg_end.total_seconds(),
+                     color='tab:orange', alpha=0.3, label='Labeled Non-Speaking Region')
+
+    ax.vlines(neg_win_ixes[0].max().total_seconds(), 0, max_y, color='tab:orange', lw=5, ls='--',
+              label='End of First Non-Speaking Window')
+
+    ax.set_ylim(0, 1.2)
+    ax.set_yticks([0, .25, .5, .75, 1])
+
+    ax.set_xlim(plt_out_s.index.min(), plt_out_s.index.max())
+    ax.set_ylabel('P(Speaking)', fontsize=15)
+    ax.set_xlabel("Trial Time (seconds from start)", fontsize=15)
+    ax.tick_params(labelsize=13)
+    ax.grid(True, which='both', alpha=0.25, lw=3)
+
+    fig.legend(ncol=4, loc=(0.125, 0.35), framealpha=1, fontsize=13, handlelength=4)
+    fig.suptitle("Word code " + str(wrd_ix) + ' - "' + data_map['word_code_d'][wrd_ix] + '"')
+    return fig, axs
 
 def plot_model_preds(preds_s, data_map, sample_index_map):
     plt_stim_s = data_map['stim']
@@ -379,12 +515,28 @@ def run_one(options, result_file):
         for ptuple, data_map in dset.data_maps.items():
             print("Plotting " + str(ptuple))
             ptuple_str = "-".join(str(v) for v in ptuple)
-            fig, ax = plot_model_preds(preds_s=preds_map[ptuple], data_map=data_map,
-                                       sample_index_map=dset.sample_index_maps[ptuple])
-            fig_filename = os.path.join(base_output_path, "prediction_plot_for_%s.pdf" % ptuple_str)
+            if options.pred_inspect_eval:
+                all_wrds_codes = [k for k in next(iter(dset.sample_index_maps.values())).keys() if k > 0]
+                from matplotlib.backends.backend_pdf import PdfPages
+                pp = PdfPages('stim_code_preds_MC24_4band_0602.pdf')
+                fig, ax_map = plot_model_overview(results)
+                fig.savefig(pp, format='pdf')
+                for t_wrd in tqdm(all_wrds_codes):
+                    #fig, axs = wran(t_model, t_dmap, wrd_ix=t_wrd)
+                    fig, axs = wrangle_and_plot_pred_inspect(model, dset, t_wrd, patient_tuple=ptuple)
+                    fig.savefig(pp, format='pdf')
+                    ## TODO: Close figure here?
+                    matplotlib.pyplot.close(fig)
+                pp.close()
+                fig_name = "prediction_inspect_plot_for_%s.pdf" % ptuple_str
+            else:
+                fig, ax = plot_model_preds(preds_s=preds_map[ptuple], data_map=data_map,
+                                           sample_index_map=dset.sample_index_maps[ptuple])
+                fig_name = "prediction_plot_for_%s.pdf" % ptuple_str
+            fig_filename = os.path.join(base_output_path, fig_name)
             print("Saving to " + str(fig_filename))
             fig.savefig(fig_filename)
-            output_fig_map["prediction_plot_for_%s.pdf" % ptuple_str] = fig
+            output_fig_map[fig_name] = fig
 
     # TODO: return something useful - dictionary of results? A class of results?j
     return results, output_fig_map
@@ -435,6 +587,7 @@ default_option_kwargs = [
               "or specify the dataset name (e.g. MC-19-0. If unset, model will not be evaluated on data"),
     #dict(dest="--training-and-perf-path", default=None, type=str),
     dict(dest="--eval-win-step-size", default=1, type=int),
+    dict(dest="--pred-inspect-eval", default=False, action='store_true'),
     dict(dest="--base-output-path", default=None, type=str),
     dict(dest="--eval-filter", default=None, type=str),
     dict(dest='--device', default='cuda:0'),
