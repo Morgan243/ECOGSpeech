@@ -153,7 +153,7 @@ def run_simple(options):
     elif options.track_sinc_params:
         print("--track-sinc-params was set, but not using an SN model - ignoring!")
 
-    trainer = base.Trainer(dict(model=model), opt_map = dict(),
+    trainer = base.Trainer(dict(model=model), opt_map=dict(),
                            train_data_gen=dl_map['train'],
                            cv_data_gen=dl_map.get('cv'),
                            model_regularizer=reg_f,
@@ -353,12 +353,11 @@ def example_run(options):
     return trainer, outputs_map
 
 
-
-default_option_kwargs = [
+default_model_hyperparam_option_kwargs = [
     dict(dest='--model-name', default='base-sn', type=str),
     dict(dest='--dataset', default='nww', type=str),
     dict(dest='--train-sets', default='MC-19-0,MC-19-1', type=str),
-    #dict(dest='--cv-sets', default='19-2', type=str),
+    # dict(dest='--cv-sets', default='19-2', type=str),
     dict(dest='--cv-sets', default=None, type=str),
     dict(dest='--test-sets', default='MC-19-2', type=str),
     dict(dest='--random-labels', default=False, action="store_true"),
@@ -376,14 +375,14 @@ default_option_kwargs = [
     dict(dest='--roll-channels', default=False, action="store_true"),
     dict(dest='--shuffle-channels', default=False, action="store_true"),
     dict(dest='--cog-attn', default=False, action="store_true"),
-    dict(dest='--bw-reg-weight', default=0.0, type=float),
-    dict(dest='--track-sinc-params', default=False, action="store_true"),
-    #dict(dest='--batch-callback-delta', default=5, type=int),
-
     dict(dest='--power-q', default=0.7, type=float),
-
     dict(dest='--n-epochs', default=100, type=int),
     dict(dest='--batch-size', default=256, type=int),
+    dict(dest='--bw-reg-weight', default=0.0, type=float),
+]
+
+default_option_kwargs = default_model_hyperparam_option_kwargs + [
+    dict(dest='--track-sinc-params', default=False, action="store_true"),
     dict(dest='--device', default='cuda:0'),
     dict(dest='--save-model-path', default=None),
     dict(dest='--tag', default=None),
