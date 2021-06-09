@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib
+from pathlib import Path
 from matplotlib import pyplot as plt
 from glob import glob
 import os
@@ -9,6 +10,74 @@ from ecog_speech import datasets, feature_processing, experiments, utils
 from ecog_speech.models import base
 from tqdm.auto import tqdm
 import torch
+
+
+def frame_to_torch_batch(_df, win_size, win_step):
+    _arr = torch.from_numpy(_df.values)
+    outputs =list()
+    for _iix in range(0, _arr.shape[0] - win_size, win_step):
+        _ix = slice(_iix, _iix + win_size)
+        outputs.append(_arr[_ix].unsqueeze(0))
+    return torch.cat(outputs).permute(0, 2, 1)
+
+
+def make_outputs(sn_model, in_batch_arr):
+    sn_model.eval()
+    with torch.no_grad():
+        sn_out = sn_model.m[:3](in_batch_arr)
+        out = sn_model.m(in_batch_arr)
+    return sn_out, out
+
+
+def wrangle_data_from_word_idx(data_map, wrd_ix, model=None):
+    #test_nww_word_id = {mname: wrd_ix for mname, _nww in test_nww_map.items()}
+    # test_nww_sample_ix_maps, test_pos_wrd_ix_l_map, test_neg_wrd_ix_l_map = map_model_words(test_nww_map, test_nww_word_id)
+    # samp_ix_map = t_nww.sample_index_maps[next(iter(_t_nww.sample_index_maps.keys()))]
+    samp_ix_map = next(iter(t_nww.sample_index_maps.values()))
+    pos_win_ixes, neg_win_ixes = samp_ix_map[wrd_ix], samp_ix_map[-wrd_ix]
+
+    ###----
+    left_pad_t, right_pad_t = pd.Timedelta('1500ms'), pd.Timedelta('200ms')
+
+    pos_start, pos_end = pos_win_ixes[0].min(), pos_win_ixes[-1].max()
+    neg_start, neg_end = neg_win_ixes[0].min(), neg_win_ixes[-1].max()
+
+    plt_slice = slice(pos_start - left_pad_t, neg_end + right_pad_t)
+    ###-----
+    ecog_win_df = data_map['ecog'].loc[plt_slice]
+    audio_win_s = data_map['audio'].loc[plt_slice].rename('audio')
+    stim_win_s = data_map['stim'].loc[plt_slice].rename('stim')
+
+    contig_ix = ecog_win_df.index
+
+    contig_ecog_arr = torch.from_numpy(ecog_win_df.values)
+    with torch.no_grad():
+        contig_sn_out = model.m[:3](contig_ecog_arr.transpose(0, 1).unsqueeze(0))[0].detach().numpy()
+    ###----
+
+    t_ix = contig_ix[model.window_size:]
+
+    t_ecog_arr = frame_to_torch_batch(ecog_win_df, model.window_size, 1)
+
+    sn_out, model_preds = make_outputs(model, t_ecog_arr)
+
+    # sn_out, out = make_outputs(t_model, t_nww[0]['ecog_arr'].unsqueeze(0))
+
+    model_pred_s = pd.Series(model_preds.squeeze().detach().numpy(), index=t_ix, name='model_pred_proba')
+
+    model_pred_s.rename_axis(index='ts', inplace=True)
+    ##-----
+    # Hilbert (envelope) of each band-sensor time series
+    # - Maps sensor id to a dataframe with index as time and columns of band wit envelope values
+    sens_band_hilb_df_map = {
+        s_i: pd.concat([feature_processing.make_hilbert_df(pd.Series(_arr, name=b_i)).envelope.rename(b_i)
+                        for b_i, _arr in enumerate(band_arr)], axis=1)
+        for s_i, band_arr in enumerate(contig_sn_out)}
+    # Concat all hilbert data together into a Frame
+    # - Now multi-index with levels of sensor-time
+    contig_hilbert_df = pd.concat([band_hil_df.assign(sensor=s_i, ts=contig_ix)
+                                   for s_i, band_hil_df in sens_band_hilb_df_map.items()]).set_index(['sensor', 'ts'])
+    contig_hilbert_df.columns.rename('envelope', inplace=True)
 
 
 def plot_model_preds(preds_s, data_map, sample_index_map):
@@ -69,24 +138,21 @@ def plot_model_preds(preds_s, data_map, sample_index_map):
 
     return fig, ax
 
-#dataset_evaluator_map = dict(
-#    nww=eval_nww_model,
-#)
-#
-def plot_training(loss_df, title=None, ax=None):
-    ax = loss_df.plot(figsize=(6, 5), grid=True, lw=3, ax=ax)
+
+def plot_training(loss_df, title=None, ax=None, logy=True, **plt_kwargs):
+    ax = loss_df.plot(figsize=(6, 5), grid=True, lw=3, ax=ax,
+                      style=['-'] + (['--'] * (loss_df.shape[-1] - 1)), logy=logy, **plt_kwargs)
     ax.set_ylabel('Loss Value', fontsize=13)
     ax.set_xlabel('Epoch', fontsize=13)
     if title is not None:
         ax.set_title(title, fontsize=15)
-    #plt.clf()
     return ax
 
 
 def plot_sensor_band_training(lowhz_df, centerhz_df, highhz_df,
-                              title=None, ax=None):
+                              title=None, ax=None, figsize=(15, 6)):
     for c in lowhz_df.columns:
-        ax = centerhz_df[c].plot(figsize=(15, 6), lw=3, ax=ax)
+        ax = centerhz_df[c].plot(figsize=figsize, lw=3, ax=ax)
         ax.fill_between(centerhz_df.index,
                         lowhz_df[c],
                         highhz_df[c],
@@ -96,23 +162,29 @@ def plot_sensor_band_training(lowhz_df, centerhz_df, highhz_df,
     ax.set_ylabel('Hz', fontsize=13)
     # TODO: Can we map this to actual batches?
     ax.set_xlabel('Batch Sample Index', fontsize=13)
+    ax.axhline(0, lw=3, color='grey')
     ax.grid(True)
     #plt.clf()
     return ax
 
 
 def multi_plot_training(loss_df, lowhz_df, centerhz_df,  highhz_df,
-                        title=None,
+                        title=None, figsize=(15, 6),
                         axs=None):
     fig = None
     if axs is None:
-        fig, axs = plt.subplots(nrows=2, figsize=(10, 10))
+        fig, axs = plt.subplots(nrows=2, figsize=figsize)
     axs = axs.reshape(-1)
 
     ax_i = 0
     loss_ax = plot_training(loss_df, ax=axs[ax_i])
     ax_i += 1
-    hz_ax = plot_sensor_band_training(lowhz_df, centerhz_df, highhz_df, ax=axs[ax_i])
+    if lowhz_df is not None:
+        hz_ax = plot_sensor_band_training(lowhz_df, centerhz_df, highhz_df,
+                                          ax=axs[ax_i], figsize=figsize)
+    else:
+        hz_ax = axs[ax_i]
+        hz_ax.annotate("No SincNet parameters available in results", (0.3, 0.3))
 
     if fig is None:
         fig = axs[0].get_figure()
@@ -123,10 +195,113 @@ def multi_plot_training(loss_df, lowhz_df, centerhz_df,  highhz_df,
     fig.tight_layout(rect=[0, 0.03, 1, 0.95])
     return fig, {'loss_ax': loss_ax, 'hz_ax': hz_ax}
 
+
+def plot_model_overview(results):
+    loss_df = make_loss_frame_from_results(results)
+    lowhz_df, centerhz_df, highhz_df = make_hz_frame_from_results(results)
+    kwarg_str = ", ".join(["%s=%s" % (str(k), str(v)) if (i % 5) or i ==0 else "\n%s=%s" % (str(k), str(v))
+                          for i, (k, v) in enumerate(results['model_kws'].items())])
+    perf_str = '|| '.join(['%s=%s' % (str(k), str(np.round(results[k], 3))) for k in ['accuracy', 'f1', 'precision', 'recall']])
+    title = (f"({results['uid']})\ntrain:[{results['train_sets']}] || cv:[{results['cv_sets']}] || test:[{results['test_sets']}] \n\
+    Num Params={results['num_params']} || {perf_str}\n\
+    {results['model_name']}({kwarg_str})")
+    #print(title)
+    #title = f"Model {results['']}"
+    fig, ax_map = multi_plot_training(loss_df, lowhz_df, centerhz_df, highhz_df, title=None)
+    ax_map['loss_ax'].set_title(title, fontsize=13)
+    ax_map['loss_ax'].axvline(results['best_model_epoch'], ls='--', color='black')
+    fig.tight_layout()
+    #fig.savefig(os.path.join(base_output_path, "training_plots.pdf"))
+    return fig, ax_map
+
+
+####
+def load_results_to_frame(p):
+    #base_path = "../ecog_speech/results_per_patient_sn_2105_50epochs/"
+    #result_files = glob(os.path.join(p, '*.json'))
+    result_files = glob(p)
+
+    json_result_data = [json.load(open(f)) for f in tqdm(result_files)]
+    return pd.DataFrame(json_result_data)
+
+
+def plot_agg_performance(results_df):
+    import seaborn as sns
+
+    # Choose a metric
+    perf_col = 'f1'
+
+    #performance_cols = ['accuracy', 'f1', 'precision', 'recall']
+    config_params = ['model_name', 'dataset', 'dense_width',
+                     'sn_n_bands', 'sn_kernel_size', 'sn_padding',
+                     'bw_reg_weight', 'cog_attn', 'shuffle_channels',
+                     'n_cnn_filters', 'dropout', 'dropout_2d', 'in_channel_dropout_rate',
+                     'batchnorm', 'roll_channels', 'power_q', 'n_epochs']
+
+    results_df['bw_reg_weight'] = results_df['bw_reg_weight'].fillna(-1)
+    results_df['test_patient'] = results_df['test_sets'].str.split('-').apply(lambda l: '-'.join(l[:-1]))
+    results_df['test_fold'] = results_df['test_sets'].str.split('-').apply(lambda l: l[-1])
+
+    nun_config_params = results_df[config_params].nunique()
+
+    config_cols = nun_config_params[nun_config_params > 1].index.tolist()
+    fixed_config_cols = nun_config_params[nun_config_params == 1].index.tolist()
+    print(f"Fixed Params: {', '.join(fixed_config_cols)}")
+    print(f"Changing Params: {', '.join(config_cols)}")
+
+    grp = results_df.groupby(config_cols + ['test_patient'], dropna=False)[perf_col]
+    res_perf = grp.mean()
+    res_n = grp.size().rename('N')
+
+    res_perf_df = res_perf.reset_index()
+    res_n_df = res_n.reset_index()
+
+    def hplot(*args, **kwargs):
+        # print(args)
+        x = kwargs.pop('data')
+        plt_df = x.groupby(list(args[:-1])).mean().reset_index().pivot(*args)
+        # display(plt_df)
+        ax = sns.heatmap(plt_df.T,
+                         annot=True, **kwargs)
+        return ax
+
+    extra_kws = dict()
+    if 'in_channel_dropout_rate' in res_perf_df.columns:
+        extra_kws = dict(row='in_channel_dropout_rate')
+
+    figs, axes = list(), list()
+    try:
+        g = sns.FacetGrid(res_perf_df, col="test_patient",
+                          #row='in_channel_dropout_rate',
+                          # Sharing axis doesn't seem to work so well with sparse results - axes names and ticks get weird
+                          sharex=False, sharey=False, height=5,
+                          **extra_kws)
+        sns_fg = g.map_dataframe(hplot, 'n_cnn_filters', 'sn_n_bands', 'f1',
+                        cmap='Greens', vmax=1., vmin=0.55,
+                        cbar=False, linewidths=1, linecolor='grey')
+        figs.append(sns_fg.fig)
+        axes.append(sns_fg.axes)
+    except KeyError as e:
+        print("Cant plot full heatmap: " + str(e))
+
+    fig, axs = matplotlib.pyplot.subplots(ncols=2, figsize=(9, 6))
+    ax = res_n.plot.barh(ax=axs[0], grid=True, title='model config N', color='grey')
+    ax.set_xlabel('N experiments (x folds)')
+    ax = res_perf.plot.barh(ax=axs[1], grid=True, title='model config performance')
+    ax.set_xlabel(f'{perf_col} score')
+    fig.tight_layout()
+    figs.append(fig)
+    axes.append(ax)
+
+    return figs, axes
+
+
 def make_hz_frame_from_results(results):
-    lowhz_df = pd.read_json(results['low_hz_frame']).sort_index()
-    highhz_df = pd.read_json(results['high_hz_frame']).sort_index()
-    centerhz_df = (highhz_df + lowhz_df) / 2.
+    lowhz_df = highhz_df = centerhz_df = None
+    if 'low_hz_frame' in results:
+        lowhz_df = pd.read_json(results['low_hz_frame']).sort_index().abs()
+        highhz_df = pd.read_json(results['high_hz_frame']).sort_index().abs()
+        centerhz_df = (highhz_df + lowhz_df) / 2.
     return lowhz_df, centerhz_df, highhz_df
 
 
@@ -137,6 +312,7 @@ def make_loss_frame_from_results(results):
 
 
 def run_one(options, result_file):
+    output_fig_map = dict()
     ###############
     ### Path handling
     result_base_path, result_filename = os.path.split(result_file)
@@ -149,38 +325,24 @@ def run_one(options, result_file):
             print("Skipping result at %s because filter returned False" % result_file)
             return None
 
-
-    model_filename = os.path.split(results['save_model_path'])[-1]
+    model_kws = results['model_kws']
     base_model_path = options.base_model_path
     if base_model_path is None:
         base_model_path = os.path.join(result_base_path, 'models')
         print("Base model path not give - assuming path '%s'" % base_model_path)
 
     base_output_path = result_id if options.base_output_path is None else options.base_output_path
-    from pathlib import Path
     print(f"Creating results dir {base_output_path} if it doesn't already exist")
     Path(base_output_path).mkdir(parents=True, exist_ok=True)
 
     ###############
     ### Processing
-    model_kws = results['model_kws']
-    #loss_df = pd.DataFrame(results['batch_losses']).T
-    loss_df = make_loss_frame_from_results(results)
-    lowhz_df, centerhz_df, highhz_df = make_hz_frame_from_results(results)
-    kwarg_str = ", ".join(["%s=%s" % (str(k), str(v)) if (i % 5) or i ==0 else "\n%s=%s" % (str(k), str(v))
-                          for i, (k, v) in enumerate(results['model_kws'].items())])
-    perf_str = '|| '.join(['%s=%s' % (str(k), str(np.round(results[k], 3))) for k in ['accuracy', 'precision', 'recall']])
-    title = (f"({results['uid']})\ntrain:[{results['train_sets']}] || cv:[{results['cv_sets']}] || test:[{results['test_sets']}] \n\
-    Num Params={results['num_params']} || {perf_str}\n\
-    {results['model_name']}({kwarg_str})")
-    #print(title)
-    #title = f"Model {results['']}"
-    fig, ax_map = multi_plot_training(loss_df, lowhz_df, centerhz_df, highhz_df, title=None)
-    ax_map['loss_ax'].set_title(title, fontsize=15)
-    fig.tight_layout()
+    fig, ax_map = plot_model_overview(results)
     fig.savefig(os.path.join(base_output_path, "training_plots.pdf"))
+    output_fig_map['training_plots'] = fig
 
     if options.eval_sets is not None:
+        model_filename = os.path.split(results['save_model_path'])[-1]
         model_path = os.path.join(base_model_path, model_filename)
         print("Loading model located at: " + str(model_path))
 
@@ -203,15 +365,16 @@ def run_one(options, result_file):
         else:
             raise ValueError(f"Unrecognized model_name: {results['model_name']} in {result_file})")
 
-
         with open(model_path, 'rb') as f:
             model_state = torch.load(f)
 
         model.load_state_dict(model_state)
         model.to(options.device)
 
-        preds_map = dset.eval_model(model, options.eval_win_step_size,
-                                    device=options.device)
+        dl_map = dset.to_eval_replay_dataloader(win_step=options.eval_win_step_size)
+        preds_map = base.Trainer.generate_outputs_from_model(model, dl_map, device=options.device,)
+        #preds_map = dset.eval_model(model, options.eval_win_step_size,
+        #                            device=options.device)
 
         for ptuple, data_map in dset.data_maps.items():
             print("Plotting " + str(ptuple))
@@ -221,9 +384,11 @@ def run_one(options, result_file):
             fig_filename = os.path.join(base_output_path, "prediction_plot_for_%s.pdf" % ptuple_str)
             print("Saving to " + str(fig_filename))
             fig.savefig(fig_filename)
-
+            output_fig_map["prediction_plot_for_%s.pdf" % ptuple_str] = fig
 
     # TODO: return something useful - dictionary of results? A class of results?j
+    return results, output_fig_map
+
 
 def run(options):
     if options.result_file is None:
@@ -235,22 +400,40 @@ def run(options):
         return run_one(options, result_files[0])
 
     print(f"Producing results on {len(result_files)} result files")
-    original_base_path = str(options.base_output_path)
+    base_p = os.path.join(os.path.split(options.result_file)[0], 'parsed/')
+    original_base_path = base_p if options.base_output_path is None else options.base_output_path
+
+    res_map = dict()
     for r in tqdm(result_files):
         fname = os.path.split(r)[-1].split('.')[0]
         options.base_output_path = os.path.join(original_base_path, fname)
-        res = run_one(options, r)
+        ro = run_one(options, r)
+        if ro is not None:
+            res_map[r] = ro
+
+    #if options.training_and_perf_path:
+    from matplotlib.backends.backend_pdf import PdfPages
+    pp = PdfPages(os.path.join(base_p, 'training_and_perf.pdf'))
+    results_df = pd.DataFrame([r for r, output_figs in res_map.values()])
+    figs, axes = plot_agg_performance(results_df)
+    for fig in figs:
+        fig.savefig(pp, format='pdf')
+
+    sorted_res_map = sorted(list(res_map.items()), key=lambda _results: _results[1][0]['f1'], reverse=True)
+    for r, (results, output_figs) in sorted_res_map:
+        output_figs['training_plots'].savefig(pp, format='pdf')
+    pp.close()
 
     #[run_one(options, r) for r in tqdm(result_files)]
 
 
 default_option_kwargs = [
-    dict(dest="--result-file", default=None, type=str),
+    dict(dest="--result-file", default=None, type=str, required=True),
     dict(dest="--base-model-path", default=None, type=str),
     dict(dest='--eval-sets', default=None, type=str,
          help="Dataset to run the loaded model against - use train/cv/test for the data used to build the model"
               "or specify the dataset name (e.g. MC-19-0. If unset, model will not be evaluated on data"),
-
+    #dict(dest="--training-and-perf-path", default=None, type=str),
     dict(dest="--eval-win-step-size", default=1, type=int),
     dict(dest="--base-output-path", default=None, type=str),
     dict(dest="--eval-filter", default=None, type=str),
@@ -260,4 +443,4 @@ if __name__ == """__main__""":
     parser = utils.build_argparse(default_option_kwargs,
                                   description="ASPEN+MHRG Result Parsing")
     m_options = parser.parse_args()
-    results = run(m_options)
+    m_results = run(m_options)
