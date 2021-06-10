@@ -298,7 +298,7 @@ def plot_sensor_band_training(lowhz_df, centerhz_df, highhz_df,
     ax.set_ylabel('Hz', fontsize=13)
     # TODO: Can we map this to actual batches?
     ax.set_xlabel('Batch Sample Index', fontsize=13)
-    ax.axhline(0, lw=3, color='grey')
+    ax.axhline(0, lw=3, color='grey', alpha=0.4)
     ax.grid(True)
     #plt.clf()
     return ax
@@ -507,33 +507,34 @@ def run_one(options, result_file):
         model.load_state_dict(model_state)
         model.to(options.device)
 
-        dl_map = dset.to_eval_replay_dataloader(win_step=options.eval_win_step_size)
-        preds_map = base.Trainer.generate_outputs_from_model(model, dl_map, device=options.device,)
         #preds_map = dset.eval_model(model, options.eval_win_step_size,
         #                            device=options.device)
 
-        for ptuple, data_map in dset.data_maps.items():
-            print("Plotting " + str(ptuple))
-            ptuple_str = "-".join(str(v) for v in ptuple)
-            if options.pred_inspect_eval:
-                all_wrds_codes = [k for k in next(iter(dset.sample_index_maps.values())).keys() if k > 0]
-                from matplotlib.backends.backend_pdf import PdfPages
-                pp = PdfPages('stim_code_preds_MC24_4band_0602.pdf')
-                fig, ax_map = plot_model_overview(results)
+        #for ptuple, data_map in dset.data_maps.items():
+        ptuple, data_map = next(iter(dset.data_maps.items()))
+        print("Plotting " + str(ptuple))
+        ptuple_str = "-".join(str(v) for v in ptuple)
+        fig_name = "prediction_inspect_plot_for_%s.pdf" % ptuple_str
+        fig_filename = os.path.join(base_output_path, fig_name)
+
+        if options.pred_inspect_eval:
+            all_wrds_codes = [k for k in next(iter(dset.sample_index_maps.values())).keys() if k > 0]
+            from matplotlib.backends.backend_pdf import PdfPages
+            pp = PdfPages(fig_filename)
+            fig, ax_map = plot_model_overview(results)
+            fig.savefig(pp, format='pdf')
+            for t_wrd in tqdm(all_wrds_codes):
+                fig, axs = wrangle_and_plot_pred_inspect(model, dset, t_wrd, patient_tuple=ptuple)
                 fig.savefig(pp, format='pdf')
-                for t_wrd in tqdm(all_wrds_codes):
-                    #fig, axs = wran(t_model, t_dmap, wrd_ix=t_wrd)
-                    fig, axs = wrangle_and_plot_pred_inspect(model, dset, t_wrd, patient_tuple=ptuple)
-                    fig.savefig(pp, format='pdf')
-                    ## TODO: Close figure here?
-                    matplotlib.pyplot.close(fig)
-                pp.close()
-                fig_name = "prediction_inspect_plot_for_%s.pdf" % ptuple_str
-            else:
-                fig, ax = plot_model_preds(preds_s=preds_map[ptuple], data_map=data_map,
-                                           sample_index_map=dset.sample_index_maps[ptuple])
-                fig_name = "prediction_plot_for_%s.pdf" % ptuple_str
-            fig_filename = os.path.join(base_output_path, fig_name)
+                ## TODO: Close figure here?
+                #matplotlib.pyplot.close(fig)
+                output_fig_map[ptuple_str + str(t_wrd)] = fig
+            pp.close()
+        else:
+            dl_map = dset.to_eval_replay_dataloader(win_step=options.eval_win_step_size)
+            preds_map = base.Trainer.generate_outputs_from_model(model, dl_map, device=options.device, )
+            fig, ax = plot_model_preds(preds_s=preds_map[ptuple], data_map=data_map,
+                                       sample_index_map=dset.sample_index_maps[ptuple])
             print("Saving to " + str(fig_filename))
             fig.savefig(fig_filename)
             output_fig_map[fig_name] = fig
