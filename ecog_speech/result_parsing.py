@@ -21,8 +21,12 @@ def frame_to_torch_batch(_df, win_size, win_step):
     return torch.cat(outputs).permute(0, 2, 1)
 
 
-def make_outputs(sn_model, in_batch_arr):
+def make_outputs(sn_model, in_batch_arr, device=None):
     sn_model.eval()
+    if device is not None:
+        sn_model = sn_model.to(device)
+        in_batch_arr = in_batch_arr.to(device)
+
     with torch.no_grad():
         sn_out = sn_model.m[:3](in_batch_arr)
         out = sn_model.m(in_batch_arr)
@@ -35,8 +39,9 @@ def swap_tdelta_to_total_seconds_index(df):
 
 
 def wrangle_and_plot_pred_inspect(model, nww: datasets.NorthwesternWords, wrd_ix: int,
-                                  sens_to_plt=None, patient_tuple=None):
+                                  sens_to_plt=None, patient_tuple=None, device=None):
     import seaborn as sns
+
 
     #test_nww_word_id = {mname: wrd_ix for mname, _nww in test_nww_map.items()}
     # test_nww_sample_ix_maps, test_pos_wrd_ix_l_map, test_neg_wrd_ix_l_map = map_model_words(test_nww_map, test_nww_word_id)
@@ -61,19 +66,23 @@ def wrangle_and_plot_pred_inspect(model, nww: datasets.NorthwesternWords, wrd_ix
     contig_ix = ecog_win_df.index
 
     contig_ecog_arr = torch.from_numpy(ecog_win_df.values)
+    if device is not None:
+        model = model.to(device)
+        contig_ecog_arr = contig_ecog_arr.to(device)
+
     with torch.no_grad():
-        contig_sn_out = model.m[:3](contig_ecog_arr.transpose(0, 1).unsqueeze(0))[0].detach().numpy()
+        contig_sn_out = model.m[:3](contig_ecog_arr.transpose(0, 1).unsqueeze(0))[0].cpu().detach().numpy()
     ###----
 
     t_ix = contig_ix[model.window_size:]
 
     t_ecog_arr = frame_to_torch_batch(ecog_win_df, model.window_size, 1)
 
-    sn_out, model_preds = make_outputs(model, t_ecog_arr)
+    sn_out, model_preds = make_outputs(model, t_ecog_arr, device=device)
 
     # sn_out, out = make_outputs(t_model, t_nww[0]['ecog_arr'].unsqueeze(0))
 
-    model_pred_s = pd.Series(model_preds.squeeze().detach().numpy(), index=t_ix, name='model_pred_proba')
+    model_pred_s = pd.Series(model_preds.squeeze().cpu().detach().numpy(), index=t_ix, name='model_pred_proba')
 
     model_pred_s.rename_axis(index='ts', inplace=True)
     ##-----
@@ -524,7 +533,8 @@ def run_one(options, result_file):
             fig, ax_map = plot_model_overview(results)
             fig.savefig(pp, format='pdf')
             for t_wrd in tqdm(all_wrds_codes):
-                fig, axs = wrangle_and_plot_pred_inspect(model, dset, t_wrd, patient_tuple=ptuple)
+                fig, axs = wrangle_and_plot_pred_inspect(model, dset, t_wrd, patient_tuple=ptuple,
+                                                         device=options.device)
                 fig.savefig(pp, format='pdf')
                 ## TODO: Close figure here?
                 #matplotlib.pyplot.close(fig)
