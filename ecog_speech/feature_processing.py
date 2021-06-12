@@ -442,8 +442,7 @@ class SampleIndicesFromStim(ProcessStep):
         return dict(sample_index_map=sample_indices)
 
 
-from python_speech_features import mfcc
-import torchaudio
+#import torchaudio
 @attr.s
 class MFCC(ProcessStep):
     # Ecog is used to reindex the MFCC output so it aligns
@@ -455,6 +454,7 @@ class MFCC(ProcessStep):
     #    import torchaudio
     #    self.mfcc_m = torchaudio.transforms.MFCC()
     def step(self, data_map):
+        from python_speech_features import mfcc
         sig = data_map['audio']
         rate = data_map['fs_audio']
         winstep = 1 / 200
