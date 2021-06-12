@@ -163,7 +163,7 @@ def wrangle_and_plot_pred_inspect(model, nww: datasets.NorthwesternWords, wrd_ix
     band_hz = np.abs(model.get_band_params()[0]['band_hz'] * 600)[:, 0]  # .squeeze()
     print("Low hz shape: " + str(model.get_band_params()[0]['low_hz'].shape))
     for i in range(plt_avg_fft_arr.shape[1]):
-        plt_avg_fft_df = pd.DataFrame(plt_avg_fft_arr.select(1, i).detach().numpy(), index=t_ix, columns=fft_freq)
+        plt_avg_fft_df = pd.DataFrame(plt_avg_fft_arr.select(1, i).cpu().detach().numpy(), index=t_ix, columns=fft_freq)
         hz_slice = slice(np.floor(low_hz[i]), np.ceil(low_hz[i] + max(band_hz[i], 3)))
         print(hz_slice)
         ax = sns.heatmap(plt_avg_fft_df.rolling(15).mean().T.loc[hz_slice].sort_index(ascending=False), annot=False,
