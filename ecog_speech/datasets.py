@@ -12,9 +12,15 @@ import scipy.io
 from os import environ
 import os
 import attr
-import torchaudio
+#import torchaudio
 import socket
 from ecog_speech import feature_processing
+
+try:
+    import torchaudio
+except ModuleNotFoundError as e:
+    print("COULD NOT IMPORT TORCHAUDIO (only a problem if using mfcc..?)")
+    torchaudio = None
 
 path_map = dict()
 pkg_data_dir = os.path.join(os.path.split(os.path.abspath(__file__))[0], '../data')
@@ -1206,8 +1212,9 @@ class NorthwesternWords_BCI2k(BaseDataset):
         #   - Negative values are silence before the speech (i.e. -1 before 1
         self.word_index = feature_processing.compute_speech_index(self.speech_df)
 
-        self.mfcc_m = torchaudio.transforms.MFCC(self.audio_sample_rate,
+        self.mfcc_m = (torchaudio.transforms.MFCC(self.audio_sample_rate,
                                                  self.num_mfcc)
+                       if torchaudio is not None else None)
 
         #
         if self.selected_word_indices is not None:
