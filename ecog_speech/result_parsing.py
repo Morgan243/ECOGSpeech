@@ -377,17 +377,17 @@ def plot_agg_performance(results_df):
     perf_col = 'f1'
 
     #performance_cols = ['accuracy', 'f1', 'precision', 'recall']
-    config_params = ['model_name', 'dataset', 'dense_width',
-                     'sn_n_bands', 'sn_kernel_size', 'sn_padding',
-                     'bw_reg_weight', 'cog_attn', 'shuffle_channels',
-                     'n_cnn_filters', 'dropout', 'dropout_2d', 'in_channel_dropout_rate',
-                     'batchnorm', 'roll_channels', 'power_q', 'n_epochs']
+    #config_params = ['model_name', 'dataset', 'dense_width',
+    #                 'sn_n_bands', 'sn_kernel_size', 'sn_padding',
+    #                 'bw_reg_weight', 'cog_attn', 'shuffle_channels',
+    #                 'n_cnn_filters', 'dropout', 'dropout_2d', 'in_channel_dropout_rate',
+    #                 'batchnorm', 'roll_channels', 'power_q', 'n_epochs', 'sn_band_spacing']
 
     results_df['bw_reg_weight'] = results_df['bw_reg_weight'].fillna(-1)
     results_df['test_patient'] = results_df['test_sets'].str.split('-').apply(lambda l: '-'.join(l[:-1]))
     results_df['test_fold'] = results_df['test_sets'].str.split('-').apply(lambda l: l[-1])
 
-    nun_config_params = results_df[config_params].nunique()
+    nun_config_params = results_df[experiments.all_model_hyperparam_names].nunique()
 
     config_cols = nun_config_params[nun_config_params > 1].index.tolist()
     fixed_config_cols = nun_config_params[nun_config_params == 1].index.tolist()
@@ -603,6 +603,7 @@ default_option_kwargs = [
     dict(dest="--eval-filter", default=None, type=str),
     dict(dest='--device', default='cuda:0'),
 ]
+
 if __name__ == """__main__""":
     parser = utils.build_argparse(default_option_kwargs,
                                   description="ASPEN+MHRG Result Parsing")
