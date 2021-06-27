@@ -112,7 +112,7 @@ class MultiChannelSincNN(torch.nn.Module):
                  min_low_hz=1, min_band_hz=3,
                  update=True, per_channel_filter=False,
                  channel_dim=1, unsqueeze_dim=1,
-                 padding=0,
+                 padding=0, band_spacing="linear",
                  #store_param_history=False
                  ):
         super(MultiChannelSincNN, self).__init__()
@@ -122,7 +122,7 @@ class MultiChannelSincNN(torch.nn.Module):
         sinc_kwargs = dict(in_channels=1, out_channels=num_bands,
                            kernel_size=kernel_size, sample_rate=fs,
                            min_low_hz=min_low_hz, min_band_hz=min_band_hz,
-                           padding=padding,
+                           padding=padding, band_spacing=band_spacing,
                            #update=update,
                            )
         if per_channel_filter:
@@ -240,6 +240,7 @@ class BaseMultiSincNN(torch.nn.Module):
                  dense_width=None,
                  cog_attn=False,
                  in_channel_dropout_rate=0.,
+                 band_spacing='linear',
                  make_block_override=None,
                  activation_cls=None,
                  #dense_depth=1
@@ -255,6 +256,7 @@ class BaseMultiSincNN(torch.nn.Module):
         self.batch_norm = batch_norm
         self.cog_attn = cog_attn
         self.in_channel_dropout_rate = in_channel_dropout_rate
+        self.band_spacing = band_spacing
         self.make_block_override = make_block_override
         self.dropout = dropout
         #self.activation_cls = torch.nn.SELU if activation_cls is None else activation_cls
@@ -309,7 +311,8 @@ class BaseMultiSincNN(torch.nn.Module):
             MultiChannelSincNN(self.n_bands, self.in_channels,
                                padding=self.sn_padding,
                                kernel_size=self.sn_kernel_size, fs=self.fs,
-                               per_channel_filter=self.per_channel_filter),
+                               per_channel_filter=self.per_channel_filter,
+                               band_spacing=self.band_spacing),
         )
 
         if self.cog_attn:
@@ -459,7 +462,8 @@ class TimeNormBaseMultiSincNN(BaseMultiSincNN):
             MultiChannelSincNN(self.n_bands, self.in_channels,
                                padding=self.sn_padding,
                                kernel_size=self.sn_kernel_size, fs=self.fs,
-                               per_channel_filter=self.per_channel_filter),
+                               per_channel_filter=self.per_channel_filter,
+                               band_spacing=self.band_spacing),
         )
 
         if self.cog_attn:

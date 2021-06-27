@@ -1455,14 +1455,12 @@ class SincConv(nn.Module):
             mel = np.linspace(self.to_mel(low_hz), self.to_mel(high_hz), self.out_channels + 1)
             hz = self.to_hz(mel) / self.sample_rate
         elif band_spacing == 'linear':
-            # initialize filterbanks such that they are equally spaced in Mel scale
             low_hz = 10
             high_hz = self.sample_rate / 2 - self.min_band_hz
             hz = np.linspace(low_hz, high_hz, self.out_channels + 1) / self.sample_rate
         # distribution = stats.t(3)#loc=250, scale=100)
         elif band_spacing == 'random_normal':
             from scipy import stats
-            # initialize filterbanks such that they are equally spaced in Mel scale
             low_hz = 30
             high_hz = self.sample_rate / 2 - (self.min_low_hz + self.min_band_hz)
             distribution = stats.norm(loc=250, scale=125)
