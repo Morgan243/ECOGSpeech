@@ -45,12 +45,14 @@ def make_model(options, nww):
                          in_channel_dropout_rate=options.in_channel_dropout_rate,
                          fs=nww.fs_signal,
                          cog_attn=options.cog_attn,
+                         band_spacing=options.sn_band_spacing,
                          **base_kws)
         model = base.TimeNormBaseMultiSincNN(**model_kws)
     elif options.model_name == 'base-cnn':
         model_kws = dict(in_channels=len(nww.selected_columns),
                          in_channel_dropout_rate=options.in_channel_dropout_rate,
                          n_cnn_filters=options.n_cnn_filters,
+                         band_spacing=options.sn_band_spacing,
                          **base_kws)
         model = base.BaseCNN(**model_kws)
     else:
@@ -367,6 +369,7 @@ default_model_hyperparam_option_kwargs = [
     dict(dest='--sn-n-bands', default=1, type=int),
     dict(dest='--sn-kernel-size', default=31, type=int),
     dict(dest='--sn-padding', default=15, type=int),
+    dict(dest='--sn-band-spacing', default='linear', type=str),
     dict(dest='--n-cnn-filters', default=None, type=int),
     dict(dest='--dropout', default=0., type=float),
     dict(dest='--dropout-2d', default=False, action="store_true"),
@@ -380,6 +383,10 @@ default_model_hyperparam_option_kwargs = [
     dict(dest='--batch-size', default=256, type=int),
     dict(dest='--bw-reg-weight', default=0.0, type=float),
 ]
+
+all_model_hyperparam_names = [d['dest'].replace('--', '').replace('-', '_')
+                           for d in default_model_hyperparam_option_kwargs
+                            if d['dest'] not in ('--train-sets', '--cv-sets', '--test-sets')]
 
 default_option_kwargs = default_model_hyperparam_option_kwargs + [
     dict(dest='--track-sinc-params', default=False, action="store_true"),
