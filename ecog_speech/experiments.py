@@ -52,7 +52,7 @@ def make_model(options, nww):
         model_kws = dict(in_channels=len(nww.selected_columns),
                          in_channel_dropout_rate=options.in_channel_dropout_rate,
                          n_cnn_filters=options.n_cnn_filters,
-                         band_spacing=options.sn_band_spacing,
+                         #band_spacing=options.sn_band_spacing,
                          **base_kws)
         model = base.BaseCNN(**model_kws)
     else:

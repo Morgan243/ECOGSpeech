@@ -394,7 +394,45 @@ class NorthwesternWords(BaseDataset):
         26: [('Mayo Clinic', 26, 1, 1),
              ('Mayo Clinic', 26, 1, 2)],
     }
-    all_patient_maps = dict(MC=mc_patient_set_map)
+    nw_patient_set_map = {
+        1: [
+            ('Northwestern', 1, 1, 1),
+            ('Northwestern', 1, 1, 2),
+            ('Northwestern', 1, 1, 3),
+        ],
+        2: [
+            ('Northwestern', 2, 1, 1),
+            ('Northwestern', 2, 1, 2),
+            ('Northwestern', 2, 1, 3),
+            ('Northwestern', 2, 1, 4),
+        ],
+        3: [
+            ('Northwestern', 3, 1, 1),
+            ('Northwestern', 3, 1, 2),
+        ],
+        4: [
+            ('Northwestern', 4, 1, 1),
+            ('Northwestern', 4, 1, 2),
+        ],
+        5: [
+            ('Northwestern', 5, 1, 2),
+            ('Northwestern', 5, 1, 3),
+            ('Northwestern', 5, 1, 4),
+        ],
+        6: [
+            ('Northwestern', 6, 1, 7),
+            ('Northwestern', 6, 1, 9),
+        ],
+    }
+    syn_patient_set_map = {
+        1: [('Synthetic', 1, 1, 1)],
+        2: [('Synthetic', 2, 1, 1)],
+        3: [('Synthetic', 3, 1, 1)],
+    }
+    all_patient_maps = dict(MC=mc_patient_set_map,
+                            SN=syn_patient_set_map,
+                            NW=nw_patient_set_map)
+    fname_prefix_map = {'Mayo Clinic': 'MC', 'Synthetic': 'SN', 'Northwestern': 'NW'}
 
     # num_mfcc = 13
     #signal_key = 'signal'
@@ -424,6 +462,7 @@ class NorthwesternWords(BaseDataset):
     # passing the first NWW dataset to all subsequent ones built on the same source data
     # can save on memory and reading+parsing time
     data_from: 'NorthwesternWords' = attr.ib(None)
+
 
     ###
     # Add new processing pipelines for NWW here
@@ -496,18 +535,26 @@ class NorthwesternWords(BaseDataset):
             if self.sensor_columns is None or isinstance(self.sensor_columns, str):
                 good_and_bad_tuple_d = {l_p_s_t_tuple: self.identify_good_and_bad_sensors(mat_d, self.sensor_columns)
                                             for l_p_s_t_tuple, mat_d in mat_data_maps.items()}
+
+                good_and_bad_tuple_d = {k: (set(gs) if gs else (list(range(mat_data_maps[k][self.mat_d_signal_key].shape[1]))),
+                                            bs)
+                                         for k, (gs, bs) in good_and_bad_tuple_d.items()}
+                print("GOOD AND BAD SENSORS: " + str(good_and_bad_tuple_d))
                 self.sensor_columns = 'union' if self.sensor_columns is None else self.sensor_columns
                 # UNION: Select all good sensors from all inputs, zeros will be filled for those missing
                 if self.sensor_columns == 'union':
                     self.selected_columns = sorted(list({_gs for k, (gs, bs) in good_and_bad_tuple_d.items()
-                                                         for _gs in gs}))
+                                                        for _gs in gs}))
                 # INTERSECTION: Select only sensors that are rated good in all inputs
                 elif self.sensor_columns == 'intersection' or self.sensor_columns == 'valid':
                     s = [set(gs) for k, (gs, bs) in good_and_bad_tuple_d.items()]
                     self.selected_columns = sorted(list(s[0].intersection(*s[1:])))
+
+                #elif self.sensor_columns == 'all':
                 else:
                     raise ValueError("Unknown snsor columns argument: " + str(self.sensor_columns))
-                print("Selected columns with -%s- method: %s" % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
+                print("Selected columns with -%s- method: %s"
+                      % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
             else:
                 self.selected_columns = self.sensor_columns
             self.sensor_count = len(self.selected_columns)
@@ -611,6 +658,7 @@ class NorthwesternWords(BaseDataset):
 
     @classmethod
     def identify_good_and_bad_sensors(cls, mat_d, sensor_columns=None, ):
+
         if 'electrodes' in mat_d:
             chann_code_cols = ["code_%d" % e for e in range(mat_d['electrodes'].shape[-1])]
             channel_df = pd.DataFrame(mat_d['electrodes'], columns=chann_code_cols)
@@ -751,10 +799,10 @@ class NorthwesternWords(BaseDataset):
 
     #######
     ## Path handling
-    @staticmethod
-    def make_filename(patient, session, trial, location='Mayo Clinic'):
-        if location == 'Mayo Clinic':
-            return f"MC{str(patient).zfill(3)}-SW-S{session}-R{trial}.mat"
+    @classmethod
+    def make_filename(cls, patient, session, trial, location='Mayo Clinic'):
+        if location in cls.fname_prefix_map:#== 'Mayo Clinic':
+            return f"{cls.fname_prefix_map.get(location)}{str(patient).zfill(3)}-SW-S{session}-R{trial}.mat"
         else:
             raise ValueError("Don't know location " + location)
 
@@ -773,7 +821,7 @@ class NorthwesternWords(BaseDataset):
     def parse_mat_arr_dict(cls, mat_d, sensor_columns=None,
                            zero_repr='<ns>', defaults=None,
                            bad_sensor_method='zero',
-                           verbose=True):
+                           verbose=True) -> dict:
         """
         Convert a raw matlab dataset into Python+Pandas with timeseries indices
 
@@ -898,7 +946,13 @@ class NorthwesternWords(BaseDataset):
 
         else:
             channel_df = None
-            sensor_columns = ecog_df.columns.tolist() if sensor_columns is None else sensor_columns
+            if sensor_columns is None:
+                sensor_columns = ecog_df.columns.tolist()
+            else:
+                missing_sensors = [s for s in sensor_columns if s not in ecog_df.columns.tolist()]
+                if len(missing_sensors) > 0:
+                    ecog_df.loc[:, missing_sensors] = 0.
+            #sensor_columns = ecog_df.columns.tolist() if sensor_columns is None else sensor_columns
             print(f"No 'electrods' key in mat data - using all {len(sensor_columns)} columns")
             #ch_m = ecog_df.columns.notnull()
 
@@ -965,11 +1019,9 @@ class NorthwesternWords(BaseDataset):
 
         return mat_d
 
-
     @classmethod
     def plot_word_sample_region(cls, data_map, word_code=None, figsize=(15, 5), plot_features=False,
-                                subplot_kwargs=None,
-                                feature_key='ecog', feature_ax=None, ax=None):
+                                subplot_kwargs=None, feature_key='ecog', feature_ax=None, ax=None):
         word_code = np.random.choice(list(data_map['word_code_d'].keys())) if word_code is None else word_code
 
         t_silence_ixes = data_map['sample_index_map'][-word_code]
@@ -989,10 +1041,10 @@ class NorthwesternWords(BaseDataset):
                      .resample('5ms').first().fillna(method='ffill'))
 
         silence_s = pd.Series(0, index=plt_audio.index)
-        silence_s.loc[silence_min_ix : silence_max_ix] = 0.95
+        silence_s.loc[silence_min_ix: silence_max_ix] = 0.95
 
         speaking_s = pd.Series(0, index=plt_audio.index)
-        speaking_s.loc[speaking_min_ix : speaking_max_ix] = 0.95
+        speaking_s.loc[speaking_min_ix: speaking_max_ix] = 0.95
 
         #####
         feature_ax = None
@@ -1047,7 +1099,7 @@ class NorthwesternWords(BaseDataset):
             return [cls.make_tuples_from_sets_str(s)[0] for s in sets_str_l]
 
         org, pid, ix = sets_str.split('-')
-        assert pid.isdigit() and ix.isdigit() and org in ('MC',)
+        assert pid.isdigit() and ix.isdigit() and org in cls.all_patient_maps.keys()
         pmap, pid, ix = cls.all_patient_maps[org], int(pid), int(ix)
         assert pid in pmap
         p_list = pmap[pid]

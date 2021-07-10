@@ -387,18 +387,30 @@ def plot_agg_performance(results_df):
     results_df['test_patient'] = results_df['test_sets'].str.split('-').apply(lambda l: '-'.join(l[:-1]))
     results_df['test_fold'] = results_df['test_sets'].str.split('-').apply(lambda l: l[-1])
 
-    nun_config_params = results_df[experiments.all_model_hyperparam_names].nunique()
+    config_params_in_results = [p for p in experiments.all_model_hyperparam_names
+                                if p in results_df.columns.values]
+    missing_config_params = list(set(experiments.all_model_hyperparam_names) - set(config_params_in_results))
+    if len(missing_config_params) > 0:
+        print("Missing config params: " + (", ".join(missing_config_params)))
+        print("Are these older results?")
+    nun_config_params = results_df[config_params_in_results].nunique()
 
     config_cols = nun_config_params[nun_config_params > 1].index.tolist()
     fixed_config_cols = nun_config_params[nun_config_params == 1].index.tolist()
     print(f"Fixed Params: {', '.join(fixed_config_cols)}")
     print(f"Changing Params: {', '.join(config_cols)}")
 
-    grp = results_df.groupby(config_cols + ['test_patient'], dropna=False)[perf_col]
+    #if 'train_sets' in config_cols:
+    #    config_cols.remove('train_sets')
+    #    config_cols = ['train_sets'] + config_cols
+    #print("CONFIG COLS: " + str(config_cols))
+    grp = results_df.groupby(['test_patient'] + config_cols, dropna=False)[perf_col]
     res_perf = grp.mean()
+    res_std = grp.std()
     res_n = grp.size().rename('N')
 
     res_perf_df = res_perf.reset_index()
+    res_std_df = res_std.reset_index()
     res_n_df = res_n.reset_index()
 
     def hplot(*args, **kwargs):
@@ -406,7 +418,8 @@ def plot_agg_performance(results_df):
         x = kwargs.pop('data')
         plt_df = x.groupby(list(args[:-1])).mean().reset_index().pivot(*args)
         # display(plt_df)
-        ax = sns.heatmap(plt_df.T,
+        #sns.set(font_scale=1.7)
+        ax = sns.heatmap(plt_df.T, annot_kws=dict(fontsize=18),
                          annot=True, **kwargs)
         return ax
 
@@ -429,10 +442,15 @@ def plot_agg_performance(results_df):
     except KeyError as e:
         print("Cant plot full heatmap: " + str(e))
 
-    fig, axs = matplotlib.pyplot.subplots(ncols=2, figsize=(9, 6))
+    fig, axs = matplotlib.pyplot.subplots(ncols=2,
+                                          figsize=(9, max(len(res_n)*.25, 5)))
     ax = res_n.plot.barh(ax=axs[0], grid=True, title='model config N', color='grey')
     ax.set_xlabel('N experiments (x folds)')
-    ax = res_perf.plot.barh(ax=axs[1], grid=True, title='model config performance')
+    print("X ERROR")
+    print(res_std_df)
+    ax = res_perf.plot.barh(ax=axs[1], grid=True, title='model config performance', xerr=res_std)
+
+    ax.set_xlim((res_perf - res_std).min()*.95)
     ax.set_xlabel(f'{perf_col} score')
     fig.tight_layout()
     figs.append(fig)

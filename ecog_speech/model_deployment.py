@@ -7,6 +7,10 @@ from ecog_speech import utils
 from lslkit.components import processor
 
 
+def deploy_to_brainflow(options, result_file, brainflow_options):
+    pass
+
+
 def deploy_to_lsl(options, result_file, stream_type, max_buflen=2048):
     result_base_path, result_filename = os.path.split(result_file)
     result_id = result_filename.split('.')[0]
