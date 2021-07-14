@@ -1463,7 +1463,8 @@ class SincConv(nn.Module):
             from scipy import stats
             low_hz = 30
             high_hz = self.sample_rate / 2 - (self.min_low_hz + self.min_band_hz)
-            distribution = stats.norm(loc=250, scale=125)
+            #distribution = stats.norm(loc=250, scale=125)
+            distribution = stats.norm(loc=self.sample_rate / 4, scale=self.sample_rate / 8)
             hz = distribution.rvs(self.out_channels + 1).clip(low_hz, high_hz) / self.sample_rate
             hz.sort()
         else:
