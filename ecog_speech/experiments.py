@@ -15,7 +15,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 from sklearn.metrics import accuracy_score, f1_score, classification_report, precision_score, recall_score
 
-
 def make_model(options, nww):
     base_kws = dict(
         window_size=int(nww.sample_ixer.window_size.total_seconds() * nww.fs_signal),
@@ -63,7 +62,7 @@ def make_model(options, nww):
 
 
 def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv_data_kws=None, test_data_kws=None,
-                              num_dl_workers=8):
+                              num_dl_workers=8 ) -> tuple:
     from torchvision import transforms
     if dataset_cls is None:
         dataset_cls = datasets.BaseDataset.get_dataset_by_name(options.dataset)
@@ -73,11 +72,11 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     test_p_tuples = dataset_cls.make_tuples_from_sets_str(options.test_sets)
 
     if train_data_kws is None:
-        train_data_kws = dict(patient_tuples=train_p_tuples)
+        train_data_kws = dict(patient_tuples=train_p_tuples, pre_processing_pipeline=options.pre_processing_pipeline)
     if cv_data_kws is None:
-        cv_data_kws = dict(patient_tuples=cv_p_tuples)
+        cv_data_kws = dict(patient_tuples=cv_p_tuples, pre_processing_pipeline=options.pre_processing_pipeline)
     if test_data_kws is None:
-        test_data_kws = dict(patient_tuples=test_p_tuples)
+        test_data_kws = dict(patient_tuples=test_p_tuples, pre_processing_pipeline=options.pre_processing_pipeline)
 
     dl_kws = dict(num_workers=num_dl_workers, batch_size=options.batch_size,
                   shuffle=False, random_sample=True)
@@ -363,6 +362,7 @@ default_model_hyperparam_option_kwargs = [
     dict(dest='--cv-sets', default=None, type=str),
     dict(dest='--test-sets', default='MC-19-2', type=str),
     dict(dest='--random-labels', default=False, action="store_true"),
+    dict(dest='--pre-processing-pipeline', default='default', type=str),
 
     dict(dest='--learning-rate', default=0.001, type=float),
     dict(dest='--dense-width', default=None, type=int),
