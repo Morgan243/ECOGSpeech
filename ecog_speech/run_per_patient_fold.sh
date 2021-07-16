@@ -2,33 +2,61 @@
 
 if [ $# -eq 0 ]
 then
-  SET_ID=19
+  SET_ID='MC-10'
   echo "Pass the set id - setting default: $SET_ID"
 else
   SET_ID=$1
 fi
+echo "SET_ID: $SET_ID"
 
-
-if [[ $SET_ID == 19 ]]
+if [[ $SET_ID == 'NW-1' ]]
+then
+  TRAIN_SETS=('NW-1-0,NW-1-1' 'NW-1-1,NW-1-2' 'NW-1-2,NW-1-0')
+  TEST_SETS=('NW-1-2' 'NW-1-0' 'NW-1-1')
+elif [[ $SET_ID == 'NW-2' ]]
+then
+  TRAIN_SETS=('NW-2-0,NW-2-1,NW-2-2' 'NW-2-1,NW-2-2,NW-2-3' 'NW-2-2,NW-2-3,NW-2-0' 'NW-2-3,NW-2-0,NW-2-1')
+  TEST_SETS=('NW-2-3' 'NW-2-0' 'NW-2-1', 'NW-2-2')
+elif [[ $SET_ID == 'NW-3' ]]
+then
+  TRAIN_SETS=('NW-3-0' 'NW-3-1')
+  TEST_SETS=('NW-3-1' 'NW-3-0')
+elif [[ $SET_ID == 'NW-4' ]]
+then
+  TRAIN_SETS=('NW-4-0' 'NW-4-1')
+  TEST_SETS=('NW-4-1' 'NW-4-0')
+elif [[ $SET_ID == 'NW-5' ]]
+then
+  TRAIN_SETS=('NW-5-0,NW-5-1' 'NW-5-1,NW-5-2' 'NW-5-2,NW-5-0')
+  TEST_SETS=('NW-5-2' 'NW-5-0' 'NW-5-1')
+elif [[ $SET_ID == 'NW-6' ]]
+then
+  TRAIN_SETS=('NW-6-0' 'NW-6-1')
+  TEST_SETS=('NW-6-1' 'NW-6-0')
+elif [[ $SET_ID == 'MC-19' ]]
 then
   TRAIN_SETS=('MC-19-0,MC-19-1' 'MC-19-1,MC-19-2' 'MC-19-2,MC-19-0')
   TEST_SETS=('MC-19-2' 'MC-19-0' 'MC-19-1')
-elif [[ $SET_ID == 21 ]]
+elif [[ $SET_ID == 'MC-21' ]]
 then
   TRAIN_SETS=('MC-21-0' 'MC-21-1')
   TEST_SETS=('MC-21-1' 'MC-21-0')
-elif [[ $SET_ID == 22 ]]
+elif [[ $SET_ID == 'MC-22' ]]
 then
   TRAIN_SETS=('MC-22-0,MC-22-1' 'MC-22-1,MC-22-2' 'MC-22-2,MC-22-0')
   TEST_SETS=('MC-22-2' 'MC-22-0' 'MC-22-1')
-elif [[ $SET_ID == 24 ]]
+elif [[ $SET_ID == 'MC-24' ]]
 then
   TRAIN_SETS=('MC-24-0,MC-24-1' 'MC-24-1,MC-24-2' 'MC-24-2,MC-24-0')
   TEST_SETS=('MC-24-2' 'MC-24-0' 'MC-24-1')
-elif [[ $SET_ID == 25 ]]
+elif [[ $SET_ID == 'MC-25' ]]
 then
   TRAIN_SETS=('MC-25-0' 'MC-25-1')
   TEST_SETS=('MC-25-1' 'MC-25-0')
+elif [[ $SET_ID == 'MC-26' ]]
+then
+  TRAIN_SETS=('MC-26-0' 'MC-26-1')
+  TEST_SETS=('MC-26-1' 'MC-26-0')
 fi
 
 if [ -n "$RESULTS_DIR" ]; then
