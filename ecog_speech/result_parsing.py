@@ -347,7 +347,7 @@ def plot_model_overview(results):
     kwarg_str = ", ".join(["%s=%s" % (str(k), str(v)) if (i % 5) or i ==0 else "\n%s=%s" % (str(k), str(v))
                           for i, (k, v) in enumerate(results['model_kws'].items())])
     perf_str = '|| '.join(['%s=%s' % (str(k), str(np.round(results[k], 3))) for k in ['accuracy', 'f1', 'precision', 'recall']])
-    title = (f"({results['uid']})\ntrain:[{results['train_sets']}] || cv:[{results['cv_sets']}] || test:[{results['test_sets']}] \n\
+    title = (f"({results['name']})\ntrain:[{results['train_sets']}] || cv:[{results['cv_sets']}] || test:[{results['test_sets']}] \n\
     Num Params={results['num_params']} || {perf_str}\n\
     {results['model_name']}({kwarg_str})")
     #print(title)
@@ -472,6 +472,37 @@ def make_loss_frame_from_results(results):
     df = pd.DataFrame(results['batch_losses']).T
     df.index.name = 'epoch'
     return df
+
+
+def load_model_from_results(results, base_model_path=None):
+    model_kws = results['model_kws']
+    if base_model_path is not None:
+        model_filename = os.path.split(results['save_model_path'])[-1]
+        model_path = os.path.join(base_model_path, model_filename)
+    else:
+        model_path = results['save_model_path']
+
+    #if base_model_path is None:
+    #    if result_base_path is None:
+    #        result_base_path = results['result_dir']
+        #base_model_path = os.path.join(result_base_path, 'models')
+
+    if results['model_name'] == 'base-sn':
+        model = base.BaseMultiSincNN(**model_kws)
+    elif results['model_name'] == 'tnorm-base-sn':
+        model = base.TimeNormBaseMultiSincNN(**model_kws)
+    elif results['model_name'] == 'base-cnn':
+        model = base.BaseCNN(**model_kws)
+    else:
+        raise ValueError()
+        #raise ValueError(f"Unrecognized model_name: {results['model_name']} in {result_file})")
+
+    with open(model_path, 'rb') as f:
+        model_state = torch.load(f)
+
+    model.load_state_dict(model_state)
+    return model
+    #model.to(options.device)
 
 
 def run_one(options, result_file):
