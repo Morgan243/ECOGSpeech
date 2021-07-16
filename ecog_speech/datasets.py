@@ -731,7 +731,8 @@ class NorthwesternWords(BaseDataset):
         t_word_ecog_df = ecog_df.loc[t_word_slice].dropna()
         t_word_wav_df = speech_df.loc[t_word_slice]
         #display(t_word_ecog_df.describe())
-        scols = self.default_sensor_columns
+        #scols = self.default_sensor_columns
+        scols = self.selected_columns
 
         ecog_std = ecog_df[scols].std()
         cmap = matplotlib.cm.viridis_r
