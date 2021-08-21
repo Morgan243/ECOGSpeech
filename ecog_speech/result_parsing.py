@@ -346,7 +346,10 @@ def plot_model_overview(results):
     lowhz_df, centerhz_df, highhz_df = make_hz_frame_from_results(results)
     kwarg_str = ", ".join(["%s=%s" % (str(k), str(v)) if (i % 5) or i ==0 else "\n%s=%s" % (str(k), str(v))
                           for i, (k, v) in enumerate(results['model_kws'].items())])
+
     perf_str = '|| '.join(['%s=%s' % (str(k), str(np.round(results[k], 3))) for k in ['accuracy', 'f1', 'precision', 'recall']])
+    if results.get('random_labels', False):
+        perf_str += ' !! RANDOM LABELS  !!'
     title = (f"({results['name']})\ntrain:[{results['train_sets']}] || cv:[{results['cv_sets']}] || test:[{results['test_sets']}] \n\
     Num Params={results['num_params']} || {perf_str}\n\
     {results['model_name']}({kwarg_str})")
@@ -362,12 +365,18 @@ def plot_model_overview(results):
 
 ####
 def load_results_to_frame(p):
-    #base_path = "../ecog_speech/results_per_patient_sn_2105_50epochs/"
-    #result_files = glob(os.path.join(p, '*.json'))
     result_files = glob(p)
 
     json_result_data = [json.load(open(f)) for f in tqdm(result_files)]
-    return pd.DataFrame(json_result_data)
+    results_df = pd.DataFrame(json_result_data)
+    #results_df['bw_reg_weight'] = results_df['bw_reg_weight'].fillna(-1)
+    try:
+        results_df['test_patient'] = results_df['test_sets'].str.split('-').apply(lambda l: '-'.join(l[:-1]))
+        results_df['test_fold'] = results_df['test_sets'].str.split('-').apply(lambda l: l[-1])
+    except:
+        print("Unable to parse test patient - was there one?")
+
+    return results_df
 
 
 def plot_agg_performance(results_df):
