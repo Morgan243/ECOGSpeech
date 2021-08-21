@@ -1,6 +1,6 @@
 #!/bin/bash
-NUM_BANDS=(1 2 4 8)
-N_FILTERS=(16 32 64)
+NUM_BANDS=(1 2 3)
+N_FILTERS=(16 32)
 
 for num_bands in "${NUM_BANDS[@]}"
 do
