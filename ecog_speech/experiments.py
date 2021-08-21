@@ -15,6 +15,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 from sklearn.metrics import accuracy_score, f1_score, classification_report, precision_score, recall_score
 
+
 def make_model(options, nww):
     base_kws = dict(
         window_size=int(nww.sample_ixer.window_size.total_seconds() * nww.fs_signal),
@@ -172,6 +173,11 @@ def run_simple(options):
     model.eval()
     outputs_map = trainer.generate_outputs(**eval_dl_map)
     clf_str_map = utils.make_classification_reports(outputs_map)
+
+    train_perf_map = utils.performance(outputs_map['train']['actuals'],
+                                       outputs_map['train']['preds'] > 0.5)
+    cv_perf_map = utils.performance(outputs_map['cv']['actuals'],
+                                   outputs_map['cv']['preds'] > 0.5)
     test_perf_map = utils.performance(outputs_map['test']['actuals'],
                                       outputs_map['test']['preds'] > 0.5)
     #####
@@ -190,6 +196,8 @@ def run_simple(options):
                     num_params=utils.number_of_model_params(model, trainable_only=False),
                     model_kws=model_kws,
                     clf_reports=clf_str_map,
+                    **{'train_'+k: v for k, v in train_perf_map.items()},
+                    **{'cv_'+k: v for k, v in cv_perf_map.items()},
                     **test_perf_map,
                     #evaluation_perf_map=perf_maps,
                     #**pretrain_res,
