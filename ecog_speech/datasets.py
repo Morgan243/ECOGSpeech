@@ -27,6 +27,63 @@ pkg_data_dir = os.path.join(os.path.split(os.path.abspath(__file__))[0], '../dat
 
 os.environ['WANDB_CONSOLE'] = 'off'
 
+#########
+# Torchvision style transformations for use in the datasets and loaders
+@attr.s
+class RollDimension:
+    """
+    Shift all values in a dimension by a random amount, values "rolled off"
+    reappaer at the opposite side.
+    """
+    roll_dim = attr.ib(1)
+    min_roll = attr.ib(-2)
+    max_roll = attr.ib(2)
+    return_roll_amount = attr.ib(False)
+
+    def __call__(self, sample):
+        roll_amount = int(np.random.random_integers(self.min_roll,
+                                                    self.max_roll))
+        #return torch.roll(sample, roll_amount, self.roll_dim)
+        r_sample = np.roll(sample, roll_amount, self.roll_dim)
+
+        if self.return_roll_amount:
+            ret = r_sample, roll_amount
+        else:
+            ret = r_sample
+
+        return ret
+
+@attr.s
+class ShuffleDimension:
+    """
+    Shuffle a dimension of the input sample
+    """
+    shuffle_dim = attr.ib(1)
+
+    def __call__(self, sample):
+        sample = np.copy(sample)
+        # TODO/WARNING : probably won't work for more than 2d?
+        # swap the shuffle_dim to the zeroth index
+        sample = np.transpose(sample, [self.shuffle_dim, 0])
+        # shuffle on the 0-dim in place
+        np.random.shuffle(sample)
+        # Swap the shuffle_dim back - i.e. do same transpose again
+        sample = np.transpose(sample, [self.shuffle_dim, 0])
+        return sample
+
+@attr.s
+class RandomIntLike:
+    """
+    Produce random integers in the specified range with the same shape
+    as the input sample
+    """
+    low = attr.ib(0)
+    high = attr.ib(2)
+
+    def __call__(self, sample):
+        return torch.randint(self.low, self.high, sample.shape, device=sample.device).type_as(sample)
+
+
 ## TODO
 # - Datasets
 #   - Open ECOG from stanford (a bunch of tasks, including speech)
@@ -72,48 +129,9 @@ class BaseDataset(tdata.Dataset):
         return dataset_cls
 
 
-@attr.s
-class RollDimension:
-    roll_dim = attr.ib(1)
-    min_roll = attr.ib(-2)
-    max_roll = attr.ib(2)
-    return_roll_amount = attr.ib(False)
-
-    def __call__(self, sample):
-        roll_amount = int(np.random.random_integers(self.min_roll,
-                                                    self.max_roll))
-        #return torch.roll(sample, roll_amount, self.roll_dim)
-        r_sample = np.roll(sample, roll_amount, self.roll_dim)
-
-        if self.return_roll_amount:
-            ret = r_sample, roll_amount
-        else:
-            ret = r_sample
-
-        return ret
-
-@attr.s
-class ShuffleDimension:
-    shuffle_dim = attr.ib(1)
-
-    def __call__(self, sample):
-        sample = np.copy(sample)
-        # TODO/WARNING : probably won't work for more than 2d?
-        # swap the shuffle_dim to the zeroth index
-        sample = np.transpose(sample, [self.shuffle_dim, 0])
-        # shuffle on the 0-dim in place
-        np.random.shuffle(sample)
-        # Swap the shuffle_dim back - i.e. do same transpose again
-        sample = np.transpose(sample, [self.shuffle_dim, 0])
-        return sample
-
-@attr.s
-class RandomIntLike:
-    low = attr.ib(0)
-    high = attr.ib(2)
-
-    def __call__(self, sample):
-        return torch.randint(self.low, self.high, sample.shape, device=sample.device).type_as(sample)
+class StanfordTasks(BaseDataset):
+    """Place holder for standford data"""
+    pass
 
 @attr.s
 class DEAP(BaseDataset):
@@ -341,12 +359,14 @@ class HarvardSentences(BaseDataset):
                                               wav_i=None, wave_width=None, label_id=None)
 
 
-# Currently this class handles *multiple* patients' data
-# Thinking this will make it more flexable later
-
-
 @attr.s
 class NorthwesternWords(BaseDataset):
+    """
+    Northwestern-style data: one spoken word per cue, aligned brain and audio data
+
+    This class can load multiple trails as once - ensuring correct windowing, but allowing
+    for torch data sampling and other support.
+    """
     env_key = 'NORTHWESTERNWORDS_DATASET'
     default_base_path = environ.get(env_key,
                                     path_map.get(socket.gethostname(),
@@ -398,7 +418,7 @@ class NorthwesternWords(BaseDataset):
         1: [
             ('Northwestern', 1, 1, 1),
             ('Northwestern', 1, 1, 2),
-            ('Northwestern', 1, 1, 3),
+            #('Northwestern', 1, 1, 3),
         ],
         2: [
             ('Northwestern', 2, 1, 1),
@@ -1137,6 +1157,9 @@ class NorthwesternWords(BaseDataset):
 
 @attr.s
 class ChangNWW(NorthwesternWords):
+    """
+    Northwester-style with Chang pre-processing steps
+    """
     #data_subset = 'Preprocessed/Chang1'
     data_subset = 'Preprocessed/Chang3'
     mat_d_signal_key = 'signal'
@@ -1183,19 +1206,19 @@ class ChangNWW(NorthwesternWords):
         return p_map
 
     @staticmethod
-    def get_features(data_map, ix, label, ecog_transform=None):
-        kws = NorthwesternWords.get_features(data_map, ix, label, ecog_transform)
+    def get_features(data_map, ix, label, ecog_transform=None, index_loc=False):
+        kws = NorthwesternWords.get_features(data_map, ix, label, ecog_transform, index_loc)
         return kws
 
     @staticmethod
-    def get_targets(data_map, ix, label):
-        kws = NorthwesternWords.get_targets(data_map, ix, label)
+    def get_targets(data_map, ix, label, target_transform=None):
+        kws = NorthwesternWords.get_targets(data_map, ix, label, target_transform=target_transform)
         kws['mfcc'] = torch.from_numpy(data_map['mfcc'].loc[ix].values).float()
         return kws
 
     @classmethod
     def load_data(cls, location=None, patient=None, session=None, trial=None, base_path=None,
-                  parse_mat_data=True, sensor_columns=None, verbose=True):
+                  parse_mat_data=True, sensor_columns=None, bad_sensor_method='zero', verbose=True):
         #kws = dict(location=lcoa
         #           )
         kws = locals()
@@ -1209,9 +1232,9 @@ class ChangNWW(NorthwesternWords):
         chang_data['audio'] = nww_data['audio']
 
         if parse_mat_data:
-            return  cls.parse_mat_arr_dict(chang_data,
-                                           sensor_columns=cls.default_sensor_columns if sensor_columns is None else sensor_columns,
-                                           verbose=verbose)
+            return cls.parse_mat_arr_dict(chang_data,
+                                          sensor_columns=cls.default_sensor_columns if sensor_columns is None else sensor_columns,
+                                          verbose=verbose)
         return chang_data
 
 @attr.s

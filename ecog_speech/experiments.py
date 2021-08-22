@@ -3,20 +3,16 @@ import time
 from datetime import datetime
 from os.path import join as pjoin
 import json
-from ecog_speech import datasets
-import pandas as pd
-import numpy as np
-import matplotlib
 import torch
-from ecog_speech import datasets, feature_processing, utils
-from tqdm.auto import tqdm
+from ecog_speech import datasets, utils
 from ecog_speech.models import base
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
-from sklearn.metrics import accuracy_score, f1_score, classification_report, precision_score, recall_score
 
 
 def make_model(options, nww):
+    """
+    Helper method - Given command-line options and a NorthwesterWords derived dataset, build the model
+    specified in the options.
+    """
     base_kws = dict(
         window_size=int(nww.sample_ixer.window_size.total_seconds() * nww.fs_signal),
         dropout=options.dropout,
@@ -63,7 +59,31 @@ def make_model(options, nww):
 
 
 def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv_data_kws=None, test_data_kws=None,
-                              num_dl_workers=8 ) -> tuple:
+                              num_dl_workers=8) -> tuple:
+    """
+    Helper method to create instances of dataset_cls as specified in the command-line options and
+    additional keyword args.
+    Parameters
+    ----------
+    options: object
+        Options object build using the utils module
+    dataset_cls: Derived class of BaseDataset (default=None)
+        E.g. NorthwesterWords
+    train_data_kws: dict (default=None)
+        keyword args to train version of the dataset
+    cv_data_kws: dict (default=None)
+        keyword args to cv version of the dataset
+    test_data_kws: dict (default=None)
+        keyword args to test version of the dataset
+    num_dl_workers: int (default=8)
+        Number of workers in each dataloader. Can be I/O bound, so sometimes okay to over-provision
+
+    Returns
+    -------
+    dataset_map, dataloader_map, eval_dataloader_map
+        three-tuple of (1) map to original dataset (2) map to the constructed dataloaders and
+        (3) Similar to two, but not shuffled and larger batch size (for evaluation)
+    """
     from torchvision import transforms
     if dataset_cls is None:
         dataset_cls = datasets.BaseDataset.get_dataset_by_name(options.dataset)
@@ -138,7 +158,21 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     return dataset_map, dataloader_map, eval_dataloader_map
 
 
-def run_simple(options):
+def run(options):
+    """
+    Run an experiment using options used with argument parser (CLI).
+
+    Parameters
+    ----------
+    options: opbject
+        If using as a library, use the utils.build_default_options and pass the default_option_kwargs variable in this
+        module as the default_option_kwargs.
+
+    Returns
+    -------
+     Trainer, outputs_map
+        A two-tuple of (1) Instance of Trainer and (2) dictionary of partition results
+    """
     dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options)
     model, model_kws = make_model(options, dataset_map['train'])
     print("Building trainer")
@@ -233,134 +267,6 @@ def run_simple(options):
 
     return trainer, outputs_map
 
-def run_kfold(options):
-    #nww-kfold-19
-    pass
-
-
-def run(options):
-    if 'kfold' in options.dataset:
-        return run_kfold(options)
-    else:
-        return run_simple(options)
-
-
-def example_run(options):
-
-    ######
-    # First some preprocessing that's a little hacky since
-    # we load up the whole dataset first to determine where
-    # the labels are, then remake datasets from the partitions
-    #####
-
-
-    # Loads the dataset and uses some feature processing
-    # to find areas where speech is happening and label it
-    nww = datasets.NorthwesternWords(power_q=options.power_q,
-                                     patient_tuples=(('Mayo Clinic', 19, 1, 1),
-                                                        #('Mayo Clinic', 19, 1, 2),
-                                                        #('Mayo Clinic', 19, 1, 3)
-                                                        ),
-                                     #ecog_window_n=75
-                                     )
-    from torchvision import transforms
-    transform = None
-    if options.roll_channels:
-        transform = transforms.Compose([
-            datasets.RollDimension(roll_dim=0, max_roll=len(nww.default_sensor_columns) - 1)
-        ])
-
-    # Word index series is the same length as the speech data
-    # and values idetify speaking regions (negative values are
-    # the preceding silence), so take the max to get the number
-    # of silence/speech pairs
-    #all_ixes = range(int(nww.word_index.max() + 1))
-    all_ixes = range(nww.flat_keys.shape[0])
-
-    # partition the speech and silence pairs
-    #train_ixes, cv_ixes = train_test_split(all_ixes, train_size=.7)
-    #cv_ixes, test_ixes = train_test_split(cv_ixes, train_size=.5)
-
-
-    ######
-    # Now we are ready to create our datasets for training and testing
-    #####
-    train_nww = datasets.NorthwesternWords(#selected_word_indices=train_ixes,
-        transform=transform,
-                                              data_from=nww)
-    #cv_nww = data_loader.NorthwesternWords(selected_word_indices=cv_ixes,
-    #                                       data_from=nww)
-    cv_nww = datasets.NorthwesternWords(patient_tuples=(('Mayo Clinic', 19, 1, 2),),
-                                        power_q=options.power_q)
-    #test_nww = data_loader.NorthwesternWords(selected_word_indices=test_ixes,
-    #                                         data_from=nww)
-    test_nww = datasets.NorthwesternWords(patient_tuples=(('Mayo Clinic', 19, 1, 3),),
-                                          power_q=options.power_q)
-
-    # Get pytorch dataloaders
-    dl_kws = dict(num_workers=4, batch_size=256,
-                  shuffle=False, random_sample=True)
-    print("Building data loader")
-    train_dl = train_nww.to_dataloader(**dl_kws)
-    cv_dl = cv_nww.to_dataloader(**dl_kws)
-    #test_dl = test_nww.to_dataloader(**dl_kws)
-
-    print("Building model")
-    # starter test model for detecting speech from brain waves
-    # Learn band extraction at the top
-    model, model_kws = make_model(options, nww)
-
-    print(model)
-    ####
-    dl_eval_kws = dict(num_workers=4, batch_size=256,
-                       shuffle=False, random_sample=False)
-    eval_dset_map = dict(train_dl=train_nww.to_dataloader(**dl_eval_kws),
-                         cv_dl=cv_nww.to_dataloader(**dl_eval_kws),
-                         test_dl=test_nww.to_dataloader(**dl_eval_kws))
-
-    print("Building trainer")
-    trainer = base.Trainer(model=model, train_data_gen=train_dl,
-                           cv_data_gen=cv_dl)
-    print("Training")
-    losses = trainer.train(options.n_epochs)
-    model.load_state_dict(trainer.get_best_state())
-    trainer.model.eval()
-
-    outputs_map = trainer.generate_outputs(**eval_dset_map)
-    utils.make_classification_reports(outputs_map)
-    test_perf_map = utils.performance(outputs_map['test_dl']['actuals'],
-                                      outputs_map['test_dl']['preds'] > 0.5)
-
-    if options.save_model_path is not None:
-        print("Saving model to " + options.save_model_path)
-        torch.save(trainer.model.state_dict(), options.save_model_path)
-
-
-###
-    uid = str(uuid.uuid4())
-    t = int(time.time())
-    name = "%d_%s_TL.json" % (t, uid)
-    res_dict = dict(#path=path,
-                    name=name,
-                    datetime=str(datetime.now()), uid=uid,
-                    batch_losses=list(losses),
-                    num_trainable_params=utils.number_of_model_params(model),
-                    num_params=utils.number_of_model_params(model, trainable_only=False),
-                    **test_perf_map,
-                    #evaluation_perf_map=perf_maps,
-                    #**pretrain_res,
-                    #**perf_map,
-        **vars(options))
-
-    if options.result_dir is not None:
-        path = pjoin(options.result_dir, name)
-        print(path)
-        res_dict['path'] = path
-        with open(path, 'w') as f:
-            json.dump(res_dict, f)
-
-    return trainer, outputs_map
-
 
 default_model_hyperparam_option_kwargs = [
     dict(dest='--model-name', default='base-sn', type=str),
@@ -403,8 +309,6 @@ default_option_kwargs = default_model_hyperparam_option_kwargs + [
     dict(dest='--tag', default=None),
     dict(dest='--result-dir', default=None),
 ]
-
-# TODO: Config, CLI, etc
 
 if __name__ == """__main__""":
     parser = utils.build_argparse(default_option_kwargs,
