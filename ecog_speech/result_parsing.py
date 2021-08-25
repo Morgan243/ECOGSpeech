@@ -364,7 +364,7 @@ def plot_model_overview(results):
 
 
 ####
-def load_results_to_frame(p):
+def load_results_to_frame(p, config_params=None):
     result_files = glob(p)
 
     json_result_data = [json.load(open(f)) for f in tqdm(result_files)]
@@ -376,7 +376,38 @@ def load_results_to_frame(p):
     except:
         print("Unable to parse test patient - was there one?")
 
-    return results_df
+
+    ####
+    if config_params is None:
+        return results_df
+    elif isinstance(config_params, bool) and config_params:
+        config_params = [n for n in experiments.all_model_hyperparam_names if n in results_df.columns.values]
+
+    print("All config params to consider: " + ", ".join(config_params))
+    #config_params = default_config_params if config_params is None else config_params
+    nun_config_params = results_df[config_params].nunique()
+
+    config_cols = nun_config_params[nun_config_params > 1].index.tolist()
+    fixed_config_cols = nun_config_params[nun_config_params == 1].index.tolist()
+
+    ###
+
+    try:
+        fixed_unique = results_df[fixed_config_cols].apply(pd.unique)
+        if isinstance(fixed_unique, pd.DataFrame):
+            fixed_d = fixed_unique.iloc[0].to_dict()
+        else:
+            fixed_d = fixed_unique.to_dict()
+
+        fixed_d_str = "\n\t".join(f"{k}={v}" for k, v in fixed_d.items())
+        #print(f"Fixed Params: {', '.join(fixed_config_cols)}")
+        print(f"Fixed Params:\n------------\n\t{fixed_d_str}")
+        print(f"Changing Params: {', '.join(config_cols)}\n-------------\n")
+        print(results_df.groupby(config_cols).size().unstack(-1))
+    except:
+        print("Unable to summarize parameterization of result files... new result structure?")
+
+    return fixed_config_cols, config_cols, results_df
 
 
 def plot_agg_performance(results_df):
