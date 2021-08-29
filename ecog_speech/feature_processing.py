@@ -56,6 +56,7 @@ def fft(data, fs=1000):
     s.index.name = 'hz'
     return s
 
+
 def filter(s, band, sfreq=1000, verbose=False, n_jobs=4,
            method='fir'):
     try:
@@ -90,6 +91,7 @@ def filter(s, band, sfreq=1000, verbose=False, n_jobs=4,
 
     return ret
 
+
 def make_hilbert_df(x):
     """
     Extracts analytic signal and stores components into a DataFrame
@@ -120,6 +122,9 @@ def make_hilbert_df(x):
 ###
 @attr.s
 class ProcessPipeline:
+    """
+    Collection of ProcessSteps to be run in a sequence
+    """
     name = attr.ib(None)
     steps = attr.ib(None)
 
@@ -151,7 +156,28 @@ class ProcessPipeline:
 
 @attr.s
 class ProcessStep:
+    """
+    Perform arbitrary processing on data_map in abstract `step` method. Support
+    remapping inputs/outputs (i.e. x[k] = x[v] from k,v in d.items()) and
+    overidding an entry before passing to step.
+
+    (TODO: How to add params docs in attrs? Seems to be an open issue...
+    Parameters
+    ----------
+    name : str or None (default=None)
+        Friendly/display name of the process step
+    input_override : dict or None (default=None)
+        key-value pairs to replace in the input key-value pairs before being passed to step
+    input_remap : dict or None (default=None)
+        key-value pairs (k, v), set value at k to value at v in the input map
+    expects : list or None (default=None)
+        List of keys expected to be found in the input data mapping
+    outputs : list or None (default=None)
+        List of keys this process will add/modify in the data map
+
+    """
     name = attr.ib(None)
+
 
     input_override = attr.ib(None)
     input_remap = attr.ib(None)
@@ -262,45 +288,62 @@ class WordStopStartTimeMap(ProcessStep):
 
 @attr.s
 class PowerThreshold(ProcessStep):
+    """
+    Produce a new stim signal from audio levels peak amplitude over N samples
+
+    Take the max absolute value of audio over `window_samples` sample rolling window.
+    Produces step signal, positive 1 where this value is over the threshold *and*
+    the stim signal is not 0.
+    """
     name = 'threshold'
 
     #input_override = attr.ib(None)
     threshold = attr.ib(0.007)
+    window_samples = attr.ib(48000)
 
     #input_remap = attr.ib(None)#attr.Factory(lambda :dict(stim='stim_pwrt', stim_diff='stim_pwrt_diff')))
-    output_remap = attr.ib(attr.Factory(lambda :dict(stim='stim_pwrt', stim_diff='stim_pwrt_diff')))
+    output_remap = attr.ib(attr.Factory(lambda: dict(stim='stim_pwrt', stim_diff='stim_pwrt_diff')))
 
     expects = ['audio', 'stim']
     outputs = ['stim_pwrt', 'stim_pwrt_diff', 'rolling_audio_pwr']
 
     def step(self, data_map):
-        return self.stim_adjust__power_threshold(data_map, threshold=self.threshold)
+        return self.stim_adjust__power_threshold(data_map, threshold=self.threshold,
+                                                 window_samples=self.window_samples)
 
     @staticmethod
-    def stim_adjust__power_threshold(data_map, threshold=0.007):
+    def stim_adjust__power_threshold(data_map, threshold=0.007, window_samples=48000):
         audio_s = data_map['audio']
         stim_s = data_map['stim']
 
-        rolling_pwr = audio_s.abs().rolling(48000).max().reindex(stim_s.index).fillna(method='ffill')
+        rolling_pwr = audio_s.abs().rolling(window_samples).max().reindex(stim_s.index).fillna(method='ffill')
         stim_auto_m = (stim_s != 0.) & (rolling_pwr > threshold)
-        # Subtract one for no speech (0)
+
+        # Is the number of unique word codes different when using the threshold selected subset we
+        # just produced (stim_auto_m)?
+        # - Subtract one for no speech (0)
         eq = (stim_s.nunique(dropna=False) - 1) == stim_s[stim_auto_m].nunique(dropna=False)
 
         if not eq:
             msg = "stim_s and stim_auto not equal: %d - 1 != %d" % (stim_s.nunique(False),
                                                                     stim_s[stim_auto_m].nunique(False))
             print(msg)
+
+        # Create a new stim array with original word code where it's set, otherwise zero
         stim_pwrt_s = pd.Series(np.where(stim_auto_m, stim_s, 0), index=stim_s.index)
         stim_pwrt_diff_s = stim_pwrt_s.diff().fillna(0).astype(int)
 
         updates = dict(stim_pwrt=stim_pwrt_s, stim_pwrt_diff=stim_pwrt_diff_s,
                        rolling_audio_pwr=rolling_pwr)
-        #remaps = dict(stim='stim_pwrt', stim_diff='stim_pwrt_diff')
-        #return updates, remaps
         return updates
 
 @attr.s
 class PowerQuantile(ProcessStep):
+    """
+    Produce a new stim signal from audio levels. Takes the mean absolute value of a rolling window,
+    then sets the new stim signal where both the audio mean absolute value is above the chosen
+    quantile level and the original stim code is set.
+    """
     q = attr.ib(0.75)
     trim_sample_n = attr.ib(50)
 
@@ -347,8 +390,13 @@ class PowerQuantile(ProcessStep):
         #return updates, remaps
         return updates
 
+
 @attr.s
 class SubsampleECOG(ProcessStep):
+    """
+    Take every `rate` sample - e.g. if rate == 2, every other sample is kept, halving rate. Doesn't
+    do any interpolation, so must be whole number step sizes.
+    """
     rate = attr.ib(2)
     expects = ['ecog', 'fs_signal', 'stim', 'stim_diff']
     outputs = ['ecog_subs', 'fs_signal_subs', 'stim_subs', 'stim_diff_subs']
@@ -364,8 +412,15 @@ class SubsampleECOG(ProcessStep):
                     stim_diff_subs=data_map['stim_diff'].iloc[::self.rate,],
                     fs_signal_subs=int((1. / self.rate) * data_map['fs_signal']))
 
+
 @attr.s
 class SampleIndicesFromStim(ProcessStep):
+    """
+    Produces a mapping of stim_codes (word ids) to a list of window indices into the source data.
+
+    Expects values above 0 to True positives, with different values for different stimulus in continuous regions.
+    i.e. this probably won't work when a stim code can be separated/interleaved with other different codes.
+    """
     expects = ['stim_diff']
     outputs = ['sample_index_map']
     ecog_window_size = attr.ib(600)
@@ -374,11 +429,11 @@ class SampleIndicesFromStim(ProcessStep):
     ecog_window_shift_sec = attr.ib(pd.Timedelta(0.75, 's'))
 
     def step(self, data_map):
-        return self.make_sample_indices(data_map, self.ecog_window_size, self.ecog_window_n,
+        return self.make_sample_indices(data_map['stim_diff'], self.ecog_window_size, self.ecog_window_n,
                                         self.ecog_window_step_sec, self.ecog_window_shift_sec)
 
     @staticmethod
-    def make_sample_indices(data_map, win_size, ecog_window_n, ecog_window_step_sec, ecog_window_shift_sec):
+    def make_sample_indices(label_index, win_size, ecog_window_n, ecog_window_step_sec, ecog_window_shift_sec):
         """
         Group by a label index (repeated label measures, one per sample)
         to find start and end points, then slice at the appropriate offsets
@@ -390,7 +445,7 @@ class SampleIndicesFromStim(ProcessStep):
         :param win_step:
         :return:
         """
-        label_index = data_map['stim_diff']
+        #label_index = data_map['stim_diff']
 
         sample_indices = dict()
         ####
@@ -402,14 +457,17 @@ class SampleIndicesFromStim(ProcessStep):
         neg_grp = neg_ix.groupby(neg_ix)
 
         # Positive windows extracted first - this way negative windows
-        # can potentially be extracted based on the postive windows
+        # can potentially be extracted based on the positive windows
         for wrd_id, wave_wrd_values in pos_grp:
             start_t = wave_wrd_values.index.min() - ecog_window_shift_sec
 
             sample_indices[wrd_id] = [label_index
-                                          .loc[start_t + i * ecog_window_step_sec:]
-                                          .iloc[:win_size]
-                                          .index
+                                        # Filter the start up to start time + all previous steps
+                                        .loc[start_t + i * ecog_window_step_sec:]
+                                        # Take the next N samples to get correct window size
+                                        .iloc[:win_size]
+                                        # only store the index, not all the data
+                                        .index
                                       for i in range(ecog_window_n)]
 
         for wrd_id, wave_wrd_values in neg_grp:
@@ -417,7 +475,8 @@ class SampleIndicesFromStim(ProcessStep):
 
             # Where the last positive window ends
             pos_ix = sample_indices[-wrd_id][-1].max()
-            # Start from positive window if there's overlap
+            # Start from the end of positive window if it overlaps our current start time
+            # Should only be relevant for first window
             if start_t < pos_ix:
                 start_t = pos_ix
 
@@ -427,7 +486,7 @@ class SampleIndicesFromStim(ProcessStep):
                                           .index
                                       for i in range(ecog_window_n)]
 
-        # Hacky, but just remove anything that's not the right side from the end
+        # Hacky, but just remove anything that's not the right size
         # sample_indices[wrd_id] = [ixes for ixes in sample_indices[wrd_id]
         #                          if len(ixes) == win_size]
         sample_indices = {w: [ix for ix in ixes if len(ix) == win_size]
