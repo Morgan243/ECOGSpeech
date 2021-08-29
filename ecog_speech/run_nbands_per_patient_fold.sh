@@ -1,5 +1,5 @@
 #!/bin/bash
-NUM_BANDS=(1 2 3)
+NUM_BANDS=(1 3 5)
 #N_FILTERS=(16 32)
 n_filters=16
 

@@ -84,8 +84,8 @@ fi
 mkdir -p $RESULTS_DIR
 mkdir -p $MODEL_SAVE_DIR
 
-NUM_BANDS=(1 2 4 8)
-N_FILTERS=(16 32 64)
+#NUM_BANDS=(1 2 4 8)
+#N_FILTERS=(16 32 64)
 
 
 for (( i=0; i<${#TRAIN_SETS[*]}; i++ ));
