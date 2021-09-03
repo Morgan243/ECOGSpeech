@@ -11,8 +11,10 @@ echo "SET_ID: $SET_ID"
 
 if [[ $SET_ID == 'NW-1' ]]
 then
-  TRAIN_SETS=('NW-1-0,NW-1-1' 'NW-1-1,NW-1-2' 'NW-1-2,NW-1-0')
-  TEST_SETS=('NW-1-2' 'NW-1-0' 'NW-1-1')
+  #TRAIN_SETS=('NW-1-0,NW-1-1' 'NW-1-1,NW-1-2' 'NW-1-2,NW-1-0')
+  #TEST_SETS=('NW-1-2' 'NW-1-0' 'NW-1-1')
+  TRAIN_SETS=('NW-1-0' 'NW-1-1')
+  TEST_SETS=('NW-1-1' 'NW-1-0')
 elif [[ $SET_ID == 'NW-2' ]]
 then
   TRAIN_SETS=('NW-2-0,NW-2-1,NW-2-2' 'NW-2-1,NW-2-2,NW-2-3' 'NW-2-2,NW-2-3,NW-2-0' 'NW-2-3,NW-2-0,NW-2-1')
