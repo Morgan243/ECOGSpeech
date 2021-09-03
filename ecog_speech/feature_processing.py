@@ -241,19 +241,21 @@ class WordStopStartTimeMap(ProcessStep):
     outputs = ['start_times_d', 'stop_times_d']
 
     def step(self, data_map):
-        return self.default_preprocessing(data_map, self.verbose)
+        return self.default_preprocessing(data_map['stim_diff'],
+                                          data_map['word_code_d'],
+                                          self.verbose)
 
     @staticmethod
-    def default_preprocessing(data_map, verbose=False):
-        stim_s = data_map['stim']
-        stim_diff_s = data_map['stim_diff']
+    def default_preprocessing(stim_diff_s, word_code_d, verbose=False):
+        #stim_s = data_map['stim']
+        #stim_diff_s = data_map['stim_diff']
         ######
         # Stim event codes and txt
         # 0 is neutral, so running difference will identify the onsets
         # stim_diff_s = stim_s.diff().fillna(0).astype(int)
         # return dict(stim_diff=stim_diff_s)
 
-        word_code_d = data_map['word_code_d']
+        #word_code_d = data_map['word_code_d']
         ######
         # Stim event codes and txt
         # 0 is neutral, so running difference will identify the onsets
@@ -308,13 +310,13 @@ class PowerThreshold(ProcessStep):
     outputs = ['stim_pwrt', 'stim_pwrt_diff', 'rolling_audio_pwr']
 
     def step(self, data_map):
-        return self.stim_adjust__power_threshold(data_map, threshold=self.threshold,
+        return self.stim_adjust__power_threshold(data_map['audio'], data_map['stim'], threshold=self.threshold,
                                                  window_samples=self.window_samples)
 
     @staticmethod
-    def stim_adjust__power_threshold(data_map, threshold=0.007, window_samples=48000):
-        audio_s = data_map['audio']
-        stim_s = data_map['stim']
+    def stim_adjust__power_threshold(audio_s, stim_s, threshold=0.007, window_samples=48000):
+        #audio_s = data_map['audio']
+        #stim_s = data_map['stim']
 
         rolling_pwr = audio_s.abs().rolling(window_samples).max().reindex(stim_s.index).fillna(method='ffill')
         stim_auto_m = (stim_s != 0.) & (rolling_pwr > threshold)
@@ -352,12 +354,13 @@ class PowerQuantile(ProcessStep):
     outputs = ['stim_pwrq', 'stim_pwrq_diff', 'rolling_audio_pwr']
 
     def step(self, data_map):
-        return self.stim_adjust__power_quantile(data_map, self.q, self.trim_sample_n)
+        return self.stim_adjust__power_quantile(data_map['audio'], data_map['stim'],
+                                                self.q, self.trim_sample_n)
 
     @staticmethod
-    def stim_adjust__power_quantile(data_map, q=0.75, trim_sample_n=50):
-        audio_s = data_map['audio']
-        stim_s = data_map['stim']
+    def stim_adjust__power_quantile(audio_s, stim_s, q=0.75, trim_sample_n=50):
+        #audio_s = data_map['audio']
+        #stim_s = data_map['stim']
 
         rolling_pwr = audio_s.abs().rolling(48000).mean().reindex(stim_s.index).fillna(method='ffill').fillna(0)
         # TODO: before taking quantile or grabbing slice, clip ends to avoid positioning at extreme of stim code region
@@ -425,7 +428,7 @@ class SampleIndicesFromStim(ProcessStep):
     outputs = ['sample_index_map']
     ecog_window_size = attr.ib(600)
     ecog_window_n = attr.ib(60)
-    ecog_window_step_sec =  attr.ib(pd.Timedelta(0.01, 's'))
+    ecog_window_step_sec = attr.ib(pd.Timedelta(0.01, 's'))
     ecog_window_shift_sec = attr.ib(pd.Timedelta(0.75, 's'))
 
     def step(self, data_map):
@@ -513,27 +516,32 @@ class MFCC(ProcessStep):
     #    import torchaudio
     #    self.mfcc_m = torchaudio.transforms.MFCC()
     def step(self, data_map):
+        return dict(mfcc=self.aligned_ecog_mfcc(self.num_mfcc, data_map['ecog'].index, data_map['audio'], data_map['fs_audio']))
+
+    @staticmethod
+    def aligned_ecog_mfcc(num_mfcc, ix_to_align, audio_s, audio_rate):
         from python_speech_features import mfcc
-        sig = data_map['audio']
-        rate = data_map['fs_audio']
+        #sig = data_map['audio']
+        #rate = data_map['fs_audio']
         winstep = 1 / 200
         winlen = 0.02
         nfft = 1024
 
-        mfcc_feat = mfcc(sig, rate, winlen=winlen, winstep=winstep, nfft=nfft,
-                         numcep=self.num_mfcc)
+        mfcc_feat = mfcc(audio_s, audio_rate, winlen=winlen, winstep=winstep, nfft=nfft,
+                         numcep=num_mfcc)
 
-        max_t = data_map['ecog'].index.max()
+        max_t = ix_to_align.max()
         mfcc_sample_rate = mfcc_feat.shape[0] / max_t.total_seconds()
 
         ix = pd.TimedeltaIndex(pd.RangeIndex(0, mfcc_feat.shape[0]) / mfcc_sample_rate, unit='s')
 
         mfcc_df = pd.DataFrame(mfcc_feat, index=ix, columns=[f"mfcc{i}" for i in range(mfcc_feat.shape[-1])])
 
-        reix_mfcc_df = mfcc_df.reindex(data_map['ecog'].index,
+        reix_mfcc_df = mfcc_df.reindex(ix_to_align,
                                        tolerance=pd.Timedelta(15, unit='ms'),
                                        method='nearest')
-        return dict(mfcc=reix_mfcc_df)
+        return reix_mfcc_df
+        #return dict(mfcc=reix_mfcc_df)
 
         #self.mfcc_f = getattr(self, 'mfcc_f',
         #                      torchaudio.transforms.MFCC(data_map['fs_audio'],
@@ -651,12 +659,12 @@ class ChangECOGEnvelope(ProcessStep):
     sfreq = attr.ib(1200)
 
     def step(self, data_map):
-        return dict(chang_envelope=self.chang_envelope(data_map, sfreq=self.sfreq))
+        return dict(chang_envelope=self.chang_envelope(data_map['ecog'], sfreq=self.sfreq))
 
 
     @staticmethod
-    def chang_envelope(data_map, band=(70, 150), sfreq=1200):
-        ecog_df = data_map['ecog']
+    def chang_envelope(ecog_df, band=(70, 150), sfreq=1200):
+        #ecog_df = data_map['ecog']
         filt_df = ecog_df.apply(lambda s: filter(s, band, sfreq=sfreq))
         chang_df = filt_df.apply(lambda s: make_hilbert_df(s)['envelope'].rename(f'{s.name}_chang_env'))
         # Resample to 200 times a second (200HZ)
