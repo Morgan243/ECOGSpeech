@@ -16,11 +16,11 @@ import attr
 import socket
 from ecog_speech import feature_processing
 
-try:
-    import torchaudio
-except ModuleNotFoundError as e:
-    print("COULD NOT IMPORT TORCHAUDIO (only a problem if using mfcc..?)")
-    torchaudio = None
+#try:
+#    import torchaudio
+#except ModuleNotFoundError as e:
+#    print("COULD NOT IMPORT TORCHAUDIO (only a problem if using mfcc..?)")
+#    torchaudio = None
 
 path_map = dict()
 pkg_data_dir = os.path.join(os.path.split(os.path.abspath(__file__))[0], '../data')
@@ -133,8 +133,10 @@ class StanfordTasks(BaseDataset):
     """Place holder for standford data"""
     pass
 
+
 @attr.s
 class DEAP(BaseDataset):
+    """WIP - Incomplete"""
     env_key = "DEAP_DATASET"
     default_base_path = environ.get(env_key,
                                     path_map.get(socket.gethostname(),
@@ -1138,7 +1140,8 @@ class NorthwesternWords(BaseDataset):
             data_map = self.data_maps[k]
             ecog_torch_arr = torch.from_numpy(data_map['ecog'].values).float()
             outputs = list()
-            for _iix in range(0, ecog_torch_arr.shape[0] - self.ecog_window_size, win_step):
+            for _iix in tqdm(range(0, ecog_torch_arr.shape[0] - self.ecog_window_size, win_step),
+                            desc='creating windows'):
                 _ix = slice(_iix, _iix + self.ecog_window_size)
                 feats = self.get_features(data_map, _ix, ecog_transform=ecog_transform, index_loc=True)
                 # TODO: Just grabbing the max stim wode in the range - better or more useful way to do this?
@@ -1154,6 +1157,7 @@ class NorthwesternWords(BaseDataset):
         #if len(ret) == 1:
         #    ret = list(dl_map.values())[0]
         return ret
+
 
 @attr.s
 class ChangNWW(NorthwesternWords):

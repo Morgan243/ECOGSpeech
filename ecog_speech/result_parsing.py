@@ -516,6 +516,7 @@ def make_loss_frame_from_results(results):
 
 def load_model_from_results(results, base_model_path=None):
     model_kws = results['model_kws']
+
     if base_model_path is not None:
         model_filename = os.path.split(results['save_model_path'])[-1]
         model_path = os.path.join(base_model_path, model_filename)
@@ -544,6 +545,24 @@ def load_model_from_results(results, base_model_path=None):
     return model
     #model.to(options.device)
 
+
+def load_dataset_from_results(results, partition=None):
+    all_parts = ["test", "cv", "train"]
+    if partition is None:
+        return {k: load_dataset_from_results(results, k)
+                for k in all_parts if results[k+'_sets'] is not None}
+
+    model_kws = results['model_kws']
+    # Handle if the user puts in train/cv/test, otherwise use the string as given
+    eval_set_str = {k: results[k + "_sets"] for k in all_parts}.get(partition,
+                                                                                  partition)
+
+    dataset_cls = datasets.BaseDataset.get_dataset_by_name(results['dataset'])
+    data_k_l = dataset_cls.make_tuples_from_sets_str(eval_set_str)
+    dset = dataset_cls(patient_tuples=data_k_l,
+                       # TODO: This may hide problems or cause issues?
+                       sensor_columns=list(range(model_kws['in_channels'])))
+    return dset
 
 def run_one(options, result_file):
     output_fig_map = dict()
