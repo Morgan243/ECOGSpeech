@@ -44,6 +44,18 @@ def make_model(options, nww):
                          band_spacing=options.sn_band_spacing,
                          **base_kws)
         model = base.TimeNormBaseMultiSincNN(**model_kws)
+    elif options.model_name == 'tnorm-base-sn-v2':
+        model_kws = dict(in_channels=len(nww.selected_columns),
+                         n_bands=options.sn_n_bands,
+                         n_cnn_filters=options.n_cnn_filters,
+                         sn_padding=options.sn_padding,
+                         sn_kernel_size=options.sn_kernel_size,
+                         in_channel_dropout_rate=options.in_channel_dropout_rate,
+                         fs=nww.fs_signal,
+                         cog_attn=options.cog_attn,
+                         band_spacing=options.sn_band_spacing,
+                         **base_kws)
+        model = base.TimeNormBaseMultiSincNN_v2(**model_kws)
     elif options.model_name == 'base-cnn':
         model_kws = dict(in_channels=len(nww.selected_columns),
                          in_channel_dropout_rate=options.in_channel_dropout_rate,
