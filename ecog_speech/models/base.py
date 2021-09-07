@@ -346,7 +346,6 @@ class BaseMultiSincNN(torch.nn.Module):
         else:
             return parameters
 
-
     @staticmethod
     def parse_band_parameter_training_hist(batch_results, fs=1200, min_low_hz=1, min_band_hz=3):
         channel_param_bandhz_map = dict()
@@ -370,7 +369,6 @@ class BaseMultiSincNN(torch.nn.Module):
         centerhz_df_map = {ch_i: (lowhz_df_map[ch_i] + highhz_df_map[ch_i]) / 2
                            for ch_i in lowhz_df_map.keys()}
         return lowhz_df_map, highhz_df_map, centerhz_df_map
-
 
     @staticmethod
     def plot_sincnet_batch_results(lowhz_df_map, highhz_df_map, centerhz_df_map):
@@ -478,6 +476,124 @@ class TimeNormBaseMultiSincNN(BaseMultiSincNN):
                                  batch_norm=False)
         layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,
                                  batch_norm=False)
+        layer_list += [Flatten(), self.dropout_cls(self.dropout)]
+        return layer_list
+
+
+
+#####
+class MultiDimBatchNorm2d(torch.nn.Module):
+    def __init__(self, num_features, agg_dims=(0, 3), eps=1e-5, momentum=0.1, affine=True, track_running_stats=True):
+        super(MultiDimBatchNorm2d, self).__init__()
+        # num_features, eps, momentum, affine, track_running_stats)
+        self.num_features = list(num_features) if isinstance(num_features, (tuple, list)) else [num_features]
+        self.agg_dims = list(agg_dims)
+        self.eps = eps
+        self.momentum = momentum
+        self.affine = affine
+        self.track_running_stats = track_running_stats
+        self.weight = torch.nn.Parameter(torch.ones(num_features))
+        self.bias = torch.nn.Parameter(torch.zeros(num_features))
+
+        ####
+        self.num_batches_tracked = None
+        self.num_feature_values = np.prod([nf for nf in self.num_features])
+        self.running_mean = None
+        self.running_var = None
+
+    def forward(self, x: torch.Tensor):
+        d = x.device
+        self.weight = self.weight.to(d)
+        self.bias = self.bias.to(d)
+        if self.running_mean is None:
+            self.running_var = self.running_mean = 0
+        else:
+            self.running_mean = self.running_mean.to(d)
+            self.running_var = self.running_var.to(d)
+
+        exp_avg_factor = 0
+        if self.training and self.track_running_stats:
+            if self.num_batches_tracked is not None:
+                self.num_batches_tracked += 1
+                if self.momentum is None:
+                    exp_avg_factor = 1.0 / self.num_batches_tracked
+                else:
+                    exp_avg_factor = self.momentum
+
+        if self.training:
+            var = x.var(self.agg_dims, unbiased=False, keepdim=True)
+            mu = x.mean(self.agg_dims, keepdim=True)
+            n = x.numel() / self.num_feature_values
+            with torch.no_grad():
+                self.running_mean = exp_avg_factor * mu + (1 - exp_avg_factor) * self.running_mean
+                self.running_var = exp_avg_factor * var * n / (n -1) + (1 - exp_avg_factor) * self.running_var
+        else:
+            var = self.running_var
+            mu = self.running_mean
+
+        _x = (x - mu) / (torch.sqrt(var + self.eps))
+        if self.affine:
+            _x = _x * self.weight[None, :, :, None] + self.bias[None, :, :, None]
+        return _x
+
+
+
+
+class TimeNormBaseMultiSincNN_v2(BaseMultiSincNN):
+    def make_cnn_layer_list(self):
+        def make_block(in_ch, out_ch, k_s, s, d, g, dropout=self.dropout, batch_norm=None):
+            b = []
+            if dropout > 0:
+                b.append(self.dropout_cls(dropout))
+            b.append(torch.nn.Conv2d(in_ch, out_ch, kernel_size=k_s, stride=s,
+                                     dilation=d, groups=g))
+            if batch_norm is not None:
+                b.append(batch_norm)
+                # b.append(torch.nn.BatchNorm2d(out_ch))
+                # b.append(base.Unsqueeze(-2))
+                # b.append(base.Reshape(-1, 1, ))
+                #b.append(MultiDim_BNorm1D(out_ch, self.n_bands))
+                # b.append(torch.nn.BatchNorm2d(out_ch))
+                # b.append(base.Squeeze())
+            b.append(self.activation_cls())
+            return b
+
+        if self.make_block_override is not None:
+            make_block = self.make_block_override
+
+        layer_list = [Unsqueeze(2)]
+
+        if self.in_channel_dropout_rate > 0:
+            layer_list.append(torch.nn.Dropout2d(self.in_channel_dropout_rate))
+
+        layer_list.append(
+            MultiChannelSincNN(self.n_bands, self.in_channels,
+                               padding=self.sn_padding,
+                               kernel_size=self.sn_kernel_size, fs=self.fs,
+                               per_channel_filter=self.per_channel_filter,
+                               band_spacing=self.band_spacing),
+        )
+
+        layer_list.append(MultiDimBatchNorm2d([self.in_channels, self.n_bands], [0, 3], affine=False))
+
+        if self.cog_attn:
+            tmp_model = torch.nn.Sequential(*layer_list)
+            t_out = tmp_model(self.t_in)
+            print("!!-Using attentions-!!")
+            layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
+
+        layer_list += make_block(self.in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1,
+                                 #batch_norm=MultiDimBatchNorm2d([self.n_cnn_filters, self.n_bands], [0, 3])
+                                 batch_norm=None
+                                 )
+        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
+                                 #batch_norm=MultiDimBatchNorm2d([self.n_cnn_filters, self.n_bands], [0, 3])
+                                 batch_norm=None
+                                 )
+        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,
+                                 batch_norm=None)
+        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,
+                                 batch_norm=None)
         layer_list += [Flatten(), self.dropout_cls(self.dropout)]
         return layer_list
 
