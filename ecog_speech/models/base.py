@@ -597,6 +597,64 @@ class TimeNormBaseMultiSincNN_v2(BaseMultiSincNN):
         layer_list += [Flatten(), self.dropout_cls(self.dropout)]
         return layer_list
 
+class TimeNormBaseMultiSincNN_v3(BaseMultiSincNN):
+    def make_cnn_layer_list(self):
+        def make_block(in_ch, out_ch, k_s, s, d, g, dropout=self.dropout, batch_norm=None):
+            b = []
+            if dropout > 0:
+                b.append(self.dropout_cls(dropout))
+            b.append(torch.nn.Conv2d(in_ch, out_ch, kernel_size=k_s, stride=s,
+                                     dilation=d, groups=g))
+            if batch_norm is not None:
+                b.append(batch_norm)
+                # b.append(torch.nn.BatchNorm2d(out_ch))
+                # b.append(base.Unsqueeze(-2))
+                # b.append(base.Reshape(-1, 1, ))
+                #b.append(MultiDim_BNorm1D(out_ch, self.n_bands))
+                # b.append(torch.nn.BatchNorm2d(out_ch))
+                # b.append(base.Squeeze())
+            b.append(self.activation_cls())
+            return b
+
+        if self.make_block_override is not None:
+            make_block = self.make_block_override
+
+        layer_list = [Unsqueeze(2)]
+
+        if self.in_channel_dropout_rate > 0:
+            layer_list.append(torch.nn.Dropout2d(self.in_channel_dropout_rate))
+
+        layer_list.append(
+            MultiChannelSincNN(self.n_bands, self.in_channels,
+                               padding=self.sn_padding,
+                               kernel_size=self.sn_kernel_size, fs=self.fs,
+                               per_channel_filter=self.per_channel_filter,
+                               band_spacing=self.band_spacing),
+        )
+
+        layer_list.append(MultiDimBatchNorm2d([self.in_channels, self.n_bands], [0, 3], affine=False))
+
+        print("VERS 3")
+        if self.cog_attn:
+            tmp_model = torch.nn.Sequential(*layer_list)
+            t_out = tmp_model(self.t_in)
+            print("!!-Using attentions-!!")
+            layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
+
+        layer_list += make_block(self.in_channels, self.in_channels, k_s=(1, 5), s=(1, 5), d=(1, 2), g=self.in_channels,
+                                 #batch_norm=MultiDimBatchNorm2d([self.n_cnn_filters, self.n_bands], [0, 3])
+                                 batch_norm=None
+                                 )
+        #layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
+                                 #batch_norm=MultiDimBatchNorm2d([self.n_cnn_filters, self.n_bands], [0, 3])
+       #                          batch_norm=None
+       #                          )
+        layer_list += make_block(self.in_channels, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,
+                                 batch_norm=None)
+        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,
+                                 batch_norm=None)
+        layer_list += [Flatten(), self.dropout_cls(self.dropout)]
+        return layer_list
 
 @attr.attrs
 class Trainer:
