@@ -347,12 +347,17 @@ def plot_model_overview(results):
     kwarg_str = ", ".join(["%s=%s" % (str(k), str(v)) if (i % 5) or i ==0 else "\n%s=%s" % (str(k), str(v))
                           for i, (k, v) in enumerate(results['model_kws'].items())])
 
-    perf_str = '|| '.join(['%s=%s' % (str(k), str(np.round(results[k], 3))) for k in ['accuracy', 'f1', 'precision', 'recall']])
+    perf_measures = ['accuracy', 'f1', 'precision', 'recall']
+
+    train_perf_str = '|| '.join(['%s=%s' % (str(k), str(np.round(results['train_'+k], 3))) for k in perf_measures])
+    cv_perf_str = '|| '.join(['%s=%s' % (str(k), str(np.round(results['cv_'+k], 3))) for k in perf_measures])
+    perf_str = '|| '.join(['%s=%s' % (str(k), str(np.round(results[k], 3))) for k in perf_measures])
+
     if results.get('random_labels', False):
         perf_str += ' !! RANDOM LABELS  !!'
     title = (f"({results['name']})\ntrain:[{results['train_sets']}] || cv:[{results['cv_sets']}] || test:[{results['test_sets']}] \n\
-    Num Params={results['num_params']} || {perf_str}\n\
-    {results['model_name']}({kwarg_str})")
+    Num Params={results['num_params']} || {results['model_name']}({kwarg_str})\nTEST:{perf_str}\nCV:{cv_perf_str}\nTrain:{train_perf_str}\n\
+    ")
     #print(title)
     #title = f"Model {results['']}"
     fig, ax_map = multi_plot_training(loss_df, lowhz_df, centerhz_df, highhz_df, title=None)
@@ -423,6 +428,7 @@ def plot_agg_performance(results_df):
     #                 'n_cnn_filters', 'dropout', 'dropout_2d', 'in_channel_dropout_rate',
     #                 'batchnorm', 'roll_channels', 'power_q', 'n_epochs', 'sn_band_spacing']
 
+    print(results_df.columns)
     results_df['bw_reg_weight'] = results_df['bw_reg_weight'].fillna(-1)
     results_df['test_patient'] = results_df['test_sets'].str.split('-').apply(lambda l: '-'.join(l[:-1]))
     results_df['test_fold'] = results_df['test_sets'].str.split('-').apply(lambda l: l[-1])
