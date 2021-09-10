@@ -59,6 +59,8 @@ def make_model(options, nww):
             model = base.TimeNormBaseMultiSincNN_v2(**model_kws)
         elif 'v3' in options.model_name:
             model = base.TimeNormBaseMultiSincNN_v3(**model_kws)
+        elif 'v4' in options.model_name:
+            model = base.TimeNormBaseMultiSincNN_v4(**model_kws)
     elif options.model_name == 'base-cnn':
         model_kws = dict(in_channels=len(nww.selected_columns),
                          in_channel_dropout_rate=options.in_channel_dropout_rate,
