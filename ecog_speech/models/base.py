@@ -20,6 +20,15 @@ def copy_model_state(m):
                       for k, v in m.state_dict().items()])
     return s
 
+class ScaleByConstant(torch.nn.Module):
+    def __init__(self, divide_by):
+        super(ScaleByConstant, self).__init__()
+        self.divide_by = divide_by
+
+    def forward(self, input):
+        return input / self.divide_by
+
+
 ## Modules
 class Permute(torch.nn.Module):
     def __init__(self, p):
@@ -233,6 +242,7 @@ class BaseCNN(torch.nn.Module):
 
 class BaseMultiSincNN(torch.nn.Module):
     default_activation_cls = torch.nn.PReLU
+    default_batch_norm_cls = torch.nn.BatchNorm2d
     def __init__(self, in_channels, window_size, fs,
                  n_bands=2, per_channel_filter=False,
                  sn_kernel_size=31,
@@ -265,14 +275,23 @@ class BaseMultiSincNN(torch.nn.Module):
         self.dropout = dropout
         #self.activation_cls = torch.nn.SELU if activation_cls is None else activation_cls
         self.activation_cls = self.default_activation_cls if activation_cls is None else activation_cls
+        if isinstance(self.activation_cls, str):
+            #self.default_activation_cls_map =
+            self.activation_cls = getattr(torch.nn, self.activation_cls)
+        print("Using activation " + str(self.activation_cls))
+
+        self.batch_norm_cls = self.default_batch_norm_cls# if batch_norm_cls is None else batch_norm_cls
         self.per_channel_filter = per_channel_filter
         #DrpOut = torch.nn.Dropout2d if dropout2d else torch.nn.Dropout
         #self.dropout_cls = torch.nn.Dropout2d if dropout2d else torch.nn.AlphaDropout
         self.dropout_cls = torch.nn.Dropout2d if dropout2d else torch.nn.Dropout
+        # Kind of hacky, but allows quick extension of the class
+        self.make_block = self.make_cnn_layer_block if self.make_block_override is None else self.make_block_override
         self.n_cnn_filters = 32 if n_cnn_filters is None else n_cnn_filters
 
         self.t_in = t_in = torch.rand(32, self.in_channels, self.window_size)
         self.layer_list = self.make_cnn_layer_list()
+        print(self.make_cnn_layer_list)
 
         self.m = torch.nn.Sequential(*self.layer_list)
 
@@ -292,25 +311,30 @@ class BaseMultiSincNN(torch.nn.Module):
         utils.print_sequential_arch(self.m, t_in)
         print("N params: " + str(self.n_params))
 
-    def make_cnn_layer_list(self):
-        def make_block(in_ch, out_ch, k_s, s, d, g):
-            b = []
-            if self.dropout > 0:
-                b.append(self.dropout_cls(self.dropout))
-            b.append(torch.nn.Conv2d(in_ch, out_ch, kernel_size=k_s, stride=s,
-                                     dilation=d, groups=g))
-            if self.batch_norm:
-                b.append(torch.nn.BatchNorm2d(out_ch))
-            b.append(self.activation_cls())
-            return b
-        if self.make_block_override is not None:
-            make_block = self.make_block_override
+    def make_cnn_layer_block(self, in_ch, out_ch, k_s, s, d, g):
+        b = []
+        if self.dropout > 0:
+            b.append(self.dropout_cls(self.dropout))
+        b.append(torch.nn.Conv2d(in_ch, out_ch, kernel_size=k_s, stride=s,
+                                 dilation=d, groups=g))
+        if self.batch_norm:
+            b.append(self.batch_norm_cls(out_ch))
+        b.append(self.activation_cls())
+        return b
 
+    def make_cnn_layer_list(self):
+        print("=-=-=-=- Original make cnn layer list =-=-=-=-")
+        # Layer 1
+        # Add the Band dimension, i.e. Size([64, 51, 300]) becomes Size([64, 51, 1, 300])
         layer_list = [Unsqueeze(2)]
 
+        # Layer +
+        # Input channel dropout before anything else
         if self.in_channel_dropout_rate > 0:
             layer_list.append(torch.nn.Dropout2d(self.in_channel_dropout_rate))
 
+        # Layer 2
+        # Multi Sinc Net - extract bands
         layer_list.append(
             MultiChannelSincNN(self.n_bands, self.in_channels,
                                padding=self.sn_padding,
@@ -319,17 +343,28 @@ class BaseMultiSincNN(torch.nn.Module):
                                band_spacing=self.band_spacing),
         )
 
+        # Layer +
         if self.cog_attn:
             tmp_model = torch.nn.Sequential(*layer_list)
             t_out = tmp_model(self.t_in)
             print("!!-Using attentions-!!")
             layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
 
-        layer_list += make_block(self.in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1)
-        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1)
-        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1)
-        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1)
+        # Layer 3 - 6 : Convolutions (ungrouped so all inputs are convolved to all outputs)
+        #   - BatchNorm is standard 2d: stats at the batch+sensor level are used to standardize
+        #
+        # Temporal dim convolution, with stride equal to width and dialation to widen receptive field
+        layer_list += self.make_block(self.in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1)
+        # Temporal dim convolution, with reduced width
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1)
+        # Spectral dim convolution, combining all freqeuncies (bands == kernel size))
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1)
+        # Temporal dim convolution, small width
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1)
+
+        # Flatten and add final dropout before going to Dens layer
         layer_list += [Flatten(), self.dropout_cls(self.dropout)]
+
         return layer_list
 
     def forward(self, x):
@@ -428,33 +463,63 @@ class MultiDim_BNorm1D(torch.nn.Module):
         self.bnorms = torch.nn.ModuleList([torch.nn.BatchNorm1d(n_bands) for n in range(n_sensors)])
 
     def forward(self, x):
-        o = torch.cat([bn(x.select(self.norm_dim, i)).unsqueeze(self.norm_dim) for i, bn in enumerate(self.bnorms)],
+        o = torch.cat([
+            # apply 1D norm layers
+            # - the band dimension should be the channel that stats are
+            #   calculated across
+            bn(
+                # Select channel/sensor
+                x.select(self.norm_dim, i)
+            # Add back the dim it was selected from to all concatenation
+            ).unsqueeze(self.norm_dim)
+
+            for i, bn in enumerate(self.bnorms)],
                       dim=self.norm_dim)
         return o
-        # return x.squeeze()
+
+class MultiDim_Conv1D(torch.nn.Module):
+    def __init__(self, n_sensors, in_ch, out_ch, k_s, s, d, g, shared=True, conv_dim=1, ):
+        super(MultiDim_Conv1D, self).__init__()
+        self.conv_dim = conv_dim
+        # One temporal normalization per n_norms (n bands)
+        ll = [torch.nn.Conv1d(in_ch, out_ch, kernel_size=k_s, stride=s, dilation=d, groups=g)
+              for n in range(n_sensors)] if not shared else [torch.nn.Conv1d(in_ch, out_ch, kernel_size=k_s,
+                                                                             stride=s, dilation=d, groups=g)] * n_sensors
+        self.cnns = torch.nn.ModuleList(ll)
+
+    def forward(self, x):
+        o = torch.cat([
+            # apply 1D norm layers
+            # - the band dimension should be the channel that stats are
+            #   calculated across
+            cnn(
+                # Select channel/sensor
+                x.select(self.conv_dim, i)
+            # Add back the dim it was selected from to all concatenation
+            ).unsqueeze(self.conv_dim)
+
+            for i, cnn in enumerate(self.cnns)],
+                      dim=self.conv_dim)
+        return o
 
 
 class TimeNormBaseMultiSincNN(BaseMultiSincNN):
+    #default_batch_norm_cls = MultiDim_BNorm1D
+
+    def make_cnn_layer_block(self, in_ch, out_ch, k_s, s, d, g, batch_norm=None):
+        b = []
+        if self.dropout > 0:
+            b.append(self.dropout_cls(self.dropout))
+        b.append(torch.nn.Conv2d(in_ch, out_ch, kernel_size=k_s, stride=s,
+                                 dilation=d, groups=g))
+        if batch_norm is not None and self.batch_norm:
+            # Override: Multi dim norm needs to know the number of bands
+            b.append(batch_norm)
+        b.append(self.activation_cls())
+        return b
+
     def make_cnn_layer_list(self):
-        def make_block(in_ch, out_ch, k_s, s, d, g, dropout=self.dropout, batch_norm=self.batch_norm):
-            b = []
-            if dropout > 0:
-                b.append(self.dropout_cls(dropout))
-            b.append(torch.nn.Conv2d(in_ch, out_ch, kernel_size=k_s, stride=s,
-                                     dilation=d, groups=g))
-            if batch_norm:
-                # b.append(torch.nn.BatchNorm2d(out_ch))
-                # b.append(base.Unsqueeze(-2))
-                # b.append(base.Reshape(-1, 1, ))
-                b.append(MultiDim_BNorm1D(out_ch, self.n_bands))
-                # b.append(torch.nn.BatchNorm2d(out_ch))
-                # b.append(base.Squeeze())
-            b.append(self.activation_cls())
-            return b
-
-        if self.make_block_override is not None:
-            make_block = self.make_block_override
-
+        print("=-=-=-=- Tnorm make cnn layer list =-=-=-=-")
         layer_list = [Unsqueeze(2)]
 
         if self.in_channel_dropout_rate > 0:
@@ -474,12 +539,12 @@ class TimeNormBaseMultiSincNN(BaseMultiSincNN):
             print("!!-Using attentions-!!")
             layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
 
-        layer_list += make_block(self.in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1)
-        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1)
-        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,
-                                 batch_norm=False)
-        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,
-                                 batch_norm=False)
+        layer_list += self.make_block(self.in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1,
+                                      batch_norm=MultiDim_BNorm1D(self.n_cnn_filters, self.n_bands))
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
+                                      batch_norm=MultiDim_BNorm1D(self.n_cnn_filters, self.n_bands))
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1)
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1)
         layer_list += [Flatten(), self.dropout_cls(self.dropout)]
         return layer_list
 
@@ -495,8 +560,11 @@ class MultiDimBatchNorm2d(torch.nn.Module):
         self.momentum = momentum
         self.affine = affine
         self.track_running_stats = track_running_stats
-        self.weight = torch.nn.Parameter(torch.ones(num_features))
-        self.bias = torch.nn.Parameter(torch.zeros(num_features))
+        if self.affine:
+            self.weight = torch.nn.Parameter(torch.ones(num_features))
+            self.bias = torch.nn.Parameter(torch.zeros(num_features))
+        else:
+            self.weight = self.bias = None
 
         ####
         self.num_batches_tracked = None
@@ -506,8 +574,6 @@ class MultiDimBatchNorm2d(torch.nn.Module):
 
     def forward(self, x: torch.Tensor):
         d = x.device
-        self.weight = self.weight.to(d)
-        self.bias = self.bias.to(d)
         if self.running_mean is None:
             self.running_var = self.running_mean = 0
         else:
@@ -536,32 +602,16 @@ class MultiDimBatchNorm2d(torch.nn.Module):
 
         _x = (x - mu) / (torch.sqrt(var + self.eps))
         if self.affine:
+            self.weight = self.weight.to(d)
+            self.bias = self.bias.to(d)
             _x = _x * self.weight[None, :, :, None] + self.bias[None, :, :, None]
         return _x
 
 
-class TimeNormBaseMultiSincNN_v2(BaseMultiSincNN):
+class TimeNormBaseMultiSincNN_v2(TimeNormBaseMultiSincNN):
+    """Add new custom MultiDimBatchNorm2d immediately following MultiSincNet"""
+
     def make_cnn_layer_list(self):
-        def make_block(in_ch, out_ch, k_s, s, d, g, dropout=self.dropout, batch_norm=None):
-            b = []
-            if dropout > 0:
-                b.append(self.dropout_cls(dropout))
-            b.append(torch.nn.Conv2d(in_ch, out_ch, kernel_size=k_s, stride=s,
-                                     dilation=d, groups=g))
-            if batch_norm is not None:
-                b.append(batch_norm)
-                # b.append(torch.nn.BatchNorm2d(out_ch))
-                # b.append(base.Unsqueeze(-2))
-                # b.append(base.Reshape(-1, 1, ))
-                #b.append(MultiDim_BNorm1D(out_ch, self.n_bands))
-                # b.append(torch.nn.BatchNorm2d(out_ch))
-                # b.append(base.Squeeze())
-            b.append(self.activation_cls())
-            return b
-
-        if self.make_block_override is not None:
-            make_block = self.make_block_override
-
         layer_list = [Unsqueeze(2)]
 
         if self.in_channel_dropout_rate > 0:
@@ -583,44 +633,26 @@ class TimeNormBaseMultiSincNN_v2(BaseMultiSincNN):
             print("!!-Using attentions-!!")
             layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
 
-        layer_list += make_block(self.in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1,
+        layer_list += self.make_block(self.in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1,
                                  #batch_norm=MultiDimBatchNorm2d([self.n_cnn_filters, self.n_bands], [0, 3])
                                  batch_norm=None
                                  )
-        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
                                  #batch_norm=MultiDimBatchNorm2d([self.n_cnn_filters, self.n_bands], [0, 3])
                                  batch_norm=None
                                  )
-        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,
                                  batch_norm=None)
-        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,
                                  batch_norm=None)
         layer_list += [Flatten(), self.dropout_cls(self.dropout)]
         return layer_list
 
 
-class TimeNormBaseMultiSincNN_v3(BaseMultiSincNN):
+class TimeNormBaseMultiSincNN_v3(TimeNormBaseMultiSincNN):
+    """Like v2 (new match norm after sincNet), but one fewer CNN layers following"""
+
     def make_cnn_layer_list(self):
-        def make_block(in_ch, out_ch, k_s, s, d, g, dropout=self.dropout, batch_norm=None):
-            b = []
-            if dropout > 0:
-                b.append(self.dropout_cls(dropout))
-            b.append(torch.nn.Conv2d(in_ch, out_ch, kernel_size=k_s, stride=s,
-                                     dilation=d, groups=g))
-            if batch_norm is not None:
-                b.append(batch_norm)
-                # b.append(torch.nn.BatchNorm2d(out_ch))
-                # b.append(base.Unsqueeze(-2))
-                # b.append(base.Reshape(-1, 1, ))
-                #b.append(MultiDim_BNorm1D(out_ch, self.n_bands))
-                # b.append(torch.nn.BatchNorm2d(out_ch))
-                # b.append(base.Squeeze())
-            b.append(self.activation_cls())
-            return b
-
-        if self.make_block_override is not None:
-            make_block = self.make_block_override
-
         layer_list = [Unsqueeze(2)]
 
         if self.in_channel_dropout_rate > 0:
@@ -643,45 +675,92 @@ class TimeNormBaseMultiSincNN_v3(BaseMultiSincNN):
             print("!!-Using attentions-!!")
             layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
 
-        layer_list += make_block(self.in_channels, self.in_channels, k_s=(1, 5), s=(1, 5), d=(1, 2), g=self.in_channels,
-                                 #batch_norm=MultiDimBatchNorm2d([self.n_cnn_filters, self.n_bands], [0, 3])
-                                 batch_norm=None
-                                 )
+        #######
+        # Sets up for late fusion - keep one filter per channel
+        layer_list += self.make_block(self.in_channels, self.in_channels, k_s=(1, 5), s=(1, 5), d=(1, 2), g=self.in_channels,
+                                     batch_norm=None
+                                     )
         #layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
-                                 #batch_norm=MultiDimBatchNorm2d([self.n_cnn_filters, self.n_bands], [0, 3])
        #                          batch_norm=None
        #                          )
-        layer_list += make_block(self.in_channels, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,
-                                 batch_norm=None)
-        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,
-                                 batch_norm=None)
+        layer_list += self.make_block(self.in_channels, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,
+                                      batch_norm=None)
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,
+                                      batch_norm=None)
+        layer_list += [Flatten(), self.dropout_cls(self.dropout)]
+        return layer_list
+
+# Activation can be set now
+#class TimeNormBaseMultiSincNN_v4(TimeNormBaseMultiSincNN):
+#    """Same as v3, only use LeakyReLU to use fewer parameters"""
+#    default_activation_cls = torch.nn.LeakyReLU
+
+class TimeNormBaseMultiSincNN_v5(TimeNormBaseMultiSincNN):
+    """
+    1D convolutions rather than 2d immediately following sinc net output
+    in attempt to keep sensor output independent
+    """
+    def make_cnn_layer_list(self):
+        layer_list = [Unsqueeze(2)]
+
+        if self.in_channel_dropout_rate > 0:
+            layer_list.append(torch.nn.Dropout2d(self.in_channel_dropout_rate))
+
+        layer_list.append(
+            MultiChannelSincNN(self.n_bands, self.in_channels,
+                               padding=self.sn_padding,
+                               kernel_size=self.sn_kernel_size, fs=self.fs,
+                               per_channel_filter=self.per_channel_filter,
+                               band_spacing=self.band_spacing),
+        )
+
+        layer_list.append(MultiDimBatchNorm2d([self.in_channels, self.n_bands], [0, 3], affine=False))
+
+        #batch_norm = MultiDim_BNorm1D(self.n_cnn_filters, self.n_bands))
+        #print("VERS 3")
+        if self.cog_attn:
+            tmp_model = torch.nn.Sequential(*layer_list)
+            t_out = tmp_model(self.t_in)
+            print("!!-Using attentions-!!")
+            layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
+
+        #######
+        if self.dropout > 0:
+            layer_list += [self.dropout_cls(self.dropout)]
+        layer_list += [MultiDim_Conv1D(self.in_channels, #self.n_bands,
+                                      in_ch=self.n_bands, out_ch=self.n_cnn_filters,
+                                      k_s=(5), s=(5), d=(2), g=1)]
+        # Rescale all bands within before fusion
+        layer_list += [MultiDimBatchNorm2d([self.in_channels, self.n_bands], affine=False)]
+        #layer_list += torch.nn.BatchNorm2d(self.in_channels, affine=False)
+        layer_list += [self.activation_cls()]
+        # Early fusion - all inputs are convolved with all kernels to make all outputs
+        #layer_list += self.make_block(self.in_channels, self.in_channels, k_s=(1, 5), s=(1, 5), d=(1, 2), g=self.in_channels,
+                                      #batch_norm=None)
+        #                              batch_norm=torch.nn.BatchNorm2d(self.in_channels, affine=False))
+                                      #batch_norm=MultiDimBatchNorm2d([self.n_cnn_filters, self.n_bands], affine=False))
+        layer_list += self.make_block(self.in_channels, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
+                                      batch_norm=None)
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False))
+                                      #batch_norm=MultiDimBatchNorm2d([self.n_cnn_filters, self.n_bands], affine=False))
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,
+                                      batch_norm=None)
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False))
+                                      #batch_norm=MultiDimBatchNorm2d([self.n_cnn_filters, self.n_bands], affine=False))
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,
+                                      batch_norm=None)
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False))
         layer_list += [Flatten(), self.dropout_cls(self.dropout)]
         return layer_list
 
 
-class TimeNormBaseMultiSincNN_v4(BaseMultiSincNN):
-    default_activation_cls = torch.nn.LeakyReLU
+class TimeNormBaseMultiSincNN_v6(TimeNormBaseMultiSincNN):
+    """
+    Use custom multidim after sincnet, then 1-1 grouped
+    convolutions, use standard 2d in remaining cnns
+    """
+
     def make_cnn_layer_list(self):
-        def make_block(in_ch, out_ch, k_s, s, d, g, dropout=self.dropout, batch_norm=None):
-            b = []
-            if dropout > 0:
-                b.append(self.dropout_cls(dropout))
-            b.append(torch.nn.Conv2d(in_ch, out_ch, kernel_size=k_s, stride=s,
-                                     dilation=d, groups=g))
-            if batch_norm is not None:
-                b.append(batch_norm)
-                # b.append(torch.nn.BatchNorm2d(out_ch))
-                # b.append(base.Unsqueeze(-2))
-                # b.append(base.Reshape(-1, 1, ))
-                #b.append(MultiDim_BNorm1D(out_ch, self.n_bands))
-                # b.append(torch.nn.BatchNorm2d(out_ch))
-                # b.append(base.Squeeze())
-            b.append(self.activation_cls())
-            return b
-
-        if self.make_block_override is not None:
-            make_block = self.make_block_override
-
         layer_list = [Unsqueeze(2)]
 
         if self.in_channel_dropout_rate > 0:
@@ -704,20 +783,289 @@ class TimeNormBaseMultiSincNN_v4(BaseMultiSincNN):
             print("!!-Using attentions-!!")
             layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
 
-        layer_list += make_block(self.in_channels, self.in_channels, k_s=(1, 5), s=(1, 5), d=(1, 2), g=self.in_channels,
-                                 #batch_norm=MultiDimBatchNorm2d([self.n_cnn_filters, self.n_bands], [0, 3])
-                                 batch_norm=None
-                                 )
-        #layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
-                                 #batch_norm=MultiDimBatchNorm2d([self.n_cnn_filters, self.n_bands], [0, 3])
-       #                          batch_norm=None
-       #                          )
-        layer_list += make_block(self.in_channels, self.n_cnn_filters, k_s=(self.n_bands, 3), s=(1, 1), d=(1, 2), g=1,
-                                 batch_norm=None)
-        layer_list += make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,
-                                 batch_norm=None)
+        #######
+        # Sets up for late fusion - keep one filter per channel
+        layer_list += self.make_block(self.in_channels, self.in_channels, k_s=(1, 5), s=(1, 5), d=(1, 2), g=self.in_channels,
+                                     batch_norm=torch.nn.BatchNorm2d(self.in_channels, affine=False))
+        layer_list += self.make_block(self.in_channels, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
+                                      batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False)
+                                     #batch_norm=None
+                                     )
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,
+                                      batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False))
+                                        #batch_norm=None)
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,
+                                      batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False))
+                                        #batch_norm=None)
         layer_list += [Flatten(), self.dropout_cls(self.dropout)]
         return layer_list
+
+
+class TimeNormBaseMultiSincNN_v7(TimeNormBaseMultiSincNN):
+    """
+    Like v6 (custom batch norm, 1-1 grouped, 2d batchnrom) but
+    now swap sensor and band dimension so we can use regular 2d bnorm
+    to normalize to the band dimension (aggregate sensors, time, and batch samples)
+    for the first two CNNs, then swap back to (batch, sensor, band, time) before
+    final convolutions across bands then time
+    """
+
+    def make_cnn_layer_list(self):
+        layer_list = [Unsqueeze(2)]
+
+        if self.in_channel_dropout_rate > 0:
+            layer_list.append(torch.nn.Dropout2d(self.in_channel_dropout_rate))
+
+        layer_list.append(
+            MultiChannelSincNN(self.n_bands, self.in_channels,
+                               padding=self.sn_padding,
+                               kernel_size=self.sn_kernel_size, fs=self.fs,
+                               per_channel_filter=self.per_channel_filter,
+                               band_spacing=self.band_spacing),
+        )
+
+        layer_list.append(MultiDimBatchNorm2d([self.in_channels, self.n_bands], [0, 3], affine=False))
+
+        #print("VERS 3")
+        if self.cog_attn:
+            tmp_model = torch.nn.Sequential(*layer_list)
+            t_out = tmp_model(self.t_in)
+            print("!!-Using attentions-!!")
+            layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
+
+        #######
+        # Swap band and sensor dimension
+        layer_list.append(Permute((0, 2, 1, 3)))
+
+        layer1_factor = 2
+        n1_filters = layer1_factor * self.n_bands
+        layer_list += self.make_block(self.n_bands, n1_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=self.n_bands,
+                                     batch_norm=torch.nn.BatchNorm2d(n1_filters, affine=False))
+        n2_filters = 2 * n1_filters
+        layer_list += self.make_block(n1_filters, n2_filters, k_s=(1, 3), s=(1, 3), d=1, g=n1_filters,
+                                      batch_norm=torch.nn.BatchNorm2d(n2_filters, affine=False)
+                                     #batch_norm=None
+                                     )
+        # Swap sensor and band dimensions back
+        layer_list.append(Permute((0, 2, 1, 3)))
+        layer_list += self.make_block(self.in_channels, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,
+                                      batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False))
+                                        #batch_norm=None)
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 2), d=1, g=1,
+                                      batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False))
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,
+                                      batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False))
+        #batch_norm=None)
+        layer_list += [Flatten(), self.dropout_cls(self.dropout)]
+        return layer_list
+
+
+class TimeNormBaseMultiSincNN_v8(TimeNormBaseMultiSincNN):
+    """
+    Use custom multi dim norm after sinc net AND after subsequent layers
+    (previously used regular batch norm 2d on last layers)
+    """
+    default_activation_cls = torch.nn.Hardtanh
+
+    def make_cnn_layer_list(self):
+        layer_list = [Unsqueeze(2)]
+
+        if self.in_channel_dropout_rate > 0:
+            layer_list.append(torch.nn.Dropout2d(self.in_channel_dropout_rate))
+
+        layer_list.append(
+            MultiChannelSincNN(self.n_bands, self.in_channels,
+                               padding=self.sn_padding,
+                               kernel_size=self.sn_kernel_size, fs=self.fs,
+                               per_channel_filter=self.per_channel_filter,
+                               band_spacing=self.band_spacing),
+        )
+
+        layer_list.append(MultiDimBatchNorm2d([self.in_channels, self.n_bands], [0, 3], affine=False))
+
+        #print("VERS 3")
+        if self.cog_attn:
+            tmp_model = torch.nn.Sequential(*layer_list)
+            t_out = tmp_model(self.t_in)
+            print("!!-Using attentions-!!")
+            layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
+
+        #######
+        # Sets up for late fusion - keep one filter per channel
+        layer_list += self.make_block(self.in_channels, self.in_channels, k_s=(1, 5), s=(1, 5), d=(1, 2), g=self.in_channels,
+                                      batch_norm=MultiDim_BNorm1D(self.in_channels, self.n_bands))
+                                     #batch_norm=torch.nn.BatchNorm2d(self.in_channels, affine=False))
+        layer_list += self.make_block(self.in_channels, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
+                                      batch_norm=MultiDim_BNorm1D(self.n_cnn_filters, self.n_bands))
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False)
+                                     #batch_norm=None
+                                     #)
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,)
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False))
+                                        #batch_norm=None)
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,)
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False))
+                                        #batch_norm=None)
+        layer_list += [Flatten(), self.dropout_cls(self.dropout)]
+        return layer_list
+
+
+class TimeNormBaseMultiSincNN_v9(TimeNormBaseMultiSincNN):
+    """Like v8 but scale inputs by constant"""
+
+    def make_cnn_layer_list(self):
+        layer_list = [ScaleByConstant(128), Unsqueeze(2)]
+
+        if self.in_channel_dropout_rate > 0:
+            layer_list.append(torch.nn.Dropout2d(self.in_channel_dropout_rate))
+
+        layer_list.append(
+            MultiChannelSincNN(self.n_bands, self.in_channels,
+                               padding=self.sn_padding,
+                               kernel_size=self.sn_kernel_size, fs=self.fs,
+                               per_channel_filter=self.per_channel_filter,
+                               band_spacing=self.band_spacing),
+        )
+
+        layer_list.append(MultiDimBatchNorm2d([self.in_channels, self.n_bands], [0, 3], affine=False))
+
+        #print("VERS 3")
+        if self.cog_attn:
+            tmp_model = torch.nn.Sequential(*layer_list)
+            t_out = tmp_model(self.t_in)
+            print("!!-Using attentions-!!")
+            layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
+
+        #######
+        # Sets up for late fusion - keep one filter per channel
+        layer_list += self.make_block(self.in_channels, self.in_channels, k_s=(1, 5), s=(1, 5), d=(1, 2), g=self.in_channels,
+                                      batch_norm=MultiDim_BNorm1D(self.in_channels, self.n_bands))
+                                     #batch_norm=torch.nn.BatchNorm2d(self.in_channels, affine=False))
+        layer_list += self.make_block(self.in_channels, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
+                                      batch_norm=MultiDim_BNorm1D(self.n_cnn_filters, self.n_bands))
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False)
+                                     #batch_norm=None
+                                     #)
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,)
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False))
+                                        #batch_norm=None)
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,)
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False))
+                                        #batch_norm=None)
+        layer_list += [Flatten(), self.dropout_cls(self.dropout)]
+        return layer_list
+
+
+class TimeNormBaseMultiSincNN_v10(TimeNormBaseMultiSincNN):
+    """Like v9, but no longer grouping kernels after sincNet"""
+
+    def make_cnn_layer_list(self):
+        layer_list = [ScaleByConstant(128), Unsqueeze(2)]
+
+        if self.in_channel_dropout_rate > 0:
+            layer_list.append(torch.nn.Dropout2d(self.in_channel_dropout_rate))
+
+        layer_list.append(
+            MultiChannelSincNN(self.n_bands, self.in_channels,
+                               padding=self.sn_padding,
+                               kernel_size=self.sn_kernel_size, fs=self.fs,
+                               per_channel_filter=self.per_channel_filter,
+                               band_spacing=self.band_spacing),
+        )
+
+        layer_list.append(MultiDimBatchNorm2d([self.in_channels, self.n_bands], [0, 3], affine=False))
+
+        #print("VERS 3")
+        if self.cog_attn:
+            tmp_model = torch.nn.Sequential(*layer_list)
+            t_out = tmp_model(self.t_in)
+            print("!!-Using attentions-!!")
+            layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
+
+        #######
+        # Sets up for late fusion - keep one filter per channel
+        layer_list += self.make_block(self.in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1,
+                                      batch_norm=MultiDim_BNorm1D(self.n_cnn_filters, self.n_bands))
+                                     #batch_norm=torch.nn.BatchNorm2d(self.in_channels, affine=False))
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
+                                      batch_norm=MultiDim_BNorm1D(self.n_cnn_filters, self.n_bands))
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False)
+                                     #batch_norm=None
+                                     #)
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,)
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False))
+                                        #batch_norm=None)
+        layer_list += self.make_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,)
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False))
+                                        #batch_norm=None)
+        layer_list += [Flatten(), self.dropout_cls(self.dropout)]
+        return layer_list
+
+
+class TimeNormBaseMultiSincNN_v11(TimeNormBaseMultiSincNN):
+    """
+    User regular 2d batch norm at the band level following the
+    sinc net layers - much faster and more stable from initial steps
+    """
+
+    def make_cnn_layer_list(self):
+        print("=-=-=- Make layer list =-=-=-")
+        layer_list = [#ScaleByConstant(128),
+                      Unsqueeze(2)]
+
+        if self.in_channel_dropout_rate > 0:
+            layer_list.append(torch.nn.Dropout2d(self.in_channel_dropout_rate))
+
+        layer_list.append(
+            MultiChannelSincNN(self.n_bands, self.in_channels,
+                               padding=self.sn_padding,
+                               kernel_size=self.sn_kernel_size, fs=self.fs,
+                               per_channel_filter=self.per_channel_filter,
+                               band_spacing=self.band_spacing),
+        )
+
+        if self.batch_norm:
+            layer_list += [
+                # Swap band and sensor
+                Permute((0, 2, 1, 3)),
+                # Aggregate stats on batch, sensor, time (i.e. band-level)
+                torch.nn.BatchNorm2d(self.n_bands),
+                # Swap band and sensor back
+                Permute((0, 2, 1, 3))
+            ]
+            #layer_list.append(MultiDimBatchNorm2d([self.n_bands], [0, 1, 3], affine=True))
+            #layer_list.append(MultiDimBatchNorm2d([self.in_channels, self.n_bands], [0, 3], affine=False))
+            #layer_list.append(MultiDimBatchNorm2d([self.in_channels, self.n_bands], [0, 3], affine=True))
+            #layer_list.append(MultiDim_BNorm1D(self.in_channels, self.n_bands))
+
+        #print("VERS 3")
+        if self.cog_attn:
+            tmp_model = torch.nn.Sequential(*layer_list)
+            t_out = tmp_model(self.t_in)
+            print("!!-Using attentions-!!")
+            layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
+
+        #######
+        # Sets up for late fusion - keep one filter per channel
+        layer_list += self.make_cnn_layer_block(self.in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1,
+                                      #batch_norm=MultiDim_BNorm1D(self.n_cnn_filters, self.n_bands)
+                                      )
+                                     #batch_norm=torch.nn.BatchNorm2d(self.in_channels, affine=False))
+        layer_list += self.make_cnn_layer_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
+                                      #batch_norm=MultiDim_BNorm1D(self.n_cnn_filters, self.n_bands)
+                                      )
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False)
+                                     #batch_norm=None
+                                     #)
+        layer_list += self.make_cnn_layer_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,)
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, ))
+                                        #batch_norm=None)
+        layer_list += self.make_cnn_layer_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,)
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, ))
+                                        #batch_norm=None)
+        layer_list += [Flatten(), self.dropout_cls(self.dropout)]
+        return layer_list
+
 
 @attr.attrs
 class Trainer:
@@ -731,6 +1079,12 @@ class Trainer:
 
     criterion = attr.ib(torch.nn.BCELoss())
     extra_criteria = attr.ib(None) # regularizers here
+
+    # How many epochs of not beating best CV loss by threshold before early stopping
+    early_stopping_patience = attr.ib(None)
+    # how much better the new score has to be (0 means at least equal)
+    early_stopping_threshold = attr.ib(0)
+
 
     cv_data_gen = attr.ib(None)
     epochs_trained = attr.ib(0)
@@ -774,9 +1128,9 @@ class Trainer:
         classname = m.__class__.__name__
         if 'Sinc' in classname:
             pass
-        elif 'Conv' in classname or 'Linear' in classname:
+        elif ('Conv' in classname or 'Linear' in classname) and getattr(m, 'weight', None) is not None:
             torch.nn.init.normal_(m.weight.data, 0.0, 0.02)
-        elif 'BatchNorm' in classname:
+        elif 'BatchNorm' in classname and m.weight is not None:
             torch.nn.init.normal_(m.weight.data, 1.0, 0.02)
             torch.nn.init.constant_(m.bias.data, 0)
 
@@ -843,7 +1197,21 @@ class Trainer:
                 # Produce eval results if a cv dataloader was given
                 if self.cv_data_gen:
                     cv_losses = self._eval(epoch, self.cv_data_gen)
-                    self.epoch_res_map[epoch]['cv_loss'] = np.mean(cv_losses)
+                    cv_l_mean = np.mean(cv_losses)
+                    self.epoch_res_map[epoch]['cv_loss'] = cv_l_mean
+                    if self.early_stopping_patience is not None:
+                        self.last_best_cv_l = getattr(self, 'last_best_cv_l', np.inf)
+                        if (self.last_best_cv_l - cv_l_mean) > self.early_stopping_threshold:
+                            print("-------------------------")
+                            print("---New best for early stopping---")
+                            print("-------------------------")
+                            self.last_best_epoch = epoch
+                            self.last_best_cv_l = cv_l_mean
+                        elif (epoch - self.last_best_epoch) > self.early_stopping_patience:
+                            print("--------EARLY STOPPING----------")
+                            print(f"{epoch} - {self.last_best_epoch} > {self.early_stopping_patience} :: {cv_l_mean}, {self.last_best_cv_l}")
+                            print("-------------------------")
+                            break
                     #cv_o_map, new_best = self._eval(epoch, self.cv_data_gen)
                     #self.epoch_res_map[epoch]['cv_loss'] = np.mean(cv_o_map['loss'])
                     #if new_best:
@@ -894,6 +1262,7 @@ class Trainer:
                     reg_l = 0.
                 overall_loss = (mean_loss + reg_l)
                 if overall_loss < self.best_cv:
+
                     self.best_model_state = copy_model_state(model)
                     self.best_model_epoch = epoch_i
                     self.best_cv = overall_loss
