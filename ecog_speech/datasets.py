@@ -1124,7 +1124,7 @@ class NorthwesternWords(BaseDataset):
         org, pid, ix = sets_str.split('-')
         assert pid.isdigit() and ix.isdigit() and org in cls.all_patient_maps.keys()
         pmap, pid, ix = cls.all_patient_maps[org], int(pid), int(ix)
-        assert pid in pmap
+        assert pid in pmap, f"PID: {pid} not in {org}'s known data map"
         p_list = pmap[pid]
         return [p_list[ix]]
 
