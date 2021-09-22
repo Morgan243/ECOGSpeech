@@ -225,6 +225,7 @@ def wrangle_and_plot_pred_inspect(model, nww: datasets.NorthwesternWords, wrd_ix
     fig.suptitle("Word code " + str(wrd_ix) + ' - "' + data_map['word_code_d'][wrd_ix] + '"')
     return fig, axs
 
+
 def plot_model_preds(preds_s, data_map, sample_index_map):
     plt_stim_s = data_map['stim']
     #t_indices_s = {wrd_id: (nww.sample_index_maps[data_k].get(wrd_id), nww.sample_index_maps[data_k].get(-wrd_id))
@@ -415,11 +416,48 @@ def load_results_to_frame(p, config_params=None):
     return fixed_config_cols, config_cols, results_df
 
 
+def plot_param_perf_facet(results_df):
+    import seaborn as sns
+    sns.set(font_scale=2.5, style='whitegrid')
+    #results_df = sn_results_df
+    rand_res_map = results_df[results_df.random_labels].groupby('test_patient').accuracy.mean().to_dict()
+    g = sns.catplot(data=results_df[(~results_df.random_labels)
+                                    & results_df.batchnorm
+                                    & (~results_df.shuffle_channels)
+                                    & results_df.sn_n_bands.ne(2)
+                                    # & results_df.in_channel_dropout_rate.eq(0)
+                                    & results_df.dropout.eq(.25)
+                                    ],
+                    x='sn_n_bands', y='accuracy', hue='in_channel_dropout_rate', palette='mako',
+                    col_order=['MC-19', 'MC-21', 'MC-22', 'MC-24',  # 'MC-25',
+                               'MC-26'],
+                    col='test_patient',  # row='in_channel_dropout_rate',
+                    kind='bar', height=6.5, aspect=.7)
+    ln = None
+    for tp, v in rand_res_map.items():
+        if tp in g.axes_dict:
+            ln = g.axes_dict[tp].axhline(v, lw=9, ls='--', color='xkcd:tomato', alpha=0.75)
+    # g.fig.legend([ln], ['Random'], 'lower right', frameon=False)
+
+    if ln is not None:
+        g.fig.legend([ln], ['Performance on\nRandom Target'], 'lower right', frameon=False, ncol=2, fontsize=30)
+    g._legend.set_title("Input Channel Dropout", )
+    #g._legend
+
+    # g.set_titles(template='{col_name}')
+    g.set_titles(template='Patient {col_name}', fontsize=40)
+
+    g.set_xlabels('Num Bands')
+    g.set_ylabels('Accuracy')
+    g.set(ylim=(0.47, 1.), yticks=np.arange(0.5, 1.01, 0.1))
+    return g.fig
+
+
 def plot_agg_performance(results_df):
     import seaborn as sns
 
     # Choose a metric
-    perf_col = 'f1'
+    perf_col = ['f1', 'accuracy']
 
     #performance_cols = ['accuracy', 'f1', 'precision', 'recall']
     #config_params = ['model_name', 'dataset', 'dense_width',
@@ -496,7 +534,11 @@ def plot_agg_performance(results_df):
     print(res_std_df)
     ax = res_perf.plot.barh(ax=axs[1], grid=True, title='model config performance', xerr=res_std)
 
-    ax.set_xlim((res_perf - res_std).min()*.95)
+    if isinstance(res_perf, pd.Series):
+        ax.set_xlim((res_perf - res_std).min()*.95)
+    elif isinstance(res_perf, pd.DataFrame):
+        ax.set_xlim((res_perf - res_std).min().min()*.95)
+
     ax.set_xlabel(f'{perf_col} score')
     fig.tight_layout()
     figs.append(fig)
@@ -534,15 +576,17 @@ def load_model_from_results(results, base_model_path=None):
     #        result_base_path = results['result_dir']
         #base_model_path = os.path.join(result_base_path, 'models')
 
-    if results['model_name'] == 'base-sn':
-        model = base.BaseMultiSincNN(**model_kws)
-    elif results['model_name'] == 'tnorm-base-sn':
-        model = base.TimeNormBaseMultiSincNN(**model_kws)
-    elif results['model_name'] == 'base-cnn':
-        model = base.BaseCNN(**model_kws)
-    else:
-        raise ValueError()
+#    if results['model_name'] == 'base-sn':
+#        model = base.BaseMultiSincNN(**model_kws)
+#    elif results['model_name'] == 'tnorm-base-sn':
+#        model = base.TimeNormBaseMultiSincNN(**model_kws)
+#    elif results['model_name'] == 'base-cnn':
+#        model = base.BaseCNN(**model_kws)
+#    else:
+#        raise ValueError()
         #raise ValueError(f"Unrecognized model_name: {results['model_name']} in {result_file})")
+
+    model, _ = experiments.make_model(model_name=results['model_name'], model_kws=model_kws)
 
     with open(model_path, 'rb') as f:
         model_state = torch.load(f)
@@ -695,6 +739,9 @@ def run(options):
     figs, axes = plot_agg_performance(results_df)
     for fig in figs:
         fig.savefig(pp, format='pdf')
+
+    fig = plot_param_perf_facet(results_df)
+    fig.savefig(pp, format='pdf')
 
     sorted_res_map = sorted(list(res_map.items()), key=lambda _results: _results[1][0]['f1'], reverse=True)
     for r, (results, output_figs) in sorted_res_map:
