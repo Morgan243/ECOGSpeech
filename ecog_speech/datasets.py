@@ -376,7 +376,7 @@ class NorthwesternWords(BaseDataset):
                                                            '3-Vetted Datasets',
                                                            'Single Word')
                                                  ))
-    data_subset = 'Data'# attr.ib('Data')
+    #data_subset = 'Data'# attr.ib('Data')
     mat_d_signal_key = 'ECOG_signal'
     # TODO: named tuple
     patient_tuples = attr.ib((
@@ -484,6 +484,8 @@ class NorthwesternWords(BaseDataset):
     # passing the first NWW dataset to all subsequent ones built on the same source data
     # can save on memory and reading+parsing time
     data_from: 'NorthwesternWords' = attr.ib(None)
+
+    data_subset = attr.ib('Data')
 
 
     ###
@@ -1021,7 +1023,7 @@ class NorthwesternWords(BaseDataset):
     @classmethod
     def load_data(cls, location=None, patient=None, session=None, trial=None, base_path=None,
                   parse_mat_data=True, sensor_columns=None, bad_sensor_method='zero',
-                  verbose=True):
+                  subset=None, verbose=True):
 
         location = 'Mayo Clinic' if location is None else location
         patient = 19 if patient is None else patient
@@ -1032,8 +1034,10 @@ class NorthwesternWords(BaseDataset):
 
         if verbose:
             print(f"---{patient}-{session}-{trial}-{location}---")
+            if subset is not None:
+                print("\t->Using Subset: " + str(subset))
 
-        p = cls.get_data_path(patient, session, trial, location, base_path=base_path)
+        p = cls.get_data_path(patient, session, trial, location, base_path=base_path, subset=subset)
         mat_d = scipy.io.matlab.loadmat(p)
         if parse_mat_data:
             return cls.parse_mat_arr_dict(mat_d, sensor_columns=sensor_columns,
