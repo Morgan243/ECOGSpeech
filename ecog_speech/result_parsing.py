@@ -296,7 +296,7 @@ def plot_training(loss_df, title=None, ax=None, logy=True, **plt_kwargs):
 
 
 def plot_sensor_band_training(lowhz_df, centerhz_df, highhz_df,
-                              title=None, ax=None, figsize=(15, 6)):
+                              title=None, ax=None, peak_fs=300, figsize=(15, 6)):
     for c in lowhz_df.columns:
         ax = centerhz_df[c].plot(figsize=figsize, lw=3, ax=ax)
         ax.fill_between(centerhz_df.index,
@@ -308,6 +308,7 @@ def plot_sensor_band_training(lowhz_df, centerhz_df, highhz_df,
     ax.set_ylabel('Hz', fontsize=13)
     # TODO: Can we map this to actual batches?
     ax.set_xlabel('Batch Sample Index', fontsize=13)
+    ax.axhline(peak_fs, lw=3, color='grey', alpha=0.4)
     ax.axhline(0, lw=3, color='grey', alpha=0.4)
     ax.grid(True)
     #plt.clf()
@@ -426,12 +427,12 @@ def plot_param_perf_facet(results_df):
                                     & (~results_df.shuffle_channels)
                                     & results_df.sn_n_bands.ne(2)
                                     # & results_df.in_channel_dropout_rate.eq(0)
-                                    & results_df.dropout.eq(.25)
+                                    #& results_df.dropout.eq(.25)
                                     ],
                     x='sn_n_bands', y='accuracy', hue='in_channel_dropout_rate', palette='mako',
                     col_order=['MC-19', 'MC-21', 'MC-22', 'MC-24',  # 'MC-25',
                                'MC-26'],
-                    col='test_patient',  # row='in_channel_dropout_rate',
+                    col='test_patient',   row='dropout',
                     kind='bar', height=6.5, aspect=.7)
     ln = None
     for tp, v in rand_res_map.items():
