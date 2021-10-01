@@ -84,6 +84,10 @@ def make_model(options=None, nww=None, model_name=None, model_kws=None):
             model = base.TimeNormBaseMultiSincNN_v10(**model_kws)
         elif 'v11' in model_name:
             model = base.TimeNormBaseMultiSincNN_v11(**model_kws)
+        elif 'v12' in model_name:
+            model = base.TimeNormBaseMultiSincNN_v12(**model_kws)
+        elif 'v13' in model_name:
+            model = base.TimeNormBaseMultiSincNN_v13(**model_kws)
 
     elif model_name == 'base-cnn':
         if model_kws is None:
@@ -134,12 +138,14 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     cv_p_tuples = dataset_cls.make_tuples_from_sets_str(options.cv_sets)
     test_p_tuples = dataset_cls.make_tuples_from_sets_str(options.test_sets)
 
+    base_kws = dict(pre_processing_pipeline=options.pre_processing_pipeline,
+                    data_subset=options.data_subset)
     if train_data_kws is None:
-        train_data_kws = dict(patient_tuples=train_p_tuples, pre_processing_pipeline=options.pre_processing_pipeline)
+        train_data_kws = dict(patient_tuples=train_p_tuples, **base_kws)
     if cv_data_kws is None:
-        cv_data_kws = dict(patient_tuples=cv_p_tuples, pre_processing_pipeline=options.pre_processing_pipeline)
+        cv_data_kws = dict(patient_tuples=cv_p_tuples, **base_kws)
     if test_data_kws is None:
-        test_data_kws = dict(patient_tuples=test_p_tuples, pre_processing_pipeline=options.pre_processing_pipeline)
+        test_data_kws = dict(patient_tuples=test_p_tuples, **base_kws)
 
     dl_kws = dict(num_workers=num_dl_workers, batch_size=options.batch_size,
                   shuffle=False, random_sample=True)
@@ -341,6 +347,7 @@ default_model_hyperparam_option_kwargs = [
     dict(dest='--early-stopping-patience', default=None, type=int),
     dict(dest='--batch-size', default=256, type=int),
     dict(dest='--bw-reg-weight', default=0.0, type=float),
+    dict(dest='--data-subset', default='data', type=str)
 ]
 
 all_model_hyperparam_names = [d['dest'].replace('--', '').replace('-', '_')

@@ -477,6 +477,7 @@ class MultiDim_BNorm1D(torch.nn.Module):
                       dim=self.norm_dim)
         return o
 
+
 class MultiDim_Conv1D(torch.nn.Module):
     def __init__(self, n_sensors, in_ch, out_ch, k_s, s, d, g, shared=True, conv_dim=1, ):
         super(MultiDim_Conv1D, self).__init__()
@@ -514,7 +515,10 @@ class TimeNormBaseMultiSincNN(BaseMultiSincNN):
                                  dilation=d, groups=g))
         if batch_norm is not None and self.batch_norm:
             # Override: Multi dim norm needs to know the number of bands
-            b.append(batch_norm)
+            if isinstance(batch_norm, list):
+                b += batch_norm
+            else:
+                b.append(batch_norm)
         b.append(self.activation_cls())
         return b
 
@@ -1050,6 +1054,14 @@ class TimeNormBaseMultiSincNN_v11(TimeNormBaseMultiSincNN):
         layer_list += self.make_cnn_layer_block(self.in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1,
                                       #batch_norm=MultiDim_BNorm1D(self.n_cnn_filters, self.n_bands)
                                       )
+#        layer_list += [
+#            # Swap band and sensor
+#            Permute((0, 2, 1, 3)),
+#            # Aggregate stats on batch, sensor, time (i.e. band-level)
+#            torch.nn.BatchNorm2d(self.n_bands),
+#            # Swap band and sensor back
+#            Permute((0, 2, 1, 3))
+#        ]
                                      #batch_norm=torch.nn.BatchNorm2d(self.in_channels, affine=False))
         layer_list += self.make_cnn_layer_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
                                       #batch_norm=MultiDim_BNorm1D(self.n_cnn_filters, self.n_bands)
@@ -1065,6 +1077,161 @@ class TimeNormBaseMultiSincNN_v11(TimeNormBaseMultiSincNN):
                                         #batch_norm=None)
         layer_list += [Flatten(), self.dropout_cls(self.dropout)]
         return layer_list
+
+
+class TimeNormBaseMultiSincNN_v12(TimeNormBaseMultiSincNN):
+    """
+    User regular 2d batch norm at the band level following the
+    sinc net layers - much faster and more stable from initial steps
+    """
+
+    def make_cnn_layer_list(self):
+        print("=-=-=- Make layer list =-=-=-")
+        layer_list = [#ScaleByConstant(128),
+                      Unsqueeze(2)]
+
+        if self.in_channel_dropout_rate > 0:
+            layer_list.append(torch.nn.Dropout2d(self.in_channel_dropout_rate))
+
+        layer_list.append(
+            MultiChannelSincNN(self.n_bands, self.in_channels,
+                               padding=self.sn_padding,
+                               kernel_size=self.sn_kernel_size, fs=self.fs,
+                               per_channel_filter=self.per_channel_filter,
+                               band_spacing=self.band_spacing),
+        )
+
+        if self.batch_norm:
+            layer_list += [
+                # Swap band and sensor
+                Permute((0, 2, 1, 3)),
+                # Aggregate stats on batch, sensor, time (i.e. band-level)
+                torch.nn.BatchNorm2d(self.n_bands),
+                # Swap band and sensor back
+                Permute((0, 2, 1, 3))
+            ]
+            #layer_list.append(MultiDimBatchNorm2d([self.n_bands], [0, 1, 3], affine=True))
+            #layer_list.append(MultiDimBatchNorm2d([self.in_channels, self.n_bands], [0, 3], affine=False))
+            #layer_list.append(MultiDimBatchNorm2d([self.in_channels, self.n_bands], [0, 3], affine=True))
+            #layer_list.append(MultiDim_BNorm1D(self.in_channels, self.n_bands))
+
+        #print("VERS 3")
+        if self.cog_attn:
+            tmp_model = torch.nn.Sequential(*layer_list)
+            t_out = tmp_model(self.t_in)
+            print("!!-Using attentions-!!")
+            layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
+
+        #######
+        # Sets up for late fusion - keep one filter per channel
+        layer_list += self.make_cnn_layer_block(self.in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1,
+                                      #batch_norm=MultiDim_BNorm1D(self.n_cnn_filters, self.n_bands)
+                                                batch_norm=[# Swap band and sensor
+                                                            Permute((0, 2, 1, 3)),
+                                                            # Aggregate stats on batch, sensor, time (i.e. band-level)
+                                                            torch.nn.BatchNorm2d(self.n_bands),
+                                                            # Swap band and sensor back
+                                                            Permute((0, 2, 1, 3))]
+                                      )
+                                     #batch_norm=torch.nn.BatchNorm2d(self.in_channels, affine=False))
+        layer_list += self.make_cnn_layer_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
+                                      #batch_norm=MultiDim_BNorm1D(self.n_cnn_filters, self.n_bands)
+                                                batch_norm=[  # Swap band and sensor
+                                                    Permute((0, 2, 1, 3)),
+                                                    # Aggregate stats on batch, sensor, time (i.e. band-level)
+                                                    torch.nn.BatchNorm2d(self.n_bands),
+                                                    # Swap band and sensor back
+                                                    Permute((0, 2, 1, 3))]
+                                      )
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False)
+                                     #batch_norm=None
+                                     #)
+        layer_list += self.make_cnn_layer_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,
+                                                batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, ))
+                                        #batch_norm=None)
+        layer_list += self.make_cnn_layer_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,
+                                                batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, ))
+                                        #batch_norm=None)
+        layer_list += [Flatten(), self.dropout_cls(self.dropout)]
+        return layer_list
+
+class TimeNormBaseMultiSincNN_v13(TimeNormBaseMultiSincNN):
+    """
+    User regular 2d batch norm at the band level following the
+    sinc net layers - much faster and more stable from initial steps
+    Include scaling at top level
+    """
+
+    def make_cnn_layer_list(self):
+        print("=-=-=- Make layer list =-=-=-")
+        layer_list = [ScaleByConstant(128),
+                      Unsqueeze(2)]
+
+        if self.in_channel_dropout_rate > 0:
+            layer_list.append(torch.nn.Dropout2d(self.in_channel_dropout_rate))
+
+        layer_list.append(
+            MultiChannelSincNN(self.n_bands, self.in_channels,
+                               padding=self.sn_padding,
+                               kernel_size=self.sn_kernel_size, fs=self.fs,
+                               per_channel_filter=self.per_channel_filter,
+                               band_spacing=self.band_spacing),
+        )
+
+        if self.batch_norm:
+            layer_list += [
+                # Swap band and sensor
+                Permute((0, 2, 1, 3)),
+                # Aggregate stats on batch, sensor, time (i.e. band-level)
+                torch.nn.BatchNorm2d(self.n_bands),
+                # Swap band and sensor back
+                Permute((0, 2, 1, 3))
+            ]
+            #layer_list.append(MultiDimBatchNorm2d([self.n_bands], [0, 1, 3], affine=True))
+            #layer_list.append(MultiDimBatchNorm2d([self.in_channels, self.n_bands], [0, 3], affine=False))
+            #layer_list.append(MultiDimBatchNorm2d([self.in_channels, self.n_bands], [0, 3], affine=True))
+            #layer_list.append(MultiDim_BNorm1D(self.in_channels, self.n_bands))
+
+        #print("VERS 3")
+        if self.cog_attn:
+            tmp_model = torch.nn.Sequential(*layer_list)
+            t_out = tmp_model(self.t_in)
+            print("!!-Using attentions-!!")
+            layer_list.append(CogAttn((t_out.shape[-2], t_out.shape[-1]), self.in_channels))
+
+        #######
+        # Sets up for late fusion - keep one filter per channel
+        layer_list += self.make_cnn_layer_block(self.in_channels, self.n_cnn_filters, k_s=(1, 5), s=(1, 5), d=(1, 2), g=1,
+                                      #batch_norm=MultiDim_BNorm1D(self.n_cnn_filters, self.n_bands)
+                                                batch_norm=[# Swap band and sensor
+                                                            Permute((0, 2, 1, 3)),
+                                                            # Aggregate stats on batch, sensor, time (i.e. band-level)
+                                                            torch.nn.BatchNorm2d(self.n_bands),
+                                                            # Swap band and sensor back
+                                                            Permute((0, 2, 1, 3))]
+                                      )
+                                     #batch_norm=torch.nn.BatchNorm2d(self.in_channels, affine=False))
+        layer_list += self.make_cnn_layer_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 3), d=1, g=1,
+                                      #batch_norm=MultiDim_BNorm1D(self.n_cnn_filters, self.n_bands)
+                                                batch_norm=[  # Swap band and sensor
+                                                    Permute((0, 2, 1, 3)),
+                                                    # Aggregate stats on batch, sensor, time (i.e. band-level)
+                                                    torch.nn.BatchNorm2d(self.n_bands),
+                                                    # Swap band and sensor back
+                                                    Permute((0, 2, 1, 3))]
+                                      )
+                                      #batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, affine=False)
+                                     #batch_norm=None
+                                     #)
+        layer_list += self.make_cnn_layer_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(self.n_bands, 1), s=(1, 1), d=1, g=1,
+                                                batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, ))
+                                        #batch_norm=None)
+        layer_list += self.make_cnn_layer_block(self.n_cnn_filters, self.n_cnn_filters, k_s=(1, 3), s=(1, 1), d=1, g=1,
+                                                batch_norm=torch.nn.BatchNorm2d(self.n_cnn_filters, ))
+                                        #batch_norm=None)
+        layer_list += [Flatten(), self.dropout_cls(self.dropout)]
+        return layer_list
+
 
 
 @attr.attrs
