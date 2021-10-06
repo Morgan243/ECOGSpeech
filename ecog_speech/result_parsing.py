@@ -615,6 +615,7 @@ def load_dataset_from_results(results, partition=None):
                        sensor_columns=list(range(model_kws['in_channels'])))
     return dset
 
+
 def run_one(options, result_file):
     output_fig_map = dict()
     ###############
@@ -660,14 +661,7 @@ def run_one(options, result_file):
                            # TODO: This may hide problems or cause issues?
                            sensor_columns=list(range(model_kws['in_channels'])))
 
-        if results['model_name'] == 'base-sn':
-            model = base.BaseMultiSincNN(**model_kws)
-        elif results['model_name'] == 'tnorm-base-sn':
-            model = base.TimeNormBaseMultiSincNN(**model_kws)
-        elif results['model_name'] == 'base-cnn':
-            model = base.BaseCNN(**model_kws)
-        else:
-            raise ValueError(f"Unrecognized model_name: {results['model_name']} in {result_file})")
+        model, _ = experiments.make_model(model_name=results['model_name'], model_kws=model_kws)
 
         with open(model_path, 'rb') as f:
             model_state = torch.load(f)
@@ -701,9 +695,13 @@ def run_one(options, result_file):
             pp.close()
         else:
             dl_map = dset.to_eval_replay_dataloader(win_step=options.eval_win_step_size)
-            preds_map = base.Trainer.generate_outputs_from_model(model, dl_map, device=options.device, )
-            fig, ax = plot_model_preds(preds_s=preds_map[ptuple], data_map=data_map,
-                                       sample_index_map=dset.sample_index_maps[ptuple])
+            win_size = results['model_kws']['window_size']
+            win_step = options.eval_win_step_size
+            t_preds_ix = data_map['ecog'].iloc[range(win_size, data_map['ecog'].shape[0], win_step)].index
+            preds_map = base.Trainer.generate_outputs_from_model(model, dl_map, device=options.device,
+                                                                 to_frames=True)
+            fig, ax = plot_model_preds(preds_s=preds_map[ptuple].set_index(t_preds_ix)['preds'],
+                                       data_map=data_map, sample_index_map=dset.sample_index_maps[ptuple])
             print("Saving to " + str(fig_filename))
             fig.savefig(fig_filename)
             output_fig_map[fig_name] = fig
