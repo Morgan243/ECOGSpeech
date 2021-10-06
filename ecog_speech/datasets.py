@@ -455,6 +455,10 @@ class NorthwesternWords(BaseDataset):
                             SN=syn_patient_set_map,
                             NW=nw_patient_set_map)
     fname_prefix_map = {'Mayo Clinic': 'MC', 'Synthetic': 'SN', 'Northwestern': 'NW'}
+    tuple_to_sets_str_map = {t:f"{l}-{p}-{i}"
+                             for l, p_d in all_patient_maps.items()
+                              for p, t_l in p_d.items()
+                               for i, t in enumerate(t_l)}
 
     # num_mfcc = 13
     #signal_key = 'signal'
@@ -485,6 +489,7 @@ class NorthwesternWords(BaseDataset):
     # can save on memory and reading+parsing time
     data_from: 'NorthwesternWords' = attr.ib(None)
 
+    default_data_subset = 'Data'
     data_subset = attr.ib('Data')
 
 
@@ -551,6 +556,7 @@ class NorthwesternWords(BaseDataset):
                                                             #sensor_columns=self.sensor_columns,
                                                            # IMPORTANT: Don't parse data yet
                                                             parse_mat_data=False,
+                                                           subset=self.data_subset,
                                                             verbose=self.verbose)
                               for l_p_s_t_tuple in data_iter}
 
@@ -836,7 +842,7 @@ class NorthwesternWords(BaseDataset):
                       subset=None, base_path=None):
         fname = cls.make_filename(patient, session, trial, location)
         base_path = cls.default_base_path if base_path is None else base_path
-        subset = cls.data_subset if subset is None else subset
+        subset = cls.default_data_subset if subset is None else subset
         p = os.path.join(base_path, location, subset, fname)
         return p
 
@@ -1133,7 +1139,7 @@ class NorthwesternWords(BaseDataset):
         return [p_list[ix]]
 
     def to_eval_replay_dataloader(self, patient_k=None, win_step=1, batch_size=1024, num_workers=4,
-                                  ecog_transform=None, target_transform=None):
+                                  ecog_transform=None):
         if patient_k is None:
             patient_k = list(self.data_maps.keys())
         elif not isinstance(patient_k, list):
