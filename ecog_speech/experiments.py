@@ -347,7 +347,7 @@ default_model_hyperparam_option_kwargs = [
     dict(dest='--early-stopping-patience', default=None, type=int),
     dict(dest='--batch-size', default=256, type=int),
     dict(dest='--bw-reg-weight', default=0.0, type=float),
-    dict(dest='--data-subset', default='data', type=str)
+    dict(dest='--data-subset', default='Data', type=str)
 ]
 
 all_model_hyperparam_names = [d['dest'].replace('--', '').replace('-', '_')
