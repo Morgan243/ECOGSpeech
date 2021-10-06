@@ -1484,10 +1484,12 @@ class Trainer:
         Evaluate a model the trainer has on a dictionary of dataloaders.
         """
         model = self.model_map[model_key].eval()
-        return self.generate_outputs_from_model(model, dl_map, criterion=self.criterion, device=self.device)
+        return self.generate_outputs_from_model(model, dl_map, criterion=self.criterion, device=self.device,
+                                                to_frames=False)
 
     @classmethod
-    def generate_outputs_from_model(cls, model, dl_map, criterion=None, device=None) -> dict:
+    def generate_outputs_from_model(cls, model, dl_map, criterion=None, device=None,
+                                    to_frames=True, win_step=None, win_size=None) -> dict:
         """
         Produce predictions and targets for a mapping of dataloaders. B/c the trainer
         must know how to pair predictions and targets to train, this is implemented here.
@@ -1506,9 +1508,16 @@ class Trainer:
         model.eval()
         output_map = dict()
         with torch.no_grad():
-            for dname, dset in dl_map.items():
+            for dname, dl in dl_map.items():
                 preds_l, actuals_l, criterion_l = list(), list(), list()
-                for _x in tqdm(dset, desc="Eval on [%s]" % str(dname)):
+                dset = dl.dataset
+
+                #if hasattr(dset, 'data_maps'):
+                #    assert len(dset.data_maps) == 1
+
+                #data_map = next(iter(dset.data_maps.values()))
+
+                for _x in tqdm(dl, desc="Eval on [%s]" % str(dname)):
                     _x_in = _x['ecog_arr']
                     _y = _x['text_arr']
                     if device:
@@ -1523,10 +1532,27 @@ class Trainer:
                 output_map[dname] = dict(preds=torch.cat(preds_l).detach().cpu().numpy(),
                                          actuals=torch.cat(actuals_l).detach().cpu().int().numpy())
                                          #loss=torch.cat(criterion_l).detach().cpu().numpy())
+                if to_frames:
+                    t_ix = None
+                    #if win_step is not None and win_size is not None:
+                    #    t_ix = data_map['ecog'].iloc[range(win_size, data_map['ecog'].shape[0], win_step)].index
+                    out_df = pd.DataFrame({k: v.squeeze() for k, v in output_map[dname].items()}, index=t_ix)
+                    output_map[dname] = out_df
+                    #output_map = {out_k: pd.DataFrame({k: v.squeeze() for k, v in preds_map.items()}, index=t_ix)
+                    #              for out_k, preds_map in output_map.items()}
+
                 if criterion is not None:
                     output_map[dname]['loss'] = torch.Tensor(criterion_l).detach().cpu().numpy()
 
         if model_in_training:
             model.train()
+
+#        if to_frames:
+#            t_ix = None
+#            if win_step is not None and win_size is not None and data_map is not None:
+#                t_ix = data_map['ecog'].iloc[range(win_size, data_map['ecog'].shape[0], win_step)].index
+#
+#            output_map = {out_k: pd.DataFrame({k: v.squeeze() for k, v in preds_map.items()}, index=t_ix)
+#                          for out_k, preds_map in output_map.items()}
 
         return output_map
