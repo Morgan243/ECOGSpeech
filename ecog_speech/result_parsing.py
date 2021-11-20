@@ -296,9 +296,10 @@ def plot_training(loss_df, title=None, ax=None, logy=True, **plt_kwargs):
 
 
 def plot_sensor_band_training(lowhz_df, centerhz_df, highhz_df,
-                              title=None, ax=None, peak_fs=300, figsize=(15, 6)):
+                              title=None, ax=None, peak_fs=300, figsize=(15, 6),
+                              **plt_kws):
     for c in lowhz_df.columns:
-        ax = centerhz_df[c].plot(figsize=figsize, lw=3, ax=ax)
+        ax = centerhz_df[c].plot(figsize=figsize, lw=3, ax=ax, **plt_kws)
         ax.fill_between(centerhz_df.index,
                         lowhz_df[c],
                         highhz_df[c],
@@ -563,14 +564,21 @@ def make_loss_frame_from_results(results):
     return df
 
 
-def load_model_from_results(results, base_model_path=None):
+def load_model_from_results(results, base_model_path=None, **kws_update):
     model_kws = results['model_kws']
 
     if base_model_path is not None:
-        model_filename = os.path.split(results['save_model_path'])[-1]
+        _p = results['save_model_path']
+        _p = _p if '\\' not in _p else _p.replace('\\', '/')
+
+        model_filename = os.path.split(_p)[-1]
         model_path = os.path.join(base_model_path, model_filename)
     else:
         model_path = results['save_model_path']
+
+
+    #path = "C:\\temp\myFolder\example\\"
+    #newPath = path.replace(os.sep, '/')
 
     #if base_model_path is None:
     #    if result_base_path is None:
@@ -587,6 +595,7 @@ def load_model_from_results(results, base_model_path=None):
 #        raise ValueError()
         #raise ValueError(f"Unrecognized model_name: {results['model_name']} in {result_file})")
 
+    model_kws.update(kws_update)
     model, _ = experiments.make_model(model_name=results['model_name'], model_kws=model_kws)
 
     with open(model_path, 'rb') as f:

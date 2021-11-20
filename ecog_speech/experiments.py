@@ -8,7 +8,7 @@ from ecog_speech import datasets, utils
 from ecog_speech.models import base
 
 
-def make_model(options=None, nww=None, model_name=None, model_kws=None):
+def make_model(options=None, nww=None, model_name=None, model_kws=None, print_details=True):
     """
     Helper method - Given command-line options and a NorthwesterWords derived dataset, build the model
     specified in the options.
@@ -22,6 +22,7 @@ def make_model(options=None, nww=None, model_name=None, model_kws=None):
             batch_norm=options.batchnorm,
             dense_width=options.dense_width,
             activation_cls=options.activation_class,
+            print_details=print_details
         )
 
     model_name = options.model_name if model_name is None else model_name
