@@ -164,8 +164,8 @@ class MultiChannelSincNN(torch.nn.Module):
         return o
 
     def get_band_params(self, trainer=None, to_numpy=True):
-        params = [dict(band_hz=snn.band_hz_,
-                         low_hz=snn.low_hz_)
+        params = [dict(band_hz=torch.abs(snn.band_hz_) + snn.min_band_hz / snn.sample_rate,
+                       low_hz=torch.abs(snn.low_hz_) + snn.min_low_hz / snn.sample_rate)
                     for snn in self.sinc_nn_list]
         if to_numpy:
             params = [{k:v.clone().cpu().detach().numpy() for k, v in p.items()}
@@ -180,14 +180,19 @@ class BaseCNN(torch.nn.Module):
                  dropout2d=False,
                  batch_norm=False,
                  dense_width=None,
-                 n_cnn_filters=None
+                 n_cnn_filters=None,
+                 activation_cls=None,
+                 print_details=True
                  #dense_depth=1
                  ):
 
         super().__init__()
         self.in_channels = in_channels
         self.dropout = dropout
-        self.activation_cls = self.default_activatino_cls
+        self.activation_cls = self.default_activatino_cls if activation_cls is None else activation_cls
+        if isinstance(self.activation_cls, str):
+            self.activation_cls = getattr(torch.nn, self.activation_cls)
+
         self.dropout_cls = torch.nn.Dropout2d if dropout2d else torch.nn.Dropout
         self.n_cnn_filters = 32 if n_cnn_filters is None else n_cnn_filters
 
@@ -219,9 +224,11 @@ class BaseCNN(torch.nn.Module):
 
         self.m = torch.nn.Sequential(*layer_list )
         t_in = torch.rand(32, in_channels, window_size)
-        print("T input shape: " + str(t_in.shape))
+        if print_details:
+            print("T input shape: " + str(t_in.shape))
         t_out = self.m(t_in)
-        print("T output shape: " + str(t_out.shape))
+        if print_details:
+            print("T output shape: " + str(t_out.shape))
         self.dense_width = dense_width
         if self.dense_width is not None:
             self.m.add_module("lin_h0", torch.nn.Linear(t_out.shape[-1], self.dense_width))
@@ -233,8 +240,9 @@ class BaseCNN(torch.nn.Module):
 
         self.m.add_module('sigmoid_output', torch.nn.Sigmoid())
         self.n_params = utils.number_of_model_params(self.m)
-        utils.print_sequential_arch(self.m, t_in)
-        print("N params: " + str(self.n_params))
+        if print_details:
+            utils.print_sequential_arch(self.m, t_in)
+            print("N params: " + str(self.n_params))
 
     def forward(self, x):
         return self.m(x)
@@ -257,6 +265,7 @@ class BaseMultiSincNN(torch.nn.Module):
                  band_spacing='linear',
                  make_block_override=None,
                  activation_cls=None,
+                 print_details=True,
                  #dense_depth=1
                  ):
 
@@ -276,9 +285,10 @@ class BaseMultiSincNN(torch.nn.Module):
         #self.activation_cls = torch.nn.SELU if activation_cls is None else activation_cls
         self.activation_cls = self.default_activation_cls if activation_cls is None else activation_cls
         if isinstance(self.activation_cls, str):
-            #self.default_activation_cls_map =
             self.activation_cls = getattr(torch.nn, self.activation_cls)
-        print("Using activation " + str(self.activation_cls))
+
+        if print_details:
+            print("Using activation " + str(self.activation_cls))
 
         self.batch_norm_cls = self.default_batch_norm_cls# if batch_norm_cls is None else batch_norm_cls
         self.per_channel_filter = per_channel_filter
@@ -308,8 +318,9 @@ class BaseMultiSincNN(torch.nn.Module):
 
         self.m.add_module('sigmoid_output', torch.nn.Sigmoid())
         self.n_params = utils.number_of_model_params(self.m)
-        utils.print_sequential_arch(self.m, t_in)
-        print("N params: " + str(self.n_params))
+        if print_details:
+            utils.print_sequential_arch(self.m, t_in)
+            print("N params: " + str(self.n_params))
 
     def make_cnn_layer_block(self, in_ch, out_ch, k_s, s, d, g):
         b = []
