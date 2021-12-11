@@ -5,7 +5,7 @@ from os.path import join as pjoin
 import json
 import torch
 from ecog_speech import datasets, utils
-from ecog_speech.models import base
+from ecog_speech.models import base, sinc_ieeg
 
 
 def make_model(options=None, nww=None, model_name=None, model_kws=None, print_details=True):
@@ -64,32 +64,8 @@ def make_model(options=None, nww=None, model_name=None, model_kws=None, print_de
                              cog_attn=options.cog_attn,
                              band_spacing=options.sn_band_spacing,
                              **base_kws)
-        # Grab the right model - should have done a dict lookup or something...
-        if 'v2' in model_name:
-            model = base.TimeNormBaseMultiSincNN_v2(**model_kws)
-        elif 'v3' in model_name:
-            model = base.TimeNormBaseMultiSincNN_v3(**model_kws)
-        #elif 'v4' in model_name:
-        #    model = base.TimeNormBaseMultiSincNN_v4(**model_kws)
-        elif 'v5' in model_name:
-            model = base.TimeNormBaseMultiSincNN_v5(**model_kws)
-        elif 'v6' in model_name:
-            model = base.TimeNormBaseMultiSincNN_v6(**model_kws)
-        elif 'v7' in model_name:
-            model = base.TimeNormBaseMultiSincNN_v7(**model_kws)
-        elif 'v8' in model_name:
-            model = base.TimeNormBaseMultiSincNN_v8(**model_kws)
-        elif 'v9' in model_name:
-            model = base.TimeNormBaseMultiSincNN_v9(**model_kws)
-        elif 'v10' in model_name:
-            model = base.TimeNormBaseMultiSincNN_v10(**model_kws)
-        elif 'v11' in model_name:
-            model = base.TimeNormBaseMultiSincNN_v11(**model_kws)
-        elif 'v12' in model_name:
-            model = base.TimeNormBaseMultiSincNN_v12(**model_kws)
-        elif 'v13' in model_name:
-            model = base.TimeNormBaseMultiSincNN_v13(**model_kws)
-
+        model_cls = sinc_ieeg.get_model_cls_from_options_str(options.model_name)
+        model = model_cls(**model_kws)
     elif model_name == 'base-cnn':
         if model_kws is None:
             model_kws = dict(in_channels=len(nww.selected_columns),
