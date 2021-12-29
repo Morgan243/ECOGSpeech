@@ -6,6 +6,7 @@ import torch
 from ecog_speech import utils
 import matplotlib
 
+
 def weights_init(m):
     classname = m.__class__.__name__
     if 'Conv' in classname or 'Linear' in classname:
@@ -14,11 +15,13 @@ def weights_init(m):
         torch.nn.init.normal_(m.weight.data, 1.0, 0.02)
         torch.nn.init.constant_(m.bias.data, 0)
 
+
 def copy_model_state(m):
     from collections import OrderedDict
     s = OrderedDict([(k, v.cpu().detach().clone())
                       for k, v in m.state_dict().items()])
     return s
+
 
 class ScaleByConstant(torch.nn.Module):
     def __init__(self, divide_by):
@@ -47,6 +50,7 @@ class Flatten(torch.nn.Module):
     def forward(self, input):
         return input.reshape(input.shape[0], -1)
 
+
 class Unsqueeze(torch.nn.Module):
     def __init__(self, dim):
         super(Unsqueeze, self).__init__()
@@ -71,6 +75,7 @@ class Reshape(torch.nn.Module):
 
     def forward(self, x):
         return x.reshape(x.shape[0], *self.shape)
+
 
 class CogAttn(torch.nn.Module):
     def __init__(self, trailing_dim, in_channels=64, pooling_size=50):
@@ -112,8 +117,10 @@ class CogAttn(torch.nn.Module):
         return y
         # attended_out.shape
 
+
 from ecog_speech.models import kaldi_nn
 SincNN = kaldi_nn.SincConv
+
 
 class MultiChannelSincNN(torch.nn.Module):
     def __init__(self, num_bands, num_channels,
@@ -540,9 +547,13 @@ class Trainer:
     epochs_trained = attr.ib(0)
     device = attr.ib(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
 
+    #weights_init_f = attr.ib(Trainer.weights_init)
+    weights_init_f = attr.ib(None)
+
     epoch_cb_history = attr.ib(attr.Factory(list), init=False)
     batch_cb_history = attr.ib(attr.Factory(list), init=False)
     model_regularizer = attr.ib(None)
+    
 
     default_optim_cls = torch.optim.Adam
 
@@ -555,7 +566,8 @@ class Trainer:
         self.model_map = {k: v.to(self.device) for k, v in self.model_map.items()}
         #self.opt_map = dict()
         for k, m in self.model_map.items():
-            m.apply(self.weights_init)
+            if self.weights_init_f is not None:
+                m.apply(self.weights_init_f)
 
             if k not in self.opt_map:
                 if self.default_optim_cls == torch.optim.Adam:
