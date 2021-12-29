@@ -82,6 +82,8 @@ def make_model(options=None, nww=None, model_name=None, model_kws=None, print_de
 
 
 def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv_data_kws=None, test_data_kws=None,
+                              train_sets_str=None, cv_sets_str=None, test_sets_str=None,
+                              train_sensor_columns='valid',
                               num_dl_workers=8) -> tuple:
     """
     Helper method to create instances of dataset_cls as specified in the command-line options and
@@ -111,9 +113,12 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     if dataset_cls is None:
         dataset_cls = datasets.BaseDataset.get_dataset_by_name(options.dataset)
 
-    train_p_tuples = dataset_cls.make_tuples_from_sets_str(options.train_sets)
-    cv_p_tuples = dataset_cls.make_tuples_from_sets_str(options.cv_sets)
-    test_p_tuples = dataset_cls.make_tuples_from_sets_str(options.test_sets)
+    train_p_tuples = dataset_cls.make_tuples_from_sets_str(options.train_sets if train_sets_str is None
+                                                           else train_sets_str)
+    cv_p_tuples = dataset_cls.make_tuples_from_sets_str(options.cv_sets if cv_sets_str is None 
+                                                        else cv_sets_str)
+    test_p_tuples = dataset_cls.make_tuples_from_sets_str(options.test_sets if test_sets_str is None
+                                                          else test_sets_str)
 
     base_kws = dict(pre_processing_pipeline=options.pre_processing_pipeline,
                     data_subset=options.data_subset)
@@ -133,7 +138,8 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     dataset_map = dict()
     print("Using dataset class: %s" % str(dataset_cls))
     train_nww = dataset_cls(power_q=options.power_q,
-                            sensor_columns='valid',
+                            #sensor_columns='valid',
+                            sensor_columns=train_sensor_columns,
                             **train_data_kws)
     if options.roll_channels and options.shuffle_channels:
         raise ValueError("--roll-channels and --shuffle-channels are mutually exclusive")
@@ -182,6 +188,170 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
 
     return dataset_map, dataloader_map, eval_dataloader_map
 
+def train_and_test_model(model, dl_map, eval_dl_map, options, Trainer_CLS=base.Trainer,
+                         **trainer_kws):
+    reg_f = None
+    if options.bw_reg_weight > 0:
+        print(f"!!!! Using BW regularizeer W={options.bw_reg_weight} !!!!")
+        reg_f = lambda m: model.bandwidth_regularizer(m, w=options.bw_reg_weight)
+
+    batch_cb = None
+    sn_params_tracked = False
+    if options.track_sinc_params and 'sn' in options.model_name:
+        sn_params_tracked = True
+        batch_cb = dict(band_params=model.get_band_params)
+    elif options.track_sinc_params:
+        print("--track-sinc-params was set, but not using an SN model - ignoring!")
+
+    print(Trainer_CLS)
+    print(base.__file__)
+    trainer = Trainer_CLS(dict(model=model), opt_map=dict(),
+                           train_data_gen=dl_map['train'],
+                           cv_data_gen=dl_map.get('cv'),
+                           model_regularizer=reg_f,
+                           learning_rate=options.learning_rate,
+                           early_stopping_patience=options.early_stopping_patience,
+                           device=options.device,
+                           **trainer_kws)
+
+    print("Training")
+    losses = trainer.train(options.n_epochs,
+                           batch_callbacks=batch_cb,
+                           batch_cb_delta=5)
+    print("Reloading best model state")
+    model.load_state_dict(trainer.get_best_state())
+
+    #####
+    # Produce predictions and score them
+    model.eval()
+    outputs_map = trainer.generate_outputs(**eval_dl_map)
+    clf_str_map = utils.make_classification_reports(outputs_map)
+    
+    performance_map = {part_name: utils.performance(outputs_d['actuals'], outputs_d['preds'] > 0.5)
+                       for part_name, outputs_d in outputs_map.items()}
+
+    return trainer, outputs_map, performance_map
+
+    #####
+    # Prep a results structure for saving - everything must be json serializable (no array objects)
+#    uid = str(uuid.uuid4())
+#    t = int(time.time())
+#    #name = "%d_%s_TL.json" % (t, uid)
+#    name = "%d_%s.json" % (t, uid)
+#    res_dict = dict(#path=path,
+#                    datetime=str(datetime.now()), uid=uid, t=t,
+#                    name=name,
+#                    #batch_losses=list(losses),
+#                    batch_losses=losses,
+#                    train_selected_columns=dataset_map['train'].selected_columns,
+#                    best_model_epoch=trainer.best_model_epoch,
+#                    num_trainable_params=utils.number_of_model_params(model),
+#                    num_params=utils.number_of_model_params(model, trainable_only=False),
+#                    model_kws=model_kws,
+#                    clf_reports=clf_str_map,
+#                    **{'train_'+k: v for k, v in train_perf_map.items()},
+#                    **{'cv_'+k: v for k, v in cv_perf_map.items()},
+#                    **test_perf_map,
+#                    #evaluation_perf_map=perf_maps,
+#                    #**pretrain_res,
+#                    #**perf_map,
+#        **vars(options))
+    
+
+def run_tl(options):
+    ##################
+    def make_sub_results(stage, _trainer, _dataset_map, _outputs_map, _performance_map):
+        return dict(stage=stage,
+                    batch_losses=_trainer.epoch_res_map,
+                    train_selected_columns=_dataset_map['train'].selected_columns,
+                    best_model_epoch=_trainer.best_model_epoch,
+                    **utils.make_classification_reports({k + "_clf_report": d
+                                                         for k, d in _outputs_map.items()}),
+                    **{f"{part_name}_{metric_name}": metric_value
+                       for part_name, perf_d in _performance_map.items()
+                       for metric_name, metric_value in perf_d.items()})
+    ##################
+
+    #####
+    # Load pre-training data and initialize a fresh model from it
+    print("Loading pre-training data")
+    pre_dataset_map, pre_dl_map, pre_eval_dl_map = make_datasets_and_loaders(options,
+                                                                             train_sets_str=options.pre_train_sets,
+                                                                             cv_sets_str=options.pre_cv_sets,
+                                                                             test_sets_str=options.pre_test_sets)
+
+    print("Initializing new model")
+    model, model_kws = make_model(options, pre_dataset_map['train'])
+    print("Pre-training model")
+    pre_trainer, pre_outputs_map, pre_performance_map = train_and_test_model(model, pre_dl_map,
+                                                                             pre_eval_dl_map, options)
+    pre_results_d = make_sub_results('pretraining', pre_trainer, pre_dataset_map, pre_outputs_map, pre_performance_map)
+    selected_columns = pre_dataset_map['train'].selected_columns
+
+    ### Fine-tuning
+    print("Loading fine-tuning data")
+    dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options,
+                                                                 train_sensor_columns=selected_columns,
+                                                                 train_sets_str=options.train_sets,
+                                                                 cv_sets_str=options.cv_sets,
+                                                                 test_sets_str=options.test_sets)
+    print("Fine-tuning model")
+    trainer, outputs_map, performance_map = train_and_test_model(model, dl_map, eval_dl_map, options,
+                                                                 # Don't overwrite the weights that were pre-trained
+                                                                 weights_init_f=None)
+
+    results_d = make_sub_results('finetuning', trainer, dataset_map, outputs_map, performance_map)
+    print("complete")
+
+    uid = str(uuid.uuid4())
+    results_d['uid'] = pre_results_d['uid'] = uid 
+    t = int(time.time())
+    name = "%d_%s_TL" % (t, uid)
+    file_name = name + '.json'
+    res_dict = dict(#path=path,
+                    name=name,
+                    file_name=file_name,
+                    datetime=str(datetime.now()), uid=uid,
+                    #batch_losses=list(losses),
+                    #batch_losses=losses,
+                    train_selected_columns=selected_columns,
+                    #best_model_epoch=trainer.best_model_epoch,
+                    num_trainable_params=utils.number_of_model_params(model),
+                    num_params=utils.number_of_model_params(model, trainable_only=False),
+                    model_kws=model_kws,
+
+                    pretraining_results=pre_results_d,
+                    finetuning_results=results_d,
+            **vars(options))
+    
+    if options.save_model_path is not None:
+        import os
+        p = options.save_model_path
+        if os.path.isdir(p):
+            p = os.path.join(p, uid + '.torch')
+        print("Saving model to " + p)
+        torch.save(model.cpu().state_dict(), p)
+        res_dict['save_model_path'] = p
+
+#    if sn_params_tracked:
+#        lowhz_df_map, highhz_df_map, centerhz_df_map = base.BaseMultiSincNN.parse_band_parameter_training_hist(
+#            trainer.batch_cb_history['band_params'],
+#            fs=model.fs)
+#        if model.per_channel_filter:
+#            res_dict['low_hz_frame'] = {k: lowhz_df.to_json() for k, lowhz_df in lowhz_df_map.items()}
+#            res_dict['high_hz_frame'] = {k: highhz_df.to_json() for k, highhz_df in highhz_df_map.items()}
+#        else:
+#            res_dict['low_hz_frame'] = lowhz_df_map[0].to_json()
+#            res_dict['high_hz_frame'] = highhz_df_map[0].to_json()
+
+    if options.result_dir is not None:
+        path = pjoin(options.result_dir, name)
+        print(path)
+        res_dict['path'] = path
+        with open(path, 'w') as f:
+            json.dump(res_dict, f)
+
+    
 
 def run(options):
     """
@@ -297,10 +467,15 @@ def run(options):
 default_model_hyperparam_option_kwargs = [
     dict(dest='--model-name', default='base-sn', type=str),
     dict(dest='--dataset', default='nww', type=str),
+
+    dict(dest='--pre-train-sets', default=None, type=str),
+    dict(dest='--pre-cv-sets', default=None, type=str),
+    dict(dest='--pre-test-sets', default=None, type=str),
+
     dict(dest='--train-sets', default='MC-19-0,MC-19-1', type=str),
-    # dict(dest='--cv-sets', default='19-2', type=str),
     dict(dest='--cv-sets', default=None, type=str),
     dict(dest='--test-sets', default='MC-19-2', type=str),
+    
     dict(dest='--random-labels', default=False, action="store_true"),
     dict(dest='--pre-processing-pipeline', default='default', type=str),
 
@@ -343,4 +518,9 @@ if __name__ == """__main__""":
     parser = utils.build_argparse(default_option_kwargs,
                                   description="ASPEN+MHRG Experiments v1")
     m_options = parser.parse_args()
-    results = run(m_options)
+    if any(getattr(m_options, s) is not None for s in ['pre_train_sets', 'pre_cv_sets', 'pre_test_sets']):
+        print("TRANSFER LEARNING")
+        run_tl(m_options)
+    else:
+        #if any((m_options.pre_train_sets, m_options.pre_cv_sets, m_options.pre_test_sets))
+        results = run(m_options)
