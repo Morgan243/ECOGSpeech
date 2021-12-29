@@ -119,6 +119,9 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
                                                         else cv_sets_str)
     test_p_tuples = dataset_cls.make_tuples_from_sets_str(options.test_sets if test_sets_str is None
                                                           else test_sets_str)
+    print("Train tuples: " + str(train_p_tuples))
+    print("CV tuples: " + str(cv_p_tuples))
+    print("Test tuples: " + str(test_p_tuples))
 
     base_kws = dict(pre_processing_pipeline=options.pre_processing_pipeline,
                     data_subset=options.data_subset)
