@@ -1133,18 +1133,29 @@ class NorthwesternWords(BaseDataset):
         if sets_str is None:
             return None
 
-        # e.g. MC-19-0
+        # e.g. MC-19-0,MC-19-1
         if ',' in sets_str:
             sets_str_l = sets_str.split(',')
-            # Recurse
-            return [cls.make_tuples_from_sets_str(s)[0] for s in sets_str_l]
+            # Recurse - returns a list, so combine all lists into one with `sum` reduction
+            return sum([cls.make_tuples_from_sets_str(s) for s in sets_str_l], list())
 
-        org, pid, ix = sets_str.split('-')
-        assert pid.isdigit() and ix.isdigit() and org in cls.all_patient_maps.keys()
-        pmap, pid, ix = cls.all_patient_maps[org], int(pid), int(ix)
-        assert pid in pmap, f"PID: {pid} not in {org}'s known data map"
-        p_list = pmap[pid]
-        return [p_list[ix]]
+        set_terms = sets_str.split('-')
+        # e.g. MC-22-1 has three terms ('MC', 22, 1) selecting a specific trial of a specific participant
+        if len(set_terms) == 3:
+            #org, pid, ix = sets_str.split('-')
+            org, pid, ix = set_terms
+            assert pid.isdigit() and ix.isdigit() and org in cls.all_patient_maps.keys()
+            pmap, pid, ix = cls.all_patient_maps[org], int(pid), int(ix)
+            assert pid in pmap, f"PID: {pid} not in {org}'s known data map"
+            p_list = [pmap[pid][ix]]
+        # e.g. MC-22 will return tuples for all of MC-22's data
+        elif len(set_terms) == 2:
+            org, pid = set_terms
+            assert pid.isdigit() and org in cls.all_patient_maps.keys()
+            pmap, pid = cls.all_patient_maps[org], int(pid)
+            assert pid in pmap, f"PID: {pid} not in {org}'s known data map"
+            p_list = pmap[pid]
+        return p_list
 
     def to_eval_replay_dataloader(self, patient_k=None, win_step=1, batch_size=1024, num_workers=4,
                                   ecog_transform=None):
