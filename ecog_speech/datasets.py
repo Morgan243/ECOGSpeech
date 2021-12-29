@@ -508,20 +508,15 @@ class NorthwesternWords(BaseDataset):
         Pipeline parameters sometimes depend on the configuration of the dataset class,
         so for now it is bound method (not classmethod or staticmethod).
         """
-        #samp_ix = feature_processing.SampleIndicesFromStim(ecog_window_size=self.ecog_window_size,
-        #                                                  ecog_window_n=self.ecog_window_n,
-        #                                                  ecog_window_step_sec=self.ecog_window_step_sec,
-        #                                                  ecog_window_shift_sec=self.ecog_window_shift_sec
-        #                                                   )
+
         self.sample_ixer = feature_processing.ChangSampleIndicesFromStim()
 
         p_map = {
             'threshold':
-                (
-                    feature_processing.SubsampleECOG() >>
-                    feature_processing.WordStopStartTimeMap() >>
-                    feature_processing.PowerThreshold(threshold=self.power_threshold) >>
-                    self.sample_ixer),
+                (feature_processing.SubsampleECOG()
+                 >> feature_processing.PowerThreshold(window_samples=48000 // 2)
+                 >> feature_processing.ChangSampleIndicesFromStim(stim_speaking_offset=pd.Timedelta(0, 's'),
+                                                                  stim_silence_offset=pd.Timedelta(1.5, 's'))),
             'quantile':
                 (
                         feature_processing.SubsampleECOG() >>
@@ -1079,7 +1074,10 @@ class NorthwesternWords(BaseDataset):
 
         #####
         plt_audio = (data_map['audio'].loc[plt_min:plt_max]
-                     .resample('5ms').first().fillna(method='ffill'))
+                     #.resample('5ms').first().fillna(method='ffill'),
+                     .resample('5ms').median().fillna(0)
+                     #.resample('5ms').interpolate().fillna(0)
+                     )
 
         silence_s = pd.Series(0, index=plt_audio.index)
         silence_s.loc[silence_min_ix: silence_max_ix] = 0.95
@@ -1088,7 +1086,7 @@ class NorthwesternWords(BaseDataset):
         speaking_s.loc[speaking_min_ix: speaking_max_ix] = 0.95
 
         #####
-        feature_ax = None
+        #feature_ax = None
         splt_kws = dict() if subplot_kwargs is None else subplot_kwargs
         if not plot_features and ax is None:
             fig, ax = matplotlib.pyplot.subplots(figsize=figsize, **splt_kws)
@@ -1096,8 +1094,10 @@ class NorthwesternWords(BaseDataset):
             fig = ax.get_figure()
         elif plot_features and ax is None or feature_ax is None:
             fig, (ax, feature_ax) = matplotlib.pyplot.subplots(figsize=figsize, nrows=2, **splt_kws)
+        else:
+            fig = ax.get_figure()
 
-        ax = plt_audio.plot(legend=False, alpha=0.4, color='tab:grey', figsize=(15, 5), label='audio', ax=ax)
+        ax = plt_audio.plot(legend=False, alpha=0.4, color='tab:grey', label='audio', ax=ax)
         ax.set_title(f"Min-ts={plt_min} || Max-ts={plt_max}\n\
         Labeled Regions: word_code={word_code}, word='{data_map['word_code_d'][word_code]}'\
         \nSpeaking N windows={len(t_speaking_ixes)}; Silence N windows={len(t_speaking_ixes)}")
@@ -1108,7 +1108,7 @@ class NorthwesternWords(BaseDataset):
         #(data_map['stim'].reindex(data_map['audio'].index).fillna(method='ffill').loc[plt_min: plt_max] > 0).astype(
         #    int).plot(ax=ax2, color='tab:blue', label='original stim')
         (data_map['stim'].resample('5ms').first().fillna(method='ffill').loc[plt_min: plt_max] > 0).astype(
-            int).plot(ax=ax2, color='tab:blue', label='original stim')
+            int).plot(ax=ax2, color='tab:blue', label='stim')
 
         silence_s.plot(ax=ax2, color='red', lw=4, label='silence')
         speaking_s.plot(ax=ax2, color='green', lw=4, label=f"speaking ")
