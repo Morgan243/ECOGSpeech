@@ -318,7 +318,13 @@ class PowerThreshold(ProcessStep):
         #audio_s = data_map['audio']
         #stim_s = data_map['stim']
 
-        rolling_pwr = audio_s.abs().rolling(window_samples).max().reindex(stim_s.index).fillna(method='ffill')
+        rolling_pwr = audio_s.abs().rolling(window_samples, center=True).max().reindex(stim_s.index, method='nearest').fillna(0)
+        #rolling_pwr = (rolling_pwr
+        #            .reindex(rolling_pwr.index.union(stim_s.index))
+        #            .interpolate(method='time')
+        #            .reindex(stim_s.index)
+        #            )
+        #rolling_pwr = rolling_pwr.shift(- (window_samples // 2)).fillna(0)
         stim_auto_m = (stim_s != 0.) & (rolling_pwr > threshold)
 
         # Is the number of unique word codes different when using the threshold selected subset we
@@ -362,7 +368,9 @@ class PowerQuantile(ProcessStep):
         #audio_s = data_map['audio']
         #stim_s = data_map['stim']
 
-        rolling_pwr = audio_s.abs().rolling(48000).mean().reindex(stim_s.index).fillna(method='ffill').fillna(0)
+        #rolling_pwr = audio_s.abs().rolling(48000).mean().reindex(stim_s.index).fillna(method='ffill').fillna(0)
+        rolling_pwr = audio_s.abs().rolling(48000).mean(center=True).reindex(stim_s.index, method='nearest').fillna(0)
+
         # TODO: before taking quantile or grabbing slice, clip ends to avoid positioning at extreme of stim code region
         #q_thresh_s = rolling_pwr.groupby(stim_s).quantile(q)
         q_thresh_s = rolling_pwr.groupby(stim_s).apply(lambda s: s.iloc[trim_sample_n:-trim_sample_n].quantile(q))
