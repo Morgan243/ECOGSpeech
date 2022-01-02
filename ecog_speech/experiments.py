@@ -178,9 +178,12 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
         dataset_map.update(dict(train=train_nww,
                                 cv=cv_nww))
 
-    dataset_map['test'] = dataset_cls(power_q=options.power_q,
-                                      sensor_columns=train_nww.selected_columns,
-                                        **test_data_kws)
+    if test_data_kws['patient_tuples'] is not None:
+        dataset_map['test'] = dataset_cls(power_q=options.power_q,
+                                          sensor_columns=train_nww.selected_columns,
+                                            **test_data_kws)
+    else:
+        print("Warning - no data sets provided")
 
     #dataset_map = dict(train=train_nww, cv=cv_nww, test=test_nww)
 
@@ -289,6 +292,8 @@ def run_tl(options):
     pre_trainer, pre_outputs_map, pre_performance_map = train_and_test_model(model, pre_dl_map,
                                                                              pre_eval_dl_map, options)
     pre_results_d = make_sub_results('pretraining', pre_trainer, pre_dataset_map, pre_outputs_map, pre_performance_map)
+    # columns used throughout are determined by the pretraining's selected from its training's valid sensors
+    # Future TODO - may want to consider other aspects or something more generic?
     selected_columns = pre_dataset_map['train'].selected_columns
 
     ### Fine-tuning
@@ -311,21 +316,18 @@ def run_tl(options):
     t = int(time.time())
     name = "%d_%s_TL" % (t, uid)
     file_name = name + '.json'
-    res_dict = dict(#path=path,
-                    name=name,
+    res_dict = dict(name=name,
                     file_name=file_name,
                     datetime=str(datetime.now()), uid=uid,
-                    #batch_losses=list(losses),
-                    #batch_losses=losses,
                     train_selected_columns=selected_columns,
-                    #best_model_epoch=trainer.best_model_epoch,
                     num_trainable_params=utils.number_of_model_params(model),
                     num_params=utils.number_of_model_params(model, trainable_only=False),
                     model_kws=model_kws,
 
                     pretraining_results=pre_results_d,
                     finetuning_results=results_d,
-            **vars(options))
+                    
+                    **vars(options))
     
     if options.save_model_path is not None:
         import os
@@ -348,7 +350,7 @@ def run_tl(options):
 #            res_dict['high_hz_frame'] = highhz_df_map[0].to_json()
 
     if options.result_dir is not None:
-        path = pjoin(options.result_dir, name)
+        path = pjoin(options.result_dir, file_name)
         print(path)
         res_dict['path'] = path
         with open(path, 'w') as f:
@@ -477,7 +479,7 @@ default_model_hyperparam_option_kwargs = [
 
     dict(dest='--train-sets', default='MC-19-0,MC-19-1', type=str),
     dict(dest='--cv-sets', default=None, type=str),
-    dict(dest='--test-sets', default='MC-19-2', type=str),
+    dict(dest='--test-sets', default=None, type=str),
     
     dict(dest='--random-labels', default=False, action="store_true"),
     dict(dest='--pre-processing-pipeline', default='default', type=str),

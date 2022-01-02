@@ -514,8 +514,8 @@ class NorthwesternWords(BaseDataset):
         p_map = {
             'threshold':
                 (feature_processing.SubsampleECOG()
-                 >> feature_processing.PowerThreshold(window_samples=48000 // 2)
-                 >> feature_processing.ChangSampleIndicesFromStim(stim_speaking_offset=pd.Timedelta(0, 's'),
+                 >> feature_processing.PowerThreshold(window_samples=48000 // 4)
+                 >> feature_processing.ChangSampleIndicesFromStim(stim_speaking_offset=pd.Timedelta(-0.25, 's'),
                                                                   stim_silence_offset=pd.Timedelta(1.5, 's'))),
             'quantile':
                 (
