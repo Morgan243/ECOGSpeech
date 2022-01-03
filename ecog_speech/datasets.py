@@ -373,54 +373,40 @@ class NorthwesternWords(BaseDataset):
     default_base_path = environ.get(env_key,
                                     path_map.get(socket.gethostname(),
                                                  path.join(pkg_data_dir,
-                                                           '3-Vetted Datasets',
-                                                           'Single Word')
+                                                           #'3-Vetted Datasets',
+                                                           'SingleWord')
                                                  ))
     #data_subset = 'Data'# attr.ib('Data')
     mat_d_signal_key = 'ECOG_signal'
-    # TODO: named tuple
-    patient_tuples = attr.ib((
-                              ('Mayo Clinic', 19, 1, 1),
-                              ('Mayo Clinic', 19, 1, 2),
-                              ('Mayo Clinic', 19, 1, 3),
-
-                              #('Mayo Clinic', 21, 1, 1),
-                              #('Mayo Clinic', 21, 1, 2),
-
-                              #('Mayo Clinic', 22, 1, 1),
-                              #('Mayo Clinic', 22, 1, 2),
-                              #('Mayo Clinic', 22, 1, 3),
-                              #('Mayo Clinic', 22, 1, 4),
-    ))
-    base_path = attr.ib(None)
 
     mc_patient_set_map = {
-        19: [('Mayo Clinic', 19, 1, 1),
-             ('Mayo Clinic', 19, 1, 2),
-             ('Mayo Clinic', 19, 1, 3)],
+        19: [('MayoClinic', 19, 1, 1),
+             ('MayoClinic', 19, 1, 2),
+             ('MayoClinic', 19, 1, 3)],
 
-        21: [('Mayo Clinic', 21, 1, 1),
-             ('Mayo Clinic', 21, 1, 2)],
+        21: [('MayoClinic', 21, 1, 1),
+             ('MayoClinic', 21, 1, 2)],
 
-        22: [('Mayo Clinic', 22, 1, 1),
-             ('Mayo Clinic', 22, 1, 2),
-             ('Mayo Clinic', 22, 1, 3)],
+        22: [('MayoClinic', 22, 1, 1),
+             ('MayoClinic', 22, 1, 2),
+             ('MayoClinic', 22, 1, 3)],
 
-        24: [('Mayo Clinic', 24, 1, 2),
-             ('Mayo Clinic', 24, 1, 3),
-             ('Mayo Clinic', 24, 1, 4)],
+        24: [('MayoClinic', 24, 1, 2),
+             ('MayoClinic', 24, 1, 3),
+             ('MayoClinic', 24, 1, 4)],
 
-        25: [('Mayo Clinic', 25, 1, 1),
-             ('Mayo Clinic', 25, 1, 2)],
+        25: [('MayoClinic', 25, 1, 1),
+             ('MayoClinic', 25, 1, 2)],
 
-        26: [('Mayo Clinic', 26, 1, 1),
-             ('Mayo Clinic', 26, 1, 2)],
+        26: [('MayoClinic', 26, 1, 1),
+             ('MayoClinic', 26, 1, 2)],
     }
+
     nw_patient_set_map = {
         1: [
             ('Northwestern', 1, 1, 1),
             ('Northwestern', 1, 1, 2),
-            #('Northwestern', 1, 1, 3),
+            # ('Northwestern', 1, 1, 3),
         ],
         2: [
             ('Northwestern', 2, 1, 1),
@@ -467,6 +453,17 @@ class NorthwesternWords(BaseDataset):
                              for l, p_d in all_patient_maps.items()
                               for p, t_l in p_d.items()
                                for i, t in enumerate(t_l)}
+
+    # TODO: named tuple
+    #patient_tuples = attr.ib((
+    #                          ('Mayo Clinic', 19, 1, 1),
+    #                          ('Mayo Clinic', 19, 1, 2),
+    #                          ('Mayo Clinic', 19, 1, 3),
+    #))
+    base_path = attr.ib(None)
+
+
+    patient_tuples = attr.ib(tuple(mc_patient_set_map[19]))
 
     # num_mfcc = 13
     #signal_key = 'signal'
@@ -834,14 +831,14 @@ class NorthwesternWords(BaseDataset):
     #######
     ## Path handling
     @classmethod
-    def make_filename(cls, patient, session, trial, location='Mayo Clinic'):
+    def make_filename(cls, patient, session, trial, location):
         if location in cls.fname_prefix_map:#== 'Mayo Clinic':
             return f"{cls.fname_prefix_map.get(location)}{str(patient).zfill(3)}-SW-S{session}-R{trial}.mat"
         else:
             raise ValueError("Don't know location " + location)
 
     @classmethod
-    def get_data_path(cls, patient, session, trial, location='Mayo Clinic',
+    def get_data_path(cls, patient, session, trial, location,
                       subset=None, base_path=None):
         fname = cls.make_filename(patient, session, trial, location)
         base_path = cls.default_base_path if base_path is None else base_path
