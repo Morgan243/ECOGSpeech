@@ -277,6 +277,20 @@ def run_tl(options):
                        for part_name, perf_d in _performance_map.items()
                        for metric_name, metric_value in perf_d.items()})
     ##################
+    
+    def parse_band_params(_band_params, fs):
+        lowhz_df_map, highhz_df_map, centerhz_df_map = base.BaseMultiSincNN.parse_band_parameter_training_hist(
+            _band_params,
+            fs=fs)
+        if model.per_channel_filter:
+            _low_hz = {k: lowhz_df.to_json() for k, lowhz_df in lowhz_df_map.items()}
+            _high_hz = {k: highhz_df.to_json() for k, highhz_df in highhz_df_map.items()}
+        else:
+            _low_hz = lowhz_df_map[0].to_json()
+            _high_hz = highhz_df_map[0].to_json()
+        return _low_hz, _high_hz
+
+
 
     #####
     # Load pre-training data and initialize a fresh model from it
@@ -295,6 +309,10 @@ def run_tl(options):
     # columns used throughout are determined by the pretraining's selected from its training's valid sensors
     # Future TODO - may want to consider other aspects or something more generic?
     selected_columns = pre_dataset_map['train'].selected_columns
+    
+    pre_band_params = getattr(pre_trainer, 'batch_cb_history', dict()).get('band_params', None)
+    pre_results_d['low_hz_frame'], pre_results_d['high_hz_frame'] = (parse_band_params(pre_band_params, model.fs)
+                                                                     if pre_band_params is not None else (None, None))
 
     ### Fine-tuning
     print("Loading fine-tuning data")
@@ -310,6 +328,10 @@ def run_tl(options):
 
     results_d = make_sub_results('finetuning', trainer, dataset_map, outputs_map, performance_map)
     print("complete")
+
+    band_params = getattr(trainer, 'batch_cb_history', dict()).get('band_params', None)
+    results_d['low_hz_frame'], results_d['high_hz_frame'] = (parse_band_params(band_params, model.fs) 
+                                                             if band_params is not None else (None, None))
 
     uid = str(uuid.uuid4())
     results_d['uid'] = pre_results_d['uid'] = uid 
@@ -328,7 +350,9 @@ def run_tl(options):
                     finetuning_results=results_d,
                     
                     **vars(options))
-    
+
+   
+
     if options.save_model_path is not None:
         import os
         p = options.save_model_path
@@ -338,16 +362,6 @@ def run_tl(options):
         torch.save(model.cpu().state_dict(), p)
         res_dict['save_model_path'] = p
 
-#    if sn_params_tracked:
-#        lowhz_df_map, highhz_df_map, centerhz_df_map = base.BaseMultiSincNN.parse_band_parameter_training_hist(
-#            trainer.batch_cb_history['band_params'],
-#            fs=model.fs)
-#        if model.per_channel_filter:
-#            res_dict['low_hz_frame'] = {k: lowhz_df.to_json() for k, lowhz_df in lowhz_df_map.items()}
-#            res_dict['high_hz_frame'] = {k: highhz_df.to_json() for k, highhz_df in highhz_df_map.items()}
-#        else:
-#            res_dict['low_hz_frame'] = lowhz_df_map[0].to_json()
-#            res_dict['high_hz_frame'] = highhz_df_map[0].to_json()
 
     if options.result_dir is not None:
         path = pjoin(options.result_dir, file_name)
