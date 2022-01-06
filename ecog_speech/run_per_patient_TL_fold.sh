@@ -23,6 +23,7 @@ echo "PRE-TRAIN sets: ${PRE_TRAIN_SETS[*]}"
 COMMA_SETS=$(IFS=,; printf '%s' "${PRE_TRAIN_SETS[*]}")
 echo "comma-train sets: $COMMA_SETS"
 
+export EXEC_CMD="python experiments/transfer_learning.py"
 time ./run_per_patient_fold.sh $SET_ID \
       --track-sinc-params \
       --pre-train-sets=$COMMA_SETS \
