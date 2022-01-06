@@ -82,36 +82,28 @@ else
   echo "MODEL_SAVE_DIR SET TO DEFAULT: $MODEL_SAVE_DIR"
 fi
 
+if [ -n "$EXEC_CMD" ]; then
+  echo "EXEC_CMD ALREADY SET: $EXEC_CMD"
+else
+  EXEC_CMD="python experiments/standard.py"
+  echo "EXEC_CMD SET TO DEFAULT: $EXEC_CMD"
+fi
 
 mkdir -p $RESULTS_DIR
 mkdir -p $MODEL_SAVE_DIR
-
-#NUM_BANDS=(1 2 4 8)
-#N_FILTERS=(16 32 64)
-
 
 for (( i=0; i<${#TRAIN_SETS[*]}; i++ ));
 do
   echo "Train: ${TRAIN_SETS[$i]}"
   echo "Test: ${TEST_SETS[$i]}"
 
+
   # Last line includes any extra arguments after the set ID
-  python experiments.py \
+  $EXEC_CMD \
     --result-dir=$RESULTS_DIR \
     --n-epochs=$N_EPOCHS \
     --save-model-path=$MODEL_SAVE_DIR \
     --train-sets=${TRAIN_SETS[$i]} \
     --test-sets=${TEST_SETS[$i]} \
     "${@:2}"
-
-    #--track-sinc-params \
-    #--sn-n-bands=$num_bands \
-    #--n-cnn-filters=$n_filters \
-
-    #--dataset=$DATASET \
-    #--batchnorm \
-    #--model-name=$MODEL_NAME \
-    #--roll-channels \
-    #--cv-sets=MC-24-0 \
-    #--in-channel-dropout-rate=$IN_CHANNEL_DROPOUT \
 done
