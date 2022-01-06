@@ -448,7 +448,7 @@ class NorthwesternWords(BaseDataset):
     all_patient_maps = dict(MC=mc_patient_set_map,
                             SN=syn_patient_set_map,
                             NW=nw_patient_set_map)
-    fname_prefix_map = {'Mayo Clinic': 'MC', 'Synthetic': 'SN', 'Northwestern': 'NW'}
+    fname_prefix_map = {'MayoClinic': 'MC', 'Synthetic': 'SN', 'Northwestern': 'NW'}
     tuple_to_sets_str_map = {t:f"{l}-{p}-{i}"
                              for l, p_d in all_patient_maps.items()
                               for p, t_l in p_d.items()
