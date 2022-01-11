@@ -558,23 +558,50 @@ class MFCC(ProcessStep):
 
 
 @attr.s
-class ChangSampleIndicesFromStim(ProcessStep):
+class SampleIndicesFromStim(ProcessStep):
     #expects = ['start_times_d', 'fs_signal']
     expects = ['stim_diff', 'fs_signal']
     outputs = ['sample_index_map']
 
-    # All at 200Hz
-    #ecog_window_size = attr.ib(100)
-    #ecog_window_n = attr.ib(60)
-    #ecog_window_step_samp =  attr.ib(1)
-    #ecog_window_step_sec =  attr.ib(pd.Timedelta(0.01, 's'))
     window_size = attr.ib(pd.Timedelta(0.5, 's'))
-    window_size_samples = attr.ib(None)
+
+    # One of rising or falling
+    speaking_onset_reference = 'rising'
+    speaking_offset_reference = 'falling'
+    speaking_onset_shift = attr.ib(pd.Timedelta(-0.25, 's'))
+    speaking_offset_shift = attr.ib(pd.Timedelta(0., 's'))
+    
+    def step(self, data_map):
+        pass
+        #return self.make_sample_indices(data_map, win_size=self.window_size, label_region_size=self.label_region_size,
+        #                                silence_offs=self.stim_silence_offset, speaking_offs=self.stim_speaking_offset)
+
+    @staticmethod
+    def make_sample_indices(data_map, win_size, speaking_onset_ref, speaking_onset_shift,
+                            speaking_offset_ref, speaking_offset_shift):
+        label_index = data_map['stim_diff']
+        fs = data_map['fs_signal']
+
+        max_window_samples = int(fs * win_size.total_seconds())
+        #label_region_sample_size = int(fs * label_region_size.total_seconds())
+        print((fs, win_size))
+        print("Max window size: %d" % max_window_samples)
+
+        sample_indices = dict()
+
+        raise NotImplementedError()
+
+@attr.s
+class ChangSampleIndicesFromStim(ProcessStep):
+    expects = ['stim_diff', 'fs_signal']
+    outputs = ['sample_index_map']
+
+    window_size = attr.ib(pd.Timedelta(0.5, 's'))
+    #window_size_samples = attr.ib(None)
 
     label_region_size = attr.ib(pd.Timedelta(1, 's'))
     stim_silence_offset = attr.ib(pd.Timedelta(2, 's'))
     stim_speaking_offset = attr.ib(pd.Timedelta(0.5, 's'))
-    #ecog_window_shift_sec = attr.ib(pd.Timedelta(0.75, 's'))
 
     def step(self, data_map):
         return self.make_sample_indices(data_map, win_size=self.window_size, label_region_size=self.label_region_size,
