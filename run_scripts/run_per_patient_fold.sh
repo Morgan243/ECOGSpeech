@@ -85,7 +85,7 @@ fi
 if [ -n "$EXEC_CMD" ]; then
   echo "EXEC_CMD ALREADY SET: $EXEC_CMD"
 else
-  EXEC_CMD="python experiments/standard.py"
+  EXEC_CMD="python -m ecog_speech.experiments.standard"
   echo "EXEC_CMD SET TO DEFAULT: $EXEC_CMD"
 fi
 
