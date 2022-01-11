@@ -113,12 +113,17 @@ def run(options):
             json.dump(res_dict, f)
 
 
-tl_option_kwargs = default_option_kwargs + [
+tl_options = [
     dict(dest='--pre-train-sets', default=None, type=str),
     dict(dest='--pre-cv-sets', default=None, type=str),
     dict(dest='--pre-test-sets', default=None, type=str),
-
 ]
+tl_option_kwargs = default_option_kwargs + tl_options
+
+
+all_model_hyperparam_names = [d['dest'].replace('--', '').replace('-', '_')
+                              for d in tl_options
+                              if d['dest'] not in ('--train-sets', '--cv-sets', '--test-sets')]
 
 if __name__ == """__main__""":
     parser = utils.build_argparse(tl_option_kwargs,
