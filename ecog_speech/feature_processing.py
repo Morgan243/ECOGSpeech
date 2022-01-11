@@ -638,7 +638,9 @@ class ChangSampleIndicesFromStim(ProcessStep):
             sample_indices[wrd_id] = speaking_indices
 
 
+        ### Loop back through and do some quick sanity checks
         for w, ixes in sample_indices.items():
+            # Word has no windows
             if len(ixes) == 0:
                 msg = ("Error: word %d had no windows" % w)
                 print(msg)
