@@ -579,8 +579,10 @@ class SampleIndicesFromStim(ProcessStep):
     @staticmethod
     def make_sample_indices(data_map, win_size, speaking_onset_ref, speaking_onset_shift,
                             speaking_offset_ref, speaking_offset_shift):
+        from tqdm.auto import tqdm
         label_index = data_map['stim_diff']
         fs = data_map['fs_signal']
+        stim = data_map['stim']
 
         max_window_samples = int(fs * win_size.total_seconds())
         #label_region_sample_size = int(fs * label_region_size.total_seconds())
@@ -589,7 +591,38 @@ class SampleIndicesFromStim(ProcessStep):
 
         sample_indices = dict()
 
-        raise NotImplementedError()
+        # TODO: Need to review UCSD data and how to write something that will work for its regions
+        #raise NotImplementedError()
+
+        s_grp = stim[stim > 0].pipe(lambda _s: _s.groupby(_s))
+        for gname, g_s in tqdm(s_grp):
+            start_t = g_s.index.min()
+            stop_t = g_s.index.max()
+
+            if speaking_onset_ref == 'rising':
+                speaking_start_t = start_t + speaking_onset_shift
+            elif speaking_onset_ref == 'falling':
+                speaking_start_t = stop_t + speaking_onset_shift
+            else:
+                raise ValueError()
+
+            if speaking_offset_ref == 'rising':
+                speaking_stop_t = start_t + speaking_offset_shift
+            elif speaking_offset_ref == 'falling':
+                speaking_stop_t = stop_t + speaking_offset_shift
+            else:
+                raise ValueError()
+
+            # Get the window starting indices for each region of interest
+            # Note on :-max_window_samples - this removes the last windows worth since windows starting here would have out of label samples
+            speaking_start_ixes = (stim[speaking_start_t:speaking_stop_t]  # .iloc[:label_region_sample_size]
+                                       .index.tolist()[:-max_window_samples])
+
+            # Go through the labeled region indices and pull a window of data
+            speaking_indices = [label_index.loc[offs:offs + win_size].index
+                                for offs in speaking_start_ixes]
+            sample_indices[gname] = speaking_indices
+
 
 @attr.s
 class ChangSampleIndicesFromStim(ProcessStep):
