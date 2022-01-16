@@ -558,23 +558,112 @@ class MFCC(ProcessStep):
 
 
 @attr.s
-class ChangSampleIndicesFromStim(ProcessStep):
+class SampleIndicesFromStimV2(ProcessStep):
     #expects = ['start_times_d', 'fs_signal']
     expects = ['stim_diff', 'fs_signal']
     outputs = ['sample_index_map']
 
-    # All at 200Hz
-    #ecog_window_size = attr.ib(100)
-    #ecog_window_n = attr.ib(60)
-    #ecog_window_step_samp =  attr.ib(1)
-    #ecog_window_step_sec =  attr.ib(pd.Timedelta(0.01, 's'))
     window_size = attr.ib(pd.Timedelta(0.5, 's'))
-    window_size_samples = attr.ib(None)
+
+    # One of rising or falling
+    speaking_onset_reference = attr.ib('rising')
+    speaking_offset_reference = attr.ib('falling')
+    speaking_onset_shift = attr.ib(pd.Timedelta(-0.50, 's'))
+    speaking_offset_shift = attr.ib(pd.Timedelta(0., 's'))
+
+    silence_stim_value = attr.ib(0)
+    silence_samples = attr.ib(None)
+
+    def step(self, data_map):
+        return self.make_sample_indices(data_map, win_size=self.window_size,
+                                        speaking_onset_ref=self.speaking_onset_reference, speaking_onset_shift=self.speaking_onset_shift,
+                                        speaking_offset_ref=self.speaking_offset_reference, speaking_offset_shift=self.speaking_offset_shift,
+                                        silence_value=self.silence_stim_value, silence_samples=self.silence_samples)
+
+    @staticmethod
+    def make_sample_indices(data_map, win_size, speaking_onset_ref, speaking_onset_shift,
+                            speaking_offset_ref, speaking_offset_shift, silence_value, silence_samples=None):
+        from tqdm.auto import tqdm
+        label_index = data_map['stim_diff']
+        fs = data_map['fs_signal']
+        stim = data_map['stim']
+
+        max_window_samples = int(fs * win_size.total_seconds())
+        #label_region_sample_size = int(fs * label_region_size.total_seconds())
+        print((fs, win_size))
+        print("Max window size: %d" % max_window_samples)
+
+        sample_indices = dict()
+
+        # TODO: Need to review UCSD data and how to write something that will work for its regions
+        #raise NotImplementedError()
+
+        s_grp = stim[stim > 0].pipe(lambda _s: _s.groupby(_s))
+        for gname, g_s in tqdm(s_grp):
+            start_t = g_s.index.min()
+            stop_t = g_s.index.max()
+
+            if speaking_onset_ref == 'rising':
+                speaking_start_t = start_t + speaking_onset_shift
+            elif speaking_onset_ref == 'falling':
+                speaking_start_t = stop_t + speaking_onset_shift
+            else:
+                raise ValueError()
+
+            if speaking_offset_ref == 'rising':
+                speaking_stop_t = start_t + speaking_offset_shift
+            elif speaking_offset_ref == 'falling':
+                speaking_stop_t = stop_t + speaking_offset_shift
+            else:
+                raise ValueError()
+
+            # Get the window starting indices for each region of interest
+            # Note on :-max_window_samples - this removes the last windows worth since windows starting here would have out of label samples
+            speaking_start_ixes = (stim[speaking_start_t:speaking_stop_t]  # .iloc[:label_region_sample_size]
+                                       .index.tolist()[:-max_window_samples])
+
+            # Go through the labeled region indices and pull a window of data
+            speaking_indices = [label_index.loc[offs:offs + win_size].index
+                                for offs in speaking_start_ixes]
+            sample_indices[gname] = speaking_indices
+
+        silence_m = (stim == silence_value)
+        # Find regions twice the size of the label regions that are completely silent
+        # values are the center of the silent regions
+        not_silent_samp_count = (~silence_m).rolling(2*win_size, center=True).sum()
+        silence_center_s = not_silent_samp_count[not_silent_samp_count.eq(0)]
+
+        # If the number of samples to take is not provided, then take the same number as there were positive samples
+        if silence_samples is None:
+            n_pos_samples = sum(len(_ix) for _ix in sample_indices.values())
+            print(f"N pos samples: {n_pos_samples}")
+            print(f"N silence centers: {len(silence_center_s)}")
+            silence_samples = min(n_pos_samples, len(silence_center_s))
+            print(f"Taking {silence_samples} silence samples")
+
+        # Shift the centers by half the window size - placing the window to be extracted
+        _centers_s = silence_center_s.sample(silence_samples).index
+        _centers_s = _centers_s - (win_size / 2)
+
+        # Go through the labeled region indices and pull a window of data
+        silence_indices = [stim.loc[offs:offs + win_size].index
+                            for offs in _centers_s]
+        sample_indices[silence_value] = silence_indices
+
+        return dict(sample_index_map=sample_indices)
+
+
+@attr.s
+class ChangSampleIndicesFromStim(ProcessStep):
+    expects = ['stim_diff', 'fs_signal']
+    outputs = ['sample_index_map']
+
+    window_size = attr.ib(pd.Timedelta(0.5, 's'))
+    #window_size_samples = attr.ib(None)
 
     label_region_size = attr.ib(pd.Timedelta(1, 's'))
     stim_silence_offset = attr.ib(pd.Timedelta(2, 's'))
     stim_speaking_offset = attr.ib(pd.Timedelta(0.5, 's'))
-    #ecog_window_shift_sec = attr.ib(pd.Timedelta(0.75, 's'))
 
     def step(self, data_map):
         return self.make_sample_indices(data_map, win_size=self.window_size, label_region_size=self.label_region_size,

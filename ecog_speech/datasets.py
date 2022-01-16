@@ -514,10 +514,13 @@ class NorthwesternWords(BaseDataset):
                  >> feature_processing.PowerThreshold(window_samples=48000 // 4)
                  >> feature_processing.ChangSampleIndicesFromStim(stim_speaking_offset=pd.Timedelta(-0.25, 's'),
                                                                   stim_silence_offset=pd.Timedelta(1.5, 's'))),
+            'threshold2': (feature_processing.SubsampleECOG()
+                 >> feature_processing.PowerThreshold(window_samples=48000 // 4)
+                 >> feature_processing.SampleIndicesFromStimV2()),
             'quantile':
                 (
-                        feature_processing.SubsampleECOG() >>
-                        feature_processing.WordStopStartTimeMap() >>
+                 feature_processing.SubsampleECOG() >>
+                 feature_processing.WordStopStartTimeMap() >>
                  feature_processing.PowerQuantile(q=self.power_q) >>
                  self.sample_ixer),
             'minimal':
