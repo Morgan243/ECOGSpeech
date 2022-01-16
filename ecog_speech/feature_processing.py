@@ -558,7 +558,7 @@ class MFCC(ProcessStep):
 
 
 @attr.s
-class SampleIndicesFromStim(ProcessStep):
+class SampleIndicesFromStimV2(ProcessStep):
     #expects = ['start_times_d', 'fs_signal']
     expects = ['stim_diff', 'fs_signal']
     outputs = ['sample_index_map']
@@ -566,19 +566,23 @@ class SampleIndicesFromStim(ProcessStep):
     window_size = attr.ib(pd.Timedelta(0.5, 's'))
 
     # One of rising or falling
-    speaking_onset_reference = 'rising'
-    speaking_offset_reference = 'falling'
-    speaking_onset_shift = attr.ib(pd.Timedelta(-0.25, 's'))
+    speaking_onset_reference = attr.ib('rising')
+    speaking_offset_reference = attr.ib('falling')
+    speaking_onset_shift = attr.ib(pd.Timedelta(-0.50, 's'))
     speaking_offset_shift = attr.ib(pd.Timedelta(0., 's'))
-    
+
+    silence_stim_value = attr.ib(0)
+    silence_samples = attr.ib(None)
+
     def step(self, data_map):
-        pass
-        #return self.make_sample_indices(data_map, win_size=self.window_size, label_region_size=self.label_region_size,
-        #                                silence_offs=self.stim_silence_offset, speaking_offs=self.stim_speaking_offset)
+        return self.make_sample_indices(data_map, win_size=self.window_size,
+                                        speaking_onset_ref=self.speaking_onset_reference, speaking_onset_shift=self.speaking_onset_shift,
+                                        speaking_offset_ref=self.speaking_offset_reference, speaking_offset_shift=self.speaking_offset_shift,
+                                        silence_value=self.silence_stim_value, silence_samples=self.silence_samples)
 
     @staticmethod
     def make_sample_indices(data_map, win_size, speaking_onset_ref, speaking_onset_shift,
-                            speaking_offset_ref, speaking_offset_shift):
+                            speaking_offset_ref, speaking_offset_shift, silence_value, silence_samples=None):
         from tqdm.auto import tqdm
         label_index = data_map['stim_diff']
         fs = data_map['fs_signal']
@@ -622,6 +626,31 @@ class SampleIndicesFromStim(ProcessStep):
             speaking_indices = [label_index.loc[offs:offs + win_size].index
                                 for offs in speaking_start_ixes]
             sample_indices[gname] = speaking_indices
+
+        silence_m = (stim == silence_value)
+        # Find regions twice the size of the label regions that are completely silent
+        # values are the center of the silent regions
+        not_silent_samp_count = (~silence_m).rolling(2*win_size, center=True).sum()
+        silence_center_s = not_silent_samp_count[not_silent_samp_count.eq(0)]
+
+        # If the number of samples to take is not provided, then take the same number as there were positive samples
+        if silence_samples is None:
+            n_pos_samples = sum(len(_ix) for _ix in sample_indices.values())
+            print(f"N pos samples: {n_pos_samples}")
+            print(f"N silence centers: {len(silence_center_s)}")
+            silence_samples = min(n_pos_samples, len(silence_center_s))
+            print(f"Taking {silence_samples} silence samples")
+
+        # Shift the centers by half the window size - placing the window to be extracted
+        _centers_s = silence_center_s.sample(silence_samples).index
+        _centers_s = _centers_s - (win_size / 2)
+
+        # Go through the labeled region indices and pull a window of data
+        silence_indices = [stim.loc[offs:offs + win_size].index
+                            for offs in _centers_s]
+        sample_indices[silence_value] = silence_indices
+
+        return dict(sample_index_map=sample_indices)
 
 
 @attr.s
