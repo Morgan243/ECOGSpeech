@@ -623,16 +623,18 @@ class SampleIndicesFromStimV2(ProcessStep):
                                        .index.tolist()[:-max_window_samples])
 
             # Go through the labeled region indices and pull a window of data
-            speaking_indices = [label_index.loc[offs:offs + win_size].index
+            speaking_indices = [label_index.loc[offs:offs + win_size].iloc[:max_window_samples].index
                                 for offs in speaking_start_ixes]
             sample_indices[gname] = speaking_indices
 
         silence_m = (stim == silence_value)
         # Find regions twice the size of the label regions that are completely silent
         # values are the center of the silent regions
-        not_silent_samp_count = (~silence_m).rolling(2*win_size, center=True).sum()
+        not_silent_samp_count = (~silence_m).rolling(2*win_size, center=True).sum().dropna()
+        not_silent_samp_count = not_silent_samp_count.loc[win_size: not_silent_samp_count.index.max() - win_size]
         silence_center_s = not_silent_samp_count[not_silent_samp_count.eq(0)]
 
+        print(f"Max window samples: {max_window_samples}")
         # If the number of samples to take is not provided, then take the same number as there were positive samples
         if silence_samples is None:
             n_pos_samples = sum(len(_ix) for _ix in sample_indices.values())
@@ -646,9 +648,16 @@ class SampleIndicesFromStimV2(ProcessStep):
         _centers_s = _centers_s - (win_size / 2)
 
         # Go through the labeled region indices and pull a window of data
-        silence_indices = [stim.loc[offs:offs + win_size].index
-                            for offs in _centers_s]
+        silence_indices = [stim.loc[offs:offs + win_size].iloc[:max_window_samples].index
+                           for offs in _centers_s if len(stim.loc[offs:]) > max_window_samples]
         sample_indices[silence_value] = silence_indices
+
+        for k, _s in sample_indices.items():
+            for i, _ixs in enumerate(_s):
+                if len(_ixs) != max_window_samples:
+                    print(f"[{k}][{i}] ({len(_ixs)}): {_ixs}")
+
+        print({k : sorted(list(set(map(len, _s)))) for k, _s in sample_indices.items()})
 
         return dict(sample_index_map=sample_indices)
 
