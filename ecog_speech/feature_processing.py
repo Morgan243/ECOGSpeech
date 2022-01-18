@@ -595,11 +595,10 @@ class SampleIndicesFromStimV2(ProcessStep):
 
         sample_indices = dict()
 
+        # TODO: This will not work for constant stim value (i.e. True/False, 1/0)?
         # TODO: Need to review UCSD data and how to write something that will work for its regions
-        #raise NotImplementedError()
-
         s_grp = stim[stim > 0].pipe(lambda _s: _s.groupby(_s))
-        for gname, g_s in tqdm(s_grp):
+        for stim_value, g_s in tqdm(s_grp):
             start_t = g_s.index.min()
             stop_t = g_s.index.max()
 
@@ -618,14 +617,14 @@ class SampleIndicesFromStimV2(ProcessStep):
                 raise ValueError()
 
             # Get the window starting indices for each region of interest
-            # Note on :-max_window_samples - this removes the last windows worth since windows starting here would have out of label samples
-            speaking_start_ixes = (stim[speaking_start_t:speaking_stop_t]  # .iloc[:label_region_sample_size]
-                                       .index.tolist()[:-max_window_samples])
+            # Note on :-max_window_samples
+            #   - this removes the last windows worth since windows starting here would have out of label samples
+            speaking_start_ixes = stim[speaking_start_t:speaking_stop_t].index.tolist()[:-max_window_samples]
 
             # Go through the labeled region indices and pull a window of data
             speaking_indices = [label_index.loc[offs:offs + win_size].iloc[:max_window_samples].index
                                 for offs in speaking_start_ixes]
-            sample_indices[gname] = speaking_indices
+            sample_indices[stim_value] = speaking_indices
 
         silence_m = (stim == silence_value)
         # Find regions twice the size of the label regions that are completely silent
