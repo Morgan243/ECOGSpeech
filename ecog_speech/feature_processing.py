@@ -300,48 +300,56 @@ class PowerThreshold(ProcessStep):
     name = 'threshold'
 
     #input_override = attr.ib(None)
-    threshold = attr.ib(0.007)
+    speaking_threshold = attr.ib(0.007)
+    silence_threshold = attr.ib(0.001)
+
     window_samples = attr.ib(48000)
 
     #input_remap = attr.ib(None)#attr.Factory(lambda :dict(stim='stim_pwrt', stim_diff='stim_pwrt_diff')))
     output_remap = attr.ib(attr.Factory(lambda: dict(stim='stim_pwrt', stim_diff='stim_pwrt_diff')))
 
     expects = ['audio', 'stim']
-    outputs = ['stim_pwrt', 'stim_pwrt_diff', 'rolling_audio_pwr']
+    outputs = ['stim_pwrt', 'stim_pwrt_diff', 'rolling_audio_pwr',
+               'silence_stim_pwrt_s', 'silence_stim_pwrt_diff_s']
 
     def step(self, data_map):
-        return self.stim_adjust__power_threshold(data_map['audio'], data_map['stim'], threshold=self.threshold,
+        return self.stim_adjust__power_threshold(data_map['audio'], data_map['stim'],
+                                                 speaking_threshold=self.speaking_threshold,
+                                                 silence_threshold=self.silence_threshold,
                                                  window_samples=self.window_samples)
 
     @staticmethod
-    def stim_adjust__power_threshold(audio_s, stim_s, threshold=0.007, window_samples=48000):
+    def stim_adjust__power_threshold(audio_s, stim_s, speaking_threshold=0.007,
+                                     silence_threshold=0.001,
+                                     window_samples=48000):
         #audio_s = data_map['audio']
         #stim_s = data_map['stim']
-
-        rolling_pwr = audio_s.abs().rolling(window_samples, center=True).max().reindex(stim_s.index, method='nearest').fillna(0)
-        #rolling_pwr = (rolling_pwr
-        #            .reindex(rolling_pwr.index.union(stim_s.index))
-        #            .interpolate(method='time')
-        #            .reindex(stim_s.index)
-        #            )
+        rolling_pwr = (audio_s
+                       .abs().rolling(window_samples, center=True)
+                       .max().reindex(stim_s.index, method='nearest').fillna(0))
         #rolling_pwr = rolling_pwr.shift(- (window_samples // 2)).fillna(0)
-        stim_auto_m = (stim_s != 0.) & (rolling_pwr > threshold)
+        speaking_stim_auto_m = (stim_s != 0.) & (rolling_pwr > speaking_threshold)
+        silence_stim_auto_m = (stim_s == 0.) & (~speaking_stim_auto_m) & (rolling_pwr < silence_threshold)
 
         # Is the number of unique word codes different when using the threshold selected subset we
         # just produced (stim_auto_m)?
         # - Subtract one for no speech (0)
-        eq = (stim_s.nunique(dropna=False) - 1) == stim_s[stim_auto_m].nunique(dropna=False)
+        eq = (stim_s.nunique(dropna=False) - 1) == stim_s[speaking_stim_auto_m].nunique(dropna=False)
 
         if not eq:
             msg = "stim_s and stim_auto not equal: %d - 1 != %d" % (stim_s.nunique(False),
-                                                                    stim_s[stim_auto_m].nunique(False))
+                                                                    stim_s[speaking_stim_auto_m].nunique(False))
             print(msg)
 
         # Create a new stim array with original word code where it's set, otherwise zero
-        stim_pwrt_s = pd.Series(np.where(stim_auto_m, stim_s, 0), index=stim_s.index)
+        stim_pwrt_s = pd.Series(np.where(speaking_stim_auto_m, stim_s, 0), index=stim_s.index)
         stim_pwrt_diff_s = stim_pwrt_s.diff().fillna(0).astype(int)
 
+        silence_stim_pwrt_s = pd.Series(np.where(silence_stim_auto_m, 1, 0), index=stim_s.index)
+        silence_stim_pwrt_diff_s = silence_stim_pwrt_s.diff().fillna(0).astype(int)
+
         updates = dict(stim_pwrt=stim_pwrt_s, stim_pwrt_diff=stim_pwrt_diff_s,
+                       silence_stim_pwrt_s=silence_stim_pwrt_s, silence_stim_pwrt_diff_s=silence_stim_pwrt_diff_s,
                        rolling_audio_pwr=rolling_pwr)
         return updates
 
@@ -571,6 +579,8 @@ class SampleIndicesFromStimV2(ProcessStep):
     speaking_onset_shift = attr.ib(pd.Timedelta(-0.50, 's'))
     speaking_offset_shift = attr.ib(pd.Timedelta(0., 's'))
 
+    max_speaking_region_size = attr.ib(600)
+
     silence_stim_value = attr.ib(0)
     silence_samples = attr.ib(None)
 
@@ -578,11 +588,14 @@ class SampleIndicesFromStimV2(ProcessStep):
         return self.make_sample_indices(data_map, win_size=self.window_size,
                                         speaking_onset_ref=self.speaking_onset_reference, speaking_onset_shift=self.speaking_onset_shift,
                                         speaking_offset_ref=self.speaking_offset_reference, speaking_offset_shift=self.speaking_offset_shift,
-                                        silence_value=self.silence_stim_value, silence_samples=self.silence_samples)
+                                        silence_value=self.silence_stim_value, silence_samples=self.silence_samples,
+                                        silent_window_scale=self.silent_window_scale,
+                                        max_speaking_region_size=self.max_speaking_region_size)
 
     @staticmethod
     def make_sample_indices(data_map, win_size, speaking_onset_ref, speaking_onset_shift,
-                            speaking_offset_ref, speaking_offset_shift, silence_value, silence_samples=None):
+                            speaking_offset_ref, speaking_offset_shift, silence_value, silence_samples,
+                            silent_window_scale, max_speaking_region_size):
         from tqdm.auto import tqdm
         label_index = data_map['stim_diff']
         fs = data_map['fs_signal']
@@ -623,15 +636,18 @@ class SampleIndicesFromStimV2(ProcessStep):
                                        .index.tolist()[:-max_window_samples])
 
             # Go through the labeled region indices and pull a window of data
-            speaking_indices = [label_index.loc[offs:offs + win_size].index
-                                for offs in speaking_start_ixes]
-            sample_indices[gname] = speaking_indices
+            speaking_indices = [label_index.loc[offs:offs + win_size].iloc[:expected_window_samples].index
+                                for offs in speaking_start_ixes[:max_speaking_region_size]]
+            sample_indices[stim_value] = speaking_indices
 
         silence_m = (stim == silence_value)
         # Find regions twice the size of the label regions that are completely silent
         # values are the center of the silent regions
-        not_silent_samp_count = (~silence_m).rolling(2*win_size, center=True).sum()
-        silence_center_s = not_silent_samp_count[not_silent_samp_count.eq(0)]
+        speaking_samp_count = (~silence_m).rolling(silent_window_scale * win_size, center=True).sum().dropna()
+        # Ignore a windows worth at the start and end
+        speaking_samp_count = speaking_samp_count.loc[win_size: speaking_samp_count.index.max() - win_size]
+        # Interested in areas where no speaking was detected within the scaled window
+        silence_center_s = speaking_samp_count[speaking_samp_count.eq(0)]
 
         # If the number of samples to take is not provided, then take the same number as there were positive samples
         if silence_samples is None:
@@ -643,7 +659,10 @@ class SampleIndicesFromStimV2(ProcessStep):
 
         # Shift the centers by half the window size - placing the window to be extracted
         _centers_s = silence_center_s.sample(silence_samples).index
-        _centers_s = _centers_s - (win_size / 2)
+        #_offs_s = _centers_s + (win_size * silent_window_scale / 2)
+        # Move back half the real window size so it's centered when it's extracted from left to right
+        # (from the leftmost offset)
+        _offs_s = _centers_s - (win_size / 2)
 
         # Go through the labeled region indices and pull a window of data
         silence_indices = [stim.loc[offs:offs + win_size].index
