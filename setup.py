@@ -5,10 +5,10 @@ setup(name='ECOGSpeech',
       author='Morgan Stuart & Srdjan Lesaja',
       packages=['ecog_speech'],
       requires=[
-            'BCI2kReader',
+            #'BCI2kReader',
             'torchaudio', 'tqdm',
-            'numpy', 'pandas',
-            'sklearn', 'mne',
+            'numpy', 'pandas', 'scipy',
+            'scikit-learn', 'mne',
             'attrs',
             'python_speech_features', 'torchaudio'
       ])
