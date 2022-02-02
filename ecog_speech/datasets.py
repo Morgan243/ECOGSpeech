@@ -395,8 +395,8 @@ class NorthwesternWords(BaseDataset):
              ('MayoClinic', 24, 1, 3),
              ('MayoClinic', 24, 1, 4)],
 
-        25: [('MayoClinic', 25, 1, 1),
-             ('MayoClinic', 25, 1, 2)],
+        #25: [('MayoClinic', 25, 1, 1),
+        #     ('MayoClinic', 25, 1, 2)],
 
         26: [('MayoClinic', 26, 1, 1),
              ('MayoClinic', 26, 1, 2)],
@@ -1130,7 +1130,7 @@ class NorthwesternWords(BaseDataset):
                                 padding_time=pd.Timedelta('1s'),
                                 plot_signal=True,
                                 ax=None, signal_plot_kwargs=None, region_plot_kwargs=None):
-        def_signal_plot_kwargs = dict(color='grey', alpha=0.5)
+        def_signal_plot_kwargs = dict(color='tab:green', alpha=0.5)
         if isinstance(signal_plot_kwargs, dict):
             def_signal_plot_kwargs.update(signal_plot_kwargs)
         elif signal_plot_kwargs is not None:
@@ -1161,7 +1161,7 @@ class NorthwesternWords(BaseDataset):
 
         fig = ax.get_figure()
         fig.patch.set_facecolor('white')
-        return fig, ax
+        return fig, ax, ax2
 
     @classmethod
     def make_tuples_from_sets_str(cls, sets_str):
