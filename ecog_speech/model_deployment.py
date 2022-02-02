@@ -2,7 +2,7 @@ import torch
 import json
 import os
 
-from ecog_speech.models import base
+from ecog_speech.models import base, sinc_ieeg
 from ecog_speech import utils
 from lslkit.components import processor
 
@@ -31,7 +31,7 @@ def deploy_to_lsl(options, result_file, stream_type, max_buflen=2048):
     if results['model_name'] == 'base-sn':
         model = base.BaseMultiSincNN(**model_kws)
     elif results['model_name'] == 'tnorm-base-sn':
-        model = base.TimeNormBaseMultiSincNN(**model_kws)
+        model = sinc_ieeg.TimeNormBaseMultiSincNN(**model_kws)
     elif results['model_name'] == 'base-cnn':
         model = base.BaseCNN(**model_kws)
     else:
@@ -68,7 +68,7 @@ default_option_kwargs = [
    # dict(dest="--eval-win-step-size", default=1, type=int),
    # dict(dest="--pred-inspect-eval", default=False, action='store_true'),
     dict(dest="--base-output-path", default=None, type=str),
-    #dict(dest="--eval-filter", default=None, type=str),
+   # dict(dest="--eval-filter", default=None, type=str),
     dict(dest='--device', default='cuda:0'),
     dict(dest='--stream-type', default='ecog'),
     dict(dest='--max-buflen', default=1024),

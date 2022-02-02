@@ -395,8 +395,8 @@ class NorthwesternWords(BaseDataset):
              ('MayoClinic', 24, 1, 3),
              ('MayoClinic', 24, 1, 4)],
 
-        25: [('MayoClinic', 25, 1, 1),
-             ('MayoClinic', 25, 1, 2)],
+        #25: [('MayoClinic', 25, 1, 1),
+        #     ('MayoClinic', 25, 1, 2)],
 
         26: [('MayoClinic', 26, 1, 1),
              ('MayoClinic', 26, 1, 2)],
@@ -1124,6 +1124,44 @@ class NorthwesternWords(BaseDataset):
 
         fig.tight_layout()
         return fig, ax
+
+    @classmethod
+    def plot_region_over_signal(cls, signal_s, region_min, region_max,
+                                padding_time=pd.Timedelta('1s'),
+                                plot_signal=True,
+                                ax=None, signal_plot_kwargs=None, region_plot_kwargs=None):
+        def_signal_plot_kwargs = dict(color='tab:green', alpha=0.5)
+        if isinstance(signal_plot_kwargs, dict):
+            def_signal_plot_kwargs.update(signal_plot_kwargs)
+        elif signal_plot_kwargs is not None:
+            raise ValueError()
+
+        signal_plot_kwargs = def_signal_plot_kwargs
+
+        region_plot_kwargs = dict() if region_plot_kwargs is None else region_plot_kwargs
+
+        plt_min = region_min - padding_time
+        #print(f"{plt_min} = {region_min} - {padding_time}")
+
+        plt_max = region_max + padding_time
+        #print(f"{plt_max} = {region_max} + {padding_time}")
+
+        signal_s = signal_s.loc[plt_min: plt_max]
+        plt_ix = signal_s.index
+
+        region_line_s = pd.Series(0, index=plt_ix)
+        region_line_s.loc[region_min: region_max] = 1
+
+        ax2 = ax
+        if plot_signal:
+            ax = signal_s.loc[plt_min:plt_max].plot(ax=ax, **signal_plot_kwargs)
+            ax2 = ax.twinx()
+
+        ax = region_line_s.loc[plt_min:plt_max].plot(ax=ax2, **region_plot_kwargs)
+
+        fig = ax.get_figure()
+        fig.patch.set_facecolor('white')
+        return fig, ax, ax2
 
     @classmethod
     def make_tuples_from_sets_str(cls, sets_str):
