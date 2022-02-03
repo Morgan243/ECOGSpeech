@@ -1157,7 +1157,7 @@ class NorthwesternWords(BaseDataset):
             ax = signal_s.loc[plt_min:plt_max].plot(ax=ax, **signal_plot_kwargs)
             ax2 = ax.twinx()
 
-        ax = region_line_s.loc[plt_min:plt_max].plot(ax=ax2, **region_plot_kwargs)
+        ax2 = region_line_s.loc[plt_min:plt_max].plot(ax=ax2, **region_plot_kwargs)
 
         fig = ax.get_figure()
         fig.patch.set_facecolor('white')
