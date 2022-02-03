@@ -34,24 +34,32 @@ class PowerThreshold(DictTrf):
     speaking_threshold = attr.ib(0.007)
     silence_threshold = attr.ib(0.001)
 
-    window_samples = attr.ib(48000)
+    speaking_window_samples = attr.ib(48000)
+    # More silence data, so require larger region of threshold check
+    silence_window_samples = attr.ib(96000)
 
     def process(self, data_map):
         return self.power_threshold(data_map['audio'], data_map['stim'],
                                     speaking_threshold=self.speaking_threshold,
+                                    speaking_window_samples=self.speaking_window_samples,
                                     silence_threshold=self.silence_threshold,
-                                    window_samples=self.window_samples)
+                                    silence_window_samples=self.silence_window_samples)
 
     @staticmethod
     def power_threshold(audio_s, stim_s, speaking_threshold,
+                        speaking_window_samples,
                         silence_threshold,
-                        window_samples):
+                        silence_window_samples):
         rolling_pwr = (audio_s
-                       .abs().rolling(window_samples, center=True)
+                       .abs().rolling(speaking_window_samples, center=True)
                        .max().reindex(stim_s.index, method='nearest').fillna(0))
-        # rolling_pwr = rolling_pwr.shift(- (window_samples // 2)).fillna(0)
+
         speaking_stim_auto_m = (stim_s != 0.) & (rolling_pwr > speaking_threshold)
-        silence_stim_auto_m = (stim_s == 0.) & (~speaking_stim_auto_m) & (rolling_pwr < silence_threshold)
+
+        silence_rolling_pwr = (audio_s
+                               .abs().rolling(silence_window_samples, center=True)
+                               .max().reindex(stim_s.index, method='nearest').fillna(0))
+        silence_stim_auto_m = (stim_s == 0.) & (~speaking_stim_auto_m) & (silence_rolling_pwr < silence_threshold)
 
         # Is the number of unique word codes different when using the threshold selected subset we
         # just produced (stim_auto_m)?
@@ -70,8 +78,12 @@ class PowerThreshold(DictTrf):
         silence_stim_pwrt_s = pd.Series(np.where(silence_stim_auto_m, 1, 0), index=stim_s.index)
         silence_stim_pwrt_diff_s = silence_stim_pwrt_s.diff().fillna(0).astype(int)
 
+        #coded_silence_stim = (silence_stim_pwrt_diff_s.cumsum() + 1) * silence_stim_pwrt_s
+        coded_silence_stim = (silence_stim_pwrt_s.diff().eq(-1).cumsum() + 1) * silence_stim_pwrt_s
+
         updates = dict(stim_pwrt=stim_pwrt_s, stim_pwrt_diff=stim_pwrt_diff_s,
                        silence_stim_pwrt_s=silence_stim_pwrt_s, silence_stim_pwrt_diff_s=silence_stim_pwrt_diff_s,
+                       coded_silence_stim=coded_silence_stim,
                        rolling_audio_pwr=rolling_pwr)
         return updates
 
@@ -90,10 +102,6 @@ class WindowSampleIndicesFromStim(DictTrf):
 
     max_target_region_size = attr.ib(600)
     stim_value_remap = attr.ib(None)
-
-    #silence_stim_value = attr.ib(0)
-    #silence_samples = attr.ib(None)
-    #silent_window_scale = attr.ib(4)
 
     def process(self, data_map):
         return self.make_sample_indices(data_map[self.stim_key], data_map[self.fs_key],
@@ -132,9 +140,9 @@ class WindowSampleIndicesFromStim(DictTrf):
             stop_t = g_s.index.max()
 
             if target_onset_ref == 'rising':
-                speaking_start_t = start_t + target_onset_shift
+                target_start_t = start_t + target_onset_shift
             elif target_onset_ref == 'falling':
-                speaking_start_t = stop_t + target_onset_shift
+                target_start_t = stop_t + target_onset_shift
             else:
                 raise ValueError(f"Dont understand {target_onset_ref}")
 
@@ -148,13 +156,21 @@ class WindowSampleIndicesFromStim(DictTrf):
             # Get the window starting indices for each region of interest
             # Note on :-expected_window_samples
             #   - this removes the last windows worth since windows starting here would have out of label samples
-            speaking_start_ixes = stim[speaking_start_t:speaking_stop_t].index.tolist()[:-expected_window_samples]
+            target_start_ixes = stim[target_start_t:speaking_stop_t].index.tolist()[:-expected_window_samples]
 
             # Go through the labeled region indices and pull a window of data
-            speaking_indices = [stim.loc[offs:offs + win_size].iloc[:expected_window_samples].index
-                                for offs in speaking_start_ixes[:max_target_region_size]]
-            stim_key = stim_value if not isinstance(stim_value_remap, dict) else stim_value_remap[stim_value]
-            sample_indices[stim_key] = speaking_indices
+            target_indices = [stim.loc[offs:offs + win_size].iloc[:expected_window_samples].index
+                                for offs in target_start_ixes[:max_target_region_size]]
+            if isinstance(stim_value_remap, dict):
+                stim_key = stim_value_remap[stim_value]
+            elif stim_value_remap is not None:
+                stim_key = stim_value_remap
+            elif stim_value_remap is None:
+                stim_key = stim_value
+            else:
+                raise ValueError(f"Dont know how to handle stim_value_remap of type: {type(stim_value_remap)}")
+
+            sample_indices[stim_key] = sample_indices.get(stim_key, list()) + target_indices
 
         # Go through all samples - make noise if sample size is off (or should throw error?)
         for k, _s in sample_indices.items():
