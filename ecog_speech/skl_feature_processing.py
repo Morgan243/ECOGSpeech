@@ -31,12 +31,12 @@ class SubsampleSignal(DictTrf):
 
 @attr.s
 class PowerThreshold(DictTrf):
-    speaking_threshold = attr.ib(0.007)
-    silence_threshold = attr.ib(0.001)
+    speaking_threshold = attr.ib(0.005)
+    silence_threshold = attr.ib(0.002)
 
     speaking_window_samples = attr.ib(48000)
     # More silence data, so require larger region of threshold check
-    silence_window_samples = attr.ib(96000)
+    silence_window_samples = attr.ib(48000)
 
     def process(self, data_map):
         return self.power_threshold(data_map['audio'], data_map['stim'],
@@ -52,13 +52,15 @@ class PowerThreshold(DictTrf):
                         silence_window_samples):
         rolling_pwr = (audio_s
                        .abs().rolling(speaking_window_samples, center=True)
-                       .max().reindex(stim_s.index, method='nearest').fillna(0))
+                       .median().reindex(stim_s.index, method='nearest').fillna(0))
+                       #.max().reindex(stim_s.index, method='nearest').fillna(0))
 
         speaking_stim_auto_m = (stim_s != 0.) & (rolling_pwr > speaking_threshold)
 
         silence_rolling_pwr = (audio_s
                                .abs().rolling(silence_window_samples, center=True)
-                               .max().reindex(stim_s.index, method='nearest').fillna(0))
+                               .median().reindex(stim_s.index, method='nearest').fillna(0))
+                               #.max().reindex(stim_s.index, method='nearest').fillna(0))
         silence_stim_auto_m = (stim_s == 0.) & (~speaking_stim_auto_m) & (silence_rolling_pwr < silence_threshold)
 
         # Is the number of unique word codes different when using the threshold selected subset we
@@ -147,20 +149,24 @@ class WindowSampleIndicesFromStim(DictTrf):
                 raise ValueError(f"Dont understand {target_onset_ref}")
 
             if target_offset_ref == 'rising':
-                speaking_stop_t = start_t + target_offset_shift
+                target_stop_t = start_t + target_offset_shift
             elif target_offset_ref == 'falling':
-                speaking_stop_t = stop_t + target_offset_shift
+                target_stop_t = stop_t + target_offset_shift
             else:
                 raise ValueError(f"Dont understand {target_offset_ref}")
 
             # Get the window starting indices for each region of interest
             # Note on :-expected_window_samples
             #   - this removes the last windows worth since windows starting here would have out of label samples
-            target_start_ixes = stim[target_start_t:speaking_stop_t].index.tolist()[:-expected_window_samples]
+            # Commented this out - use the offsets to handle this?
+            #target_start_ixes = stim[target_start_t:target_stop_t].index.tolist()#[:-expected_window_samples]
+            target_start_ixes = stim[target_start_t:target_stop_t].index.tolist()#[:-expected_window_samples]
 
             # Go through the labeled region indices and pull a window of data
             target_indices = [stim.loc[offs:offs + win_size].iloc[:expected_window_samples].index
-                                for offs in target_start_ixes[:max_target_region_size]]
+                                for offs in target_start_ixes[:max_target_region_size]
+                                    if len(stim.loc[offs:offs + win_size]) >= expected_window_samples]
+
             if isinstance(stim_value_remap, dict):
                 stim_key = stim_value_remap[stim_value]
             elif stim_value_remap is not None:
