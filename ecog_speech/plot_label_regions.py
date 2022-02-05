@@ -129,8 +129,7 @@ if __name__ == """__main__""":
         ('speaking_indices', feature_processing.WindowSampleIndicesFromStim('stim_pwrt')),
         ('silence_indices', feature_processing.WindowSampleIndicesFromStim('coded_silence_stim',
                                                                                target_onset_shift=pd.Timedelta(0., 's'),
-                                                                               target_offset_shift=pd.Timedelta(0.,
-                                                                                                                's'),
+                                                                               target_offset_shift=pd.Timedelta(0., 's'),
                                                                                # Want wordcode for silence to be stored as 0 (not True/1)
                                                                                stim_value_remap=0
                                                                                )),
