@@ -1,6 +1,35 @@
 from sklearn.metrics import classification_report
 from collections import namedtuple
+import logging
+import sys
 
+
+def get_logger(logname='ecog', console_level=logging.DEBUG, file_level=logging.DEBUG,
+               format_string='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+               output_file=None):
+    if logging.getLogger(logname).hasHandlers():
+        logging.getLogger(logname)
+    #logger = < create_my_logger > if not logging.getLogger().hasHandlers() else logging.getLogger()
+    # create logger with 'spam_application'
+    logger = logging.getLogger(logname)
+    logger.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(format_string)
+
+    # create file handler which logs even debug messages
+    if output_file is not None:
+        fh = logging.FileHandler(output_file)
+        fh.setLevel(file_level)
+        logger.addHandler(fh)
+        fh.setFormatter(formatter)
+
+    # create console handler with a higher log level
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(console_level)
+    # create formatter and add it to the handlers
+    ch.setFormatter(formatter)
+    # add the handlers to the logger
+    logger.addHandler(ch)
+    return logger
 
 def print_sequential_arch(m, t_x):
     for i in range(0, len(m)):
