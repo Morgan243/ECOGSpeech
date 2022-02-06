@@ -84,7 +84,7 @@ class PowerThreshold(DictTrf):
         #### Silence
         silence_rolling_pwr = (audio_s
                                .abs().rolling(silence_window_samples, center=True)
-                               .median().reindex(stim_s.index, method='nearest').fillna(np.inf))
+                               .mean().reindex(stim_s.index, method='nearest').fillna(np.inf))
                                #.max().reindex(stim_s.index, method='nearest').fillna(0))
 
         if silence_n_smallest is not None:
@@ -132,6 +132,52 @@ class PowerThreshold(DictTrf):
                        rolling_audio_pwr=rolling_pwr)
         return updates
 
+
+@attr.s
+class WindowSampleIndicesFromIndex(DictTrf):
+    logger = utils.get_logger(__name__ + '.WindowSampleIndicesFromIndex')
+    stim_key = attr.ib('stim')
+    fs_key = attr.ib('fs_signal')
+    index_shift = attr.ib(None)
+    stim_target_value = attr.ib(1)
+    window_size = attr.ib(pd.Timedelta(0.5, 's'))
+    stim_value_remap = attr.ib(None)
+
+    def process(self, data_map):
+        return self.make_sample_indices(data_map[self.stim_key], data_map[self.fs_key], win_size=self.window_size,
+                                        index_shift=self.index_shift,
+                                        stim_target_value=self.stim_target_value, stim_value_remap=self.stim_value_remap,
+                                        existing_sample_indices_map=data_map.get('sample_index_map'),)
+
+    @classmethod
+    def make_sample_indices(cls, stim, fs, win_size,
+                            index_shift, stim_target_value, stim_value_remap,
+                            existing_sample_indices_map):
+        index_shift = pd.Timedelta(0, 's') if index_shift is None else index_shift
+        existing_sample_indices_map = dict() if existing_sample_indices_map is None else existing_sample_indices_map
+        sample_indices = dict()
+        expected_window_samples = int(fs * win_size.total_seconds())
+
+        target_indexes = (stim == stim_target_value).pipe(lambda s: s[s].index.tolist())
+        target_indices = [stim.loc[offs - index_shift:offs + win_size - index_shift].iloc[:expected_window_samples].index
+                          for offs in target_indexes
+                          if len(stim.loc[offs - index_shift:offs + win_size - index_shift]) >= expected_window_samples]
+
+        if isinstance(stim_value_remap, dict):
+            stim_key = stim_value_remap[stim_target_value]
+        elif stim_value_remap is not None:
+            stim_key = stim_value_remap
+        elif stim_value_remap is None:
+            stim_key = stim_target_value
+        else:
+            raise ValueError(f"Dont know how to handle stim_value_remap of type: {type(stim_value_remap)}")
+
+        sample_indices[stim_key] = sample_indices.get(stim_key, list()) + target_indices
+
+        if existing_sample_indices_map is not None:
+            existing_sample_indices_map.update(sample_indices)
+            sample_indices = existing_sample_indices_map
+        return dict(sample_index_map=sample_indices)
 
 @attr.s
 class WindowSampleIndicesFromStim(DictTrf):
