@@ -44,11 +44,11 @@ def plot_grid_of_label_regions(data_map):
 
         fig, ax, ax2 = viz.plot_region_over_signal(data_map['audio'], wrd_ix.min(), wrd_ix.max(),
                                                     region_plot_kwargs=dict(ls='--'),
-                                                    padding_time=pd.Timedelta('3s'), ax=_ax)
+                                                    padding_time=pd.Timedelta('1.5s'), ax=_ax)
         fig, ax, _ = viz.plot_region_over_signal(data_map['audio'],
                                                   data_map['sample_index_map'][word_code][0].min(),
                                                   data_map['sample_index_map'][word_code][-1].max(),
-                                                  padding_time=pd.Timedelta('3s'),
+                                                  padding_time=pd.Timedelta('1.5s'),
                                                   region_plot_kwargs=dict(ls='-', zorder=0), ax=ax2, plot_signal=False)
 
         # ax.set_ylim(-plt_scale, plt_scale)
@@ -96,8 +96,8 @@ def plot_label_inspection_figures(data_map):
 
     wrd_code_len_s = pd.Series({wrd_cd: len(ixes)
                                 for wrd_cd, ixes in data_map['sample_index_map'].items()}, name='n_ixes')
-
-    hist_title = f'Hist of Word Codes\' N label windows\n{wrd_code_len_s.loc[0]} silence samples (not inc. histo)\n{len(wrd_code_len_s)} unique word codes'
+    n_speak_wins = len(wrd_code_len_s.drop(0))
+    hist_title = f'Hist of Word Codes\' N={n_speak_wins} label windows\nN={wrd_code_len_s.loc[0]} silence samples (not inc. histo)\n{len(wrd_code_len_s)} unique word codes'
     hist_title += f'\nLongest regions: {wrd_code_len_s.drop(0).nlargest(5).index.tolist()}'
     ax = wrd_code_len_s.drop(0).plot.hist(title=hist_title)
     ax.set_xlabel('N Windows in label region')
@@ -123,16 +123,19 @@ if __name__ == """__main__""":
 
     sk_pl = Pipeline([
         ('subsample', feature_processing.SubsampleSignal()),
-        ('Threshold', feature_processing.PowerThreshold(speaking_window_samples=48000 // 4,
-                                                            silence_window_samples=48000 // 2,
-                                                            silence_threshold=0.002, )),
+        ('Threshold', feature_processing.PowerThreshold(speaking_window_samples=48000 // 8,
+                                                        silence_window_samples=int(48000 * 1.5),
+                                                        speaking_quantile_threshold=0.95,
+                                                            #silence_threshold=0.001,
+                                                        #silence_quantile_threshold=0.05,
+                                                        silence_n_smallest=15000,
+                                                           )),
         ('speaking_indices', feature_processing.WindowSampleIndicesFromStim('stim_pwrt')),
         ('silence_indices', feature_processing.WindowSampleIndicesFromStim('coded_silence_stim',
-                                                                               target_onset_shift=pd.Timedelta(0., 's'),
-                                                                               target_offset_shift=pd.Timedelta(0., 's'),
-                                                                               # Want wordcode for silence to be stored as 0 (not True/1)
-                                                                               stim_value_remap=0
-                                                                               )),
+                                                                           target_onset_shift=pd.Timedelta(-0.5, 's'),
+                                                                           target_offset_shift=pd.Timedelta(-0.5, 's'),
+                                                                           # Want wordcode for silence to be stored as 0 (not True/1)
+                                                                           stim_value_remap=0)),
         ('output', 'passthrough')
     ])
 
