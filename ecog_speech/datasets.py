@@ -8,13 +8,14 @@ from torch.utils import data as tdata
 from tqdm.auto import tqdm
 import h5py
 import scipy.io
+import logging
 
 from os import environ
 import os
 import attr
 #import torchaudio
 import socket
-from ecog_speech import feature_processing
+from ecog_speech import feature_processing, utils
 
 #try:
 #    import torchaudio
@@ -369,6 +370,9 @@ class NorthwesternWords(BaseDataset):
     This class can load multiple trails as once - ensuring correct windowing, but allowing
     for torch data sampling and other support.
     """
+    #logger = logging.getLogger('ecog.' + __name__)
+    logger = utils.get_logger('ecog.' + __name__)
+
     env_key = 'NORTHWESTERNWORDS_DATASET'
     default_base_path = environ.get(env_key,
                                     path_map.get(socket.gethostname(),
@@ -537,16 +541,20 @@ class NorthwesternWords(BaseDataset):
 
         # If nothing passed, use 'default' pipeline
         if self.pre_processing_pipeline is None:
+            self.logger.info("Default pipeline selected")
             self.pipeline_f = self.pipeline_map['default']
         # If string passed, use it to select the pipeline in the map
         elif isinstance(self.pre_processing_pipeline, str):
+            self.logger.info(f"{self.pre_processing_pipeline} pipeline selected")
             self.pipeline_f = self.pipeline_map[self.pre_processing_pipeline]
         # Otherwise, just assume it will work, that a list of tuple(callable, kws) was passed
         else:
+            self.logger.info(f"{str(self.pre_processing_pipeline)} pipeline passed directly")
             self.pipeline_f = self.pre_processing_pipeline
 
         # If no data sharing, then load and parse data from scratch
         if self.data_from is None:
+            self.logger.info("Loading data directly")
             # Leave this here for now...
             #self.mfcc_m = torchaudio.transforms.MFCC(self.default_audio_sample_rate,
             #                                         self.num_mfcc)
@@ -572,7 +580,8 @@ class NorthwesternWords(BaseDataset):
                 good_and_bad_tuple_d = {k: (set(gs) if gs else (list(range(mat_data_maps[k][self.mat_d_signal_key].shape[1]))),
                                             bs)
                                          for k, (gs, bs) in good_and_bad_tuple_d.items()}
-                print("GOOD AND BAD SENSORS: " + str(good_and_bad_tuple_d))
+                #print("GOOD AND BAD SENSORS: " + str(good_and_bad_tuple_d))
+                self.logger.info("GOOD AND BAD SENSORS: " + str(good_and_bad_tuple_d))
                 self.sensor_columns = 'union' if self.sensor_columns is None else self.sensor_columns
                 # UNION: Select all good sensors from all inputs, zeros will be filled for those missing
                 if self.sensor_columns == 'union':
@@ -586,8 +595,10 @@ class NorthwesternWords(BaseDataset):
                 #elif self.sensor_columns == 'all':
                 else:
                     raise ValueError("Unknown snsor columns argument: " + str(self.sensor_columns))
-                print("Selected columns with -%s- method: %s"
-                      % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
+                #print("Selected columns with -%s- method: %s"
+                #      % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
+                self.logger.info("Selected columns with -%s- method: %s"
+                                  % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
             else:
                 self.selected_columns = self.sensor_columns
             self.sensor_count = len(self.selected_columns)
@@ -597,7 +608,8 @@ class NorthwesternWords(BaseDataset):
                               for l_p_s_t_tuple, mat_d in tqdm(mat_data_maps.items(), desc='Parsing data')}
             ###-----
             assert self.sensor_count == len(self.selected_columns)
-            print(f"Selected {len(self.selected_columns)} sensors")
+            #print(f"Selected {len(self.selected_columns)} sensors")
+            self.logger.info(f"Selected {len(self.selected_columns)} sensors")
             ###-----
 
             ## Important processing ##
@@ -628,7 +640,8 @@ class NorthwesternWords(BaseDataset):
                                       dtype='object')
 
         else:
-            print("Warning: using naive shared-referencing across objects - only use when feeling lazy")
+            #print("Warning: using naive shared-referencing across objects - only use when feeling lazy")
+            self.logger.warning("Warning: using naive shared-referencing across objects - only use when feeling lazy")
             #self.mfcc_m = self.data_from.mfcc_m
             self.data_maps = self.data_from.data_maps
             self.sample_index_maps = self.data_from.sample_index_maps
@@ -695,7 +708,7 @@ class NorthwesternWords(BaseDataset):
         if 'electrodes' in mat_d:
             chann_code_cols = ["code_%d" % e for e in range(mat_d['electrodes'].shape[-1])]
             channel_df = pd.DataFrame(mat_d['electrodes'], columns=chann_code_cols)
-            print("Found electrodes metadata, N trodes = %d" % channel_df.shape[0] )
+            cls.logger.info("Found electrodes metadata, N trodes = %d" % channel_df.shape[0] )
 
             #required_sensor_columns = channel_df.index.tolist() if sensor_columns is None else sensor_columns
             # Mask for good sensors
@@ -889,7 +902,7 @@ class NorthwesternWords(BaseDataset):
                                     cls.default_audio_sample_rate)
 
         #assert fs_audio == cls.default_audio_sample_rate
-        print("Audio FS = " + str(fs_audio))
+        cls.logger.info("Audio FS = " + str(fs_audio))
 
         try:
             fs_signal = mat_d['fs_signal'][0][0]
@@ -914,7 +927,7 @@ class NorthwesternWords(BaseDataset):
         dup_words = w_vc[w_vc > 1].index.tolist()
 
         if verbose:
-            print("Duplicate words (n=%d): %s"
+            cls.logger.info("Duplicate words (n=%d): %s"
                   % (len(dup_words), ", ".join(dup_words)))
 
         # Re-write duplicate words with index so they never collide
@@ -934,7 +947,7 @@ class NorthwesternWords(BaseDataset):
         stim_s = pd.Series(stim_arr, index=ix)
         ecog_df = pd.DataFrame(mat_d[cls.mat_d_signal_key], index=ix)
         if verbose:
-            print(f"{cls.mat_d_signal_key} shape: {ecog_df.shape} [{ecog_df.index[0], ecog_df.index[-1]}]")
+            cls.logger.info(f"{cls.mat_d_signal_key} shape: {ecog_df.shape} [{ecog_df.index[0], ecog_df.index[-1]}]")
 
         ######
         # Stim event codes and txt
@@ -948,7 +961,7 @@ class NorthwesternWords(BaseDataset):
         if 'electrodes' in mat_d:
             chann_code_cols = ["code_%d" % e for e in range(mat_d['electrodes'].shape[-1])]
             channel_df = pd.DataFrame(mat_d['electrodes'], columns=chann_code_cols)
-            print("Found electrodes metadata, N trodes = %d" % channel_df.shape[0] )
+            cls.logger.info("Found electrodes metadata, N trodes = %d" % channel_df.shape[0] )
 
             #required_sensor_columns = channel_df.index.tolist() if sensor_columns is None else sensor_columns
             # Mask for good sensors
@@ -968,12 +981,12 @@ class NorthwesternWords(BaseDataset):
                 good_sensor_columns = [c for c in all_valid_sensors if c in required_sensor_columns]
                 bad_sensor_columns = list(set(required_sensor_columns) - set(good_sensor_columns))
                 if len(bad_sensor_columns) == 0:
-                    print("No bad sensors")
+                    cls.logger.info("No bad sensors")
                 elif bad_sensor_method == 'zero' and len(bad_sensor_columns) > 0:
-                    print("Zeroing %d bad sensor columns: %s" % (len(bad_sensor_columns), str(bad_sensor_columns)))
+                    cls.logger.info("Zeroing %d bad sensor columns: %s" % (len(bad_sensor_columns), str(bad_sensor_columns)))
                     ecog_df.loc[:, bad_sensor_columns] = 0.
                 elif bad_sensor_method == 'ignore':
-                    print("Ignoring bad sensors")
+                    cls.logger.info("Ignoring bad sensors")
                 else:
                     raise ValueError("Unknown bad_sensor_method (use 'zero', 'ignore'): " + str(bad_sensor_method))
 
@@ -987,10 +1000,10 @@ class NorthwesternWords(BaseDataset):
                 if len(missing_sensors) > 0:
                     ecog_df.loc[:, missing_sensors] = 0.
             #sensor_columns = ecog_df.columns.tolist() if sensor_columns is None else sensor_columns
-            print(f"No 'electrods' key in mat data - using all {len(sensor_columns)} columns")
+            cls.logger.info(f"No 'electrods' key in mat data - using all {len(sensor_columns)} columns")
             #ch_m = ecog_df.columns.notnull()
 
-        print(f"Selected sensors (n={len(sensor_columns)}): "
+        cls.logger.info(f"Selected sensors (n={len(sensor_columns)}): "
               + (", ".join(map(str, sensor_columns))))
 
         ######
@@ -1000,7 +1013,7 @@ class NorthwesternWords(BaseDataset):
             ix = pd.TimedeltaIndex(pd.RangeIndex(0, audio_arr.shape[0]) / fs_audio, unit='s')
             audio_s = pd.Series(audio_arr, index=ix)
             if verbose:
-                print(f"Audio shape: {audio_s.shape} [{audio_s.index[0], audio_s.index[-1]}]")
+                cls.logger.info(f"Audio shape: {audio_s.shape} [{audio_s.index[0], audio_s.index[-1]}]")
         else:
             #audio = None
             audio_s = None
@@ -1042,9 +1055,9 @@ class NorthwesternWords(BaseDataset):
         sensor_columns = cls.default_sensor_columns if sensor_columns is None else sensor_columns
 
         if verbose:
-            print(f"---{patient}-{session}-{trial}-{location}---")
+            cls.logger.info(f"---{patient}-{session}-{trial}-{location}---")
             if subset is not None:
-                print("\t->Using Subset: " + str(subset))
+                cls.logger.info("\t->Using Subset: " + str(subset))
 
         p = cls.get_data_path(patient, session, trial, location, base_path=base_path, subset=subset)
         mat_d = scipy.io.matlab.loadmat(p)
