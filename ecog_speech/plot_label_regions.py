@@ -87,7 +87,7 @@ def plot_grid_of_silent_regions(data_map):
 
     fig.tight_layout()
     fig.suptitle(f"Showing {n_to_plt} samples of {len(data_map['sample_index_map'][0])} total silent regions",
-                 fontsize=20, y=1)
+                 fontsize=20, y=1.01)
     return fig
 
 
@@ -106,11 +106,13 @@ def plot_label_inspection_figures(data_map):
     fig = ax.get_figure()
     # fig.patches.
     fig.patch.set_facecolor('white')
-    output_fig_map['word_code_win_histo'] = fig
-
+    fig.tight_layout()
+    output_fig_map['silent_region_grid'] = plot_grid_of_silent_regions(data_map)
     output_fig_map['label_region_grid'] = plot_grid_of_label_regions(data_map)
 
-    output_fig_map['silent_region_grid'] = plot_grid_of_silent_regions(data_map)
+    output_fig_map['word_code_win_histo'] = fig
+
+
     return output_fig_map
 
 
@@ -125,40 +127,61 @@ if __name__ == """__main__""":
         ('subsample', feature_processing.SubsampleSignal()),
         ('Threshold', feature_processing.PowerThreshold(speaking_window_samples=48000 // 8,
                                                         silence_window_samples=int(48000 * 1.5),
-                                                        speaking_quantile_threshold=0.95,
+                                                        speaking_quantile_threshold=0.9,
                                                             #silence_threshold=0.001,
-                                                        #silence_quantile_threshold=0.05,
-                                                        silence_n_smallest=15000,
+                                                        #silGence_quantile_threshold=0.05,
+                                                        silence_n_smallest=5000,
                                                            )),
         ('speaking_indices', feature_processing.WindowSampleIndicesFromStim('stim_pwrt')),
-        ('silence_indices', feature_processing.WindowSampleIndicesFromStim('coded_silence_stim',
-                                                                           target_onset_shift=pd.Timedelta(-0.5, 's'),
-                                                                           target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                           # Want wordcode for silence to be stored as 0 (not True/1)
-                                                                           stim_value_remap=0)),
+        ('silence_indices', feature_processing.WindowSampleIndicesFromIndex('silence_stim_pwrt_s', #'coded_silence_stim',
+                                                                                # input are centers, and output is a window of .5 sec
+                                                                                # so to center it, move the point (center) back .25 secods
+                                                                                # so that extracted 0.5 sec window saddles the original center
+                                                                                index_shift=pd.Timedelta(-0.25, 's'),
+                                                                                stim_value_remap=0
+                                                                          )),
+#        ('silence_indices', feature_processing.WindowSampleIndicesFromStim('coded_silence_stim',
+#                                                                           target_onset_shift=pd.Timedelta(-0.5, 's'),
+#                                                                           target_offset_shift=pd.Timedelta(-0.5, 's'),
+#                                                                           # Want wordcode for silence to be stored as 0 (not True/1)
+#                                                                           stim_value_remap=0)),
         ('output', 'passthrough')
     ])
 
+    def run_one(pid, pt, ptuples):
+        output_path = f'{psubset}-{pt[1]}-{pt[3]}_label_inspection_plots.pdf'
+        if pathlib.Path(output_path).is_file():
+            print("Skipping " + str(output_path))
+            return
+        print("LOADING NWW")
+        dset = datasets.NorthwesternWords(patient_tuples=[pt], pre_processing_pipeline=sk_pl.transform)
+        print("Getting data map")
+        data_map = dset.data_maps[pt]
+        # Should only be onw
+        # for i, (pt, data_map) in enumerate(dset.data_maps.items()):
+        print("Plotting")
+        fig_map = plot_label_inspection_figures(data_map)
+
+        from matplotlib.backends.backend_pdf import PdfPages
+
+        print("saving plots")
+        # create a PdfPages object
+        pdf = PdfPages(output_path)
+
+        for fig_name, _fig in fig_map.items():
+            pdf.savefig(_fig)
+        plt.close('all')
+        pdf.close()
+        del dset
+        del pdf
+        print("All done")
+
+
+    from multiprocessing import Pool
+    p = Pool(6)
     for pid, ptuples in tqdm(datasets.NorthwesternWords.all_patient_maps[psubset].items()):
         for pt in ptuples:
-            output_path = f'{psubset}-{pt[1]}-{pt[3]}_label_inspection_plots.pdf'
-            if pathlib.Path(output_path).is_file():
-                print("Skipping " + str(output_path))
-                continue
-            dset = datasets.NorthwesternWords(patient_tuples=[pt], pre_processing_pipeline=sk_pl.transform)
-            data_map = dset.data_maps[pt]
-            # Should only be onw
-            #for i, (pt, data_map) in enumerate(dset.data_maps.items()):
-            fig_map = plot_label_inspection_figures(data_map)
+            p.apply_async(run_one, kwds=dict(pid=pid, pt=pt, ptuples=ptuples))
 
-            from matplotlib.backends.backend_pdf import PdfPages
-
-            # create a PdfPages object
-            pdf = PdfPages(output_path)
-
-            for fig_name, _fig in fig_map.items():
-                pdf.savefig(_fig)
-            plt.close('all')
-            pdf.close()
-            del dset
-            del pdf
+    p.close()
+    p.join()
