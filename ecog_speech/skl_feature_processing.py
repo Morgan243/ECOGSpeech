@@ -84,13 +84,15 @@ class PowerThreshold(DictTrf):
         #### Silence
         silence_rolling_pwr = (audio_s
                                .abs().rolling(silence_window_samples, center=True)
-                               .mean().reindex(stim_s.index, method='nearest').fillna(np.inf))
+                               .median().reindex(stim_s.index, method='nearest').fillna(np.inf))
                                #.max().reindex(stim_s.index, method='nearest').fillna(0))
 
         if silence_n_smallest is not None:
             cls.logger.info("Using silence nsmallest")
             silence_n_smallest = int(silence_n_smallest)
-            n_smallest_ix = silence_rolling_pwr.nsmallest(silence_n_smallest).index
+            n_smallest = silence_rolling_pwr.nsmallest(silence_n_smallest)
+            n_smallest_ix = n_smallest.index
+            #cls.logger.info(f"n smallest: {n_smallest_ix.()}")
             thresholded_silence_pwr = pd.Series(False, index=silence_rolling_pwr.index)
             thresholded_silence_pwr.loc[n_smallest_ix] = True
         elif silence_quantile_threshold is not None:
@@ -159,9 +161,9 @@ class WindowSampleIndicesFromIndex(DictTrf):
         expected_window_samples = int(fs * win_size.total_seconds())
 
         target_indexes = (stim == stim_target_value).pipe(lambda s: s[s].index.tolist())
-        target_indices = [stim.loc[offs - index_shift:offs + win_size - index_shift].iloc[:expected_window_samples].index
+        target_indices = [stim.loc[offs + index_shift:offs + win_size + index_shift].iloc[:expected_window_samples].index
                           for offs in target_indexes
-                          if len(stim.loc[offs - index_shift:offs + win_size - index_shift]) >= expected_window_samples]
+                          if len(stim.loc[offs + index_shift:offs + win_size + index_shift]) >= expected_window_samples]
 
         if isinstance(stim_value_remap, dict):
             stim_key = stim_value_remap[stim_target_value]
