@@ -125,20 +125,23 @@ if __name__ == """__main__""":
 
     sk_pl = Pipeline([
         ('subsample', feature_processing.SubsampleSignal()),
-        ('Threshold', feature_processing.PowerThreshold(speaking_window_samples=48000 // 8,
+        ('Threshold', feature_processing.PowerThreshold(speaking_window_samples=48000 // 16,
                                                         silence_window_samples=int(48000 * 1.5),
                                                         speaking_quantile_threshold=0.9,
                                                             #silence_threshold=0.001,
                                                         #silGence_quantile_threshold=0.05,
                                                         silence_n_smallest=5000,
                                                            )),
-        ('speaking_indices', feature_processing.WindowSampleIndicesFromStim('stim_pwrt')),
-        ('silence_indices', feature_processing.WindowSampleIndicesFromIndex('silence_stim_pwrt_s', #'coded_silence_stim',
-                                                                                # input are centers, and output is a window of .5 sec
-                                                                                # so to center it, move the point (center) back .25 secods
-                                                                                # so that extracted 0.5 sec window saddles the original center
-                                                                                index_shift=pd.Timedelta(-0.25, 's'),
-                                                                                stim_value_remap=0
+        ('speaking_indices', feature_processing.WindowSampleIndicesFromStim('stim_pwrt',
+                                                                            # input are centers, and output is a window of .5 sec
+                                                                            # so to center it, move the point (center) back .25 secods
+                                                                            # so that extracted 0.5 sec window saddles the original center
+                                                                            target_offset_shift=pd.Timedelta(-0.25, 's'))),
+
+        ('silence_indices', feature_processing.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
+                                                                            # Center the extracted 0.5 second window
+                                                                            index_shift=pd.Timedelta(-0.25, 's'),
+                                                                            stim_value_remap=0
                                                                           )),
 #        ('silence_indices', feature_processing.WindowSampleIndicesFromStim('coded_silence_stim',
 #                                                                           target_onset_shift=pd.Timedelta(-0.5, 's'),
@@ -178,7 +181,7 @@ if __name__ == """__main__""":
 
 
     from multiprocessing import Pool
-    p = Pool(6)
+    p = Pool(5)
     for pid, ptuples in tqdm(datasets.NorthwesternWords.all_patient_maps[psubset].items()):
         for pt in ptuples:
             p.apply_async(run_one, kwds=dict(pid=pid, pt=pt, ptuples=ptuples))
