@@ -133,21 +133,20 @@ if __name__ == """__main__""":
                                                         silence_n_smallest=5000,
                                                            )),
         ('speaking_indices', feature_processing.WindowSampleIndicesFromStim('stim_pwrt',
+                                                                            target_onset_shift=pd.Timedelta(-.5, 's'),
                                                                             # input are centers, and output is a window of .5 sec
                                                                             # so to center it, move the point (center) back .25 secods
                                                                             # so that extracted 0.5 sec window saddles the original center
-                                                                            target_offset_shift=pd.Timedelta(-0.25, 's'))),
+                                                                            #target_offset_shift=pd.Timedelta(-0.25, 's')
+                                                                            target_offset_shift=pd.Timedelta(-0.5, 's')
+                                                                            )
+         ),
 
         ('silence_indices', feature_processing.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
                                                                             # Center the extracted 0.5 second window
                                                                             index_shift=pd.Timedelta(-0.25, 's'),
                                                                             stim_value_remap=0
                                                                           )),
-#        ('silence_indices', feature_processing.WindowSampleIndicesFromStim('coded_silence_stim',
-#                                                                           target_onset_shift=pd.Timedelta(-0.5, 's'),
-#                                                                           target_offset_shift=pd.Timedelta(-0.5, 's'),
-#                                                                           # Want wordcode for silence to be stored as 0 (not True/1)
-#                                                                           stim_value_remap=0)),
         ('output', 'passthrough')
     ])
 
