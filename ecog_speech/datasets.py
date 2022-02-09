@@ -15,7 +15,8 @@ import os
 import attr
 #import torchaudio
 import socket
-from ecog_speech import feature_processing, utils
+from ecog_speech import feature_processing, utils, skl_feature_processing
+from sklearn.pipeline import  Pipeline
 
 #try:
 #    import torchaudio
@@ -237,34 +238,96 @@ class DEAP(BaseDataset):
 
 
 @attr.s
-class HarvardSentences(BaseDataset):
-    """
-    <TODO Dataset info>
-    Expects the Formatted Datasets folder (TODO - vetted?)
-    Uses filenames for metadata and partition datasets before loading
-    """
-    env_key = 'HARVARDSENTENCES_DATASET'
-    default_hvs_path = path.join(pkg_data_dir, '2-Formatted Datasets/2-Formatted Datasets/Harvard Sentences/')
-    default_base_path = environ.get(env_key,
-                                    path_map.get(socket.gethostname(),
-                                                 default_hvs_path))
+class BaseASPEN(BaseDataset):
+    logger = utils.get_logger(__name__ + '.aspen')
+    env_key = None
+    default_base_path = None
+    all_patient_maps = None
+    default_sensor_columns = list(range(64))
+    default_audio_sample_rate = 48000
+    default_signal_sample_rate = 1200
+
+    mat_d_signal_key = None
+    mat_d_audio_key = 'audio'
+    mat_d_audio_fs_key = 'fs_audio'
+    mat_d_signal_fs_key= 'fs_signal'
+    mat_d_keys = dict(
+        signal=None,
+        signal_fs=None,
+        audio='audio',
+        audio_fs='fs_audio',
+        stimcode='stimcode',
+        electrodes='electrodes',
+        wordcode='wordcode',
+    )
+
+    patient_tuples = attr.ib(None)
+    sensor_columns = attr.ib(None)
     base_path = attr.ib(None)
-    window_description = attr.make_class("HarvardSentenceWindowDesc",
-                                         dict(  # dataset_key=attr.ib(),
-                                             lab_name=attr.ib(), sid=attr.ib(), tid=attr.ib(),
-                                             ecog_i=attr.ib(),
-                                             ecog_width=attr.ib(),
-                                             wav_i=attr.ib(),
-                                             wav_width=attr.ib(),
-                                             label_id=attr.ib(),
-                                         ))
+    data_subset = attr.ib('Data')
 
-    @classmethod
-    def get_data_paths(cls, base_path=None, lab_name=None):
-        base_path = cls.default_base_path if base_path is None else base_path
-        lab_name = '*' if lab_name is None else lab_name
-        return glob(os.path.join(base_path, lab_name, 'Data', '*.mat'))
+    num_mfcc = attr.ib(13)
+    verbose = attr.ib(True)
 
+    selected_word_indices = attr.ib(None)
+    transform = attr.ib(None)
+    target_transform = attr.ib(None)
+
+    power_threshold = attr.ib(0.007)
+    power_q = attr.ib(0.70)
+    pre_processing_pipeline = attr.ib(None)
+    # If using one source of data, with different `selected_word_indices`, then
+    # passing the first NWW dataset to all subsequent ones built on the same source data
+    # can save on memory and reading+parsing time
+    data_from: 'NorthwesternWords' = attr.ib(None)
+
+    default_data_subset = 'Data'
+    default_location = None
+    default_patient = None
+    default_session = None
+    default_trial = None
+
+    def make_pipeline_map(self, default='audio_gate'):
+        """
+        Pipeline parameters sometimes depend on the configuration of the dataset class,
+        so for now it is bound method (not classmethod or staticmethod).
+        """
+
+        p_map = {
+            'audio_gate': Pipeline([
+                        ('subsample', skl_feature_processing.SubsampleSignal()),
+                        ('Threshold', skl_feature_processing.PowerThreshold(speaking_window_samples=48000 // 16,
+                                                                            silence_window_samples=int(48000 * 1.5),
+                                                                            speaking_quantile_threshold=0.9,
+                                                                            #silence_threshold=0.001,
+                                                                            #silGence_quantile_threshold=0.05,
+                                                                            silence_n_smallest=5000)),
+                        ('speaking_indices', skl_feature_processing.WindowSampleIndicesFromStim('stim_pwrt',
+                                                                                            target_onset_shift=pd.Timedelta(-.5, 's'),
+                                                                                            # input are centers, and output is a window of .5 sec
+                                                                                            # so to center it, move the point (center) back .25 secods
+                                                                                            # so that extracted 0.5 sec window saddles the original center
+                                                                                            #target_offset_shift=pd.Timedelta(-0.25, 's')
+                                                                                            target_offset_shift=pd.Timedelta(-0.5, 's')
+                                                                                            )
+                         ),
+
+                        ('silence_indices', skl_feature_processing.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
+                                                                                            # Center the extracted 0.5 second window
+                                                                                            index_shift=pd.Timedelta(-0.25, 's'),
+                                                                                            stim_value_remap=0
+                                                                                          )),
+                        ('output', 'passthrough')
+                    ]).transform,
+
+            'minimal':
+                feature_processing.SubsampleECOG() >>
+                feature_processing.WordStopStartTimeMap() >> feature_processing.ChangSampleIndicesFromStim()
+        }
+        p_map['default'] = p_map[default]
+        return p_map
+
+    ######
     @classmethod
     def load_mat_keys_from_path(cls, p):
         """
@@ -279,9 +342,270 @@ class HarvardSentences(BaseDataset):
         """
         Loads all keys in HDF5 file into dict, convert values to np.array
         """
-        with h5py.File(p, 'r') as f:
-            mat_dat_map = {k: np.array(f[k]) for k in f.keys()}
+        try:
+            mat_dat_map = scipy.io.loadmat(p)
+        except NotImplementedError as e:
+            cls.logger.info(f"Couldn't load {p} with scipy (vers > 7.3?) - manually loading as H5PY")
+            with h5py.File(p, 'r') as f:
+                mat_dat_map = {k: np.array(f[k]) for k in f.keys()}
         return mat_dat_map
+
+    # Conversion of MATLAB data structure to map of pandas data objects
+    @classmethod
+    def parse_mat_arr_dict(cls, mat_d, sensor_columns=None,
+                           zero_repr='<ns>', defaults=None,
+                           bad_sensor_method='zero',
+                           verbose=True) -> dict:
+        """
+        Convert a raw matlab dataset into Python+Pandas with timeseries indices
+
+        Parameters
+
+        mat_d: dict()
+            Dictionary of data returned from scip.io matlab load
+        sensor_columns : list()
+            List of sensor IDs to use
+        zero_repr : string
+            String code for no-speech/class
+        defaults : dict()
+            Values are generally taken from the matlab dataset,
+            followed by this defaults dict, followed by the class
+            static default values
+        verbose : boolean
+            Print extra information
+
+
+        Returns : dict
+            Extracted and wrangled data and configurations
+        """
+        if defaults is None:
+            defaults = dict()
+
+        try:
+            fs_audio = mat_d[cls.mat_d_keys['audio_fs']][0][0]
+        except KeyError:
+            #fs_audio = cls.audio_sample_rate
+            fs_audio = defaults.get(cls.mat_d_keys['audio_fs'],
+                                    cls.default_audio_sample_rate)
+
+        #assert fs_audio == cls.default_audio_sample_rate
+        cls.logger.info("Audio FS = " + str(fs_audio))
+
+        try:
+            fs_signal = mat_d[cls.mat_d_keys['signal_fs']][0][0]
+        except KeyError:
+            fs_signal = defaults.get(cls.mat_d_keys['signal_fs'],
+                                     cls.default_ecog_sample_rate)
+
+        stim_arr = mat_d[cls.mat_d_keys['stimcode']].reshape(-1).astype('int32')
+
+        # Create a dictonary map from index to word string repr
+        # **0 is neutral, word index starts from 1**?
+        word_code_d = {i + 1: w[0] for i, w in enumerate(mat_d[cls.mat_d_keys['wordcode']].reshape(-1))}
+        # Code 0 as no-sound/signal/speech
+        word_code_d[0] = zero_repr
+
+        ########
+        # Check for repeated words by parsing to Series
+        #word_code_s = pd.Series(word_code_d, name='word')
+        #word_code_s.index.name = 'word_index'
+
+        #w_vc = word_code_s.value_counts()
+        #dup_words = w_vc[w_vc > 1].index.tolist()
+
+        #if verbose:
+        #    cls.logger.info("Duplicate words (n=%d): %s"
+        #          % (len(dup_words), ", ".join(dup_words)))
+
+        ## Re-write duplicate words with index so they never collide
+        #for dw in dup_words:
+        #    for w_ix in word_code_s[word_code_s == dw].index.tolist():
+        #        new_wrd = dw + ("-%d" % w_ix)
+        #        word_code_d[w_ix] = new_wrd
+        #        # if verbose: print(new_wrd)
+
+        ## Recreate the word code series to include the new words
+        #word_code_s = pd.Series(word_code_d, name='word')
+        #word_code_s.index.name = 'word_index'
+
+        ######
+        # Stim parse
+        ix = pd.TimedeltaIndex(pd.RangeIndex(0, stim_arr.shape[0]) / fs_signal, unit='s')
+        stim_s = pd.Series(stim_arr, index=ix)
+        signal_df = pd.DataFrame(mat_d[cls.mat_d_signal_key], index=ix)
+        if verbose:
+            cls.logger.info(f"{cls.mat_d_signal_key} shape: {signal_df.shape} [{signal_df.index[0], signal_df.index[-1]}]")
+
+        ######
+        # Stim event codes and txt
+        # 0 is neutral, so running difference will identify the onsets
+        stim_diff_s = stim_s.diff().fillna(0).astype(int)
+
+        #####
+        # Channels/sensors status
+        # TODO: What are appropriate names for these indicators
+        bad_sensor_columns = None
+        if 'electrodes' in mat_d:
+            chann_code_cols = ["code_%d" % e for e in range(mat_d['electrodes'].shape[-1])]
+            channel_df = pd.DataFrame(mat_d['electrodes'], columns=chann_code_cols)
+            cls.logger.info("Found electrodes metadata, N trodes = %d" % channel_df.shape[0] )
+
+            #required_sensor_columns = channel_df.index.tolist() if sensor_columns is None else sensor_columns
+            # Mask for good sensors
+            ch_m = (channel_df['code_0'] == 1)
+            all_valid_sensors = ch_m[ch_m].index.tolist()
+
+            # Spec the number of sensors that the ecog array mush have
+            if sensor_columns is None:
+                required_sensor_columns = channel_df.index.tolist()
+            elif sensor_columns == 'valid':
+                sensor_columns = all_valid_sensors
+                required_sensor_columns = sensor_columns
+            else:
+                required_sensor_columns = sensor_columns
+                #
+                good_sensor_columns = [c for c in all_valid_sensors if c in required_sensor_columns]
+                bad_sensor_columns = list(set(required_sensor_columns) - set(good_sensor_columns))
+                if len(bad_sensor_columns) == 0:
+                    cls.logger.info("No bad sensors")
+                elif bad_sensor_method == 'zero' and len(bad_sensor_columns) > 0:
+                    cls.logger.info("Zeroing %d bad sensor columns: %s" % (len(bad_sensor_columns), str(bad_sensor_columns)))
+                    signal_df.loc[:, bad_sensor_columns] = 0.
+                elif bad_sensor_method == 'ignore':
+                    cls.logger.info("Ignoring bad sensors")
+                else:
+                    raise ValueError("Unknown bad_sensor_method (use 'zero', 'ignore'): " + str(bad_sensor_method))
+        else:
+            channel_df = None
+            if sensor_columns is None:
+                sensor_columns = signal_df.columns.tolist()
+            else:
+                missing_sensors = [s for s in sensor_columns if s not in signal_df.columns.tolist()]
+                if len(missing_sensors) > 0:
+                    signal_df.loc[:, missing_sensors] = 0.
+            #sensor_columns = ecog_df.columns.tolist() if sensor_columns is None else sensor_columns
+            cls.logger.info(f"No 'electrods' key in mat data - using all {len(sensor_columns)} columns")
+            #ch_m = ecog_df.columns.notnull()
+
+        cls.logger.info(f"Selected sensors (n={len(sensor_columns)}): "
+              + (", ".join(map(str, sensor_columns))))
+
+        ######
+        # Audio
+        if 'audio' in mat_d:
+            audio_arr = mat_d['audio'].reshape(-1)
+            ix = pd.TimedeltaIndex(pd.RangeIndex(0, audio_arr.shape[0]) / fs_audio, unit='s')
+            audio_s = pd.Series(audio_arr, index=ix)
+            if verbose:
+                cls.logger.info(f"Audio shape: {audio_s.shape} [{audio_s.index[0], audio_s.index[-1]}]")
+        else:
+            #audio = None
+            audio_s = None
+
+        ####
+        # TESTING AUTO ADJUSTING MASK
+        ret_d = dict(
+            fs_audio=fs_audio, fs_signal=fs_signal,
+            ecog_all=signal_df,
+                     ecog=signal_df.loc[:, sensor_columns],
+                     audio=audio_s,
+                     channel_status=channel_df,
+                     stim=stim_s,
+                     stim_diff=stim_diff_s,
+                     sensor_columns=sensor_columns,
+            bad_sensor_columns=bad_sensor_columns,
+                     #stim_diff=stim_diff_s,
+                     #stim_auto=stim_auto_s,
+                     #stim_auto_diff=stim_auto_diff_s,
+                     #start_times_d=start_time_map,
+                     #stop_times_d=stop_time_map,
+                     word_code_d=word_code_d,
+                     )
+        ret_d['remap'] = {k:k for k in ret_d.keys()}
+        return ret_d
+
+    @classmethod
+    def make_filename(cls, patient, session, trial, location):
+        raise NotImplementedError()
+
+    @classmethod
+    def get_data_path(cls, patient, session, trial, location,
+                      subset=None, base_path=None):
+        fname = cls.make_filename(patient, session, trial, location)
+        base_path = cls.default_base_path if base_path is None else base_path
+        subset = cls.default_data_subset if subset is None else subset
+        p = os.path.join(base_path, location, subset, fname)
+        return p
+
+    #######
+    # Entry point to get data
+    @classmethod
+    def load_data(cls, location=None, patient=None, session=None, trial=None, base_path=None,
+                  parse_mat_data=True, sensor_columns=None, bad_sensor_method='zero',
+                  subset=None, verbose=True):
+
+        location = cls.default_location if location is None else location
+        patient = cls.default_patient if patient is None else patient
+        #location = 1 if location is None else location
+        session = cls.default_session if session is None else session
+        trial = cls.default_trial if trial is None else trial
+        sensor_columns = cls.default_sensor_columns if sensor_columns is None else sensor_columns
+
+        if verbose:
+            cls.logger.info(f"---{patient}-{session}-{trial}-{location}---")
+            if subset is not None:
+                cls.logger.info("\t->Using Subset: " + str(subset))
+
+        p = cls.get_data_path(patient, session, trial, location, base_path=base_path, subset=subset)
+        mat_d = cls.load_mat_from_path(p)
+        if parse_mat_data:
+            return cls.parse_mat_arr_dict(mat_d, sensor_columns=sensor_columns,
+                                          bad_sensor_method=bad_sensor_method,
+                                          verbose=verbose)
+
+        return mat_d
+
+
+@attr.s
+class HarvardSentences(BaseASPEN):
+    """
+    """
+    logger = utils.get_logger('ecog.' + __name__)
+
+    env_key = 'HARVARDSENTENCES_DATASET'
+    default_hvs_path = path.join(pkg_data_dir, 'HarvardSentences')
+    default_base_path = environ.get(env_key,
+                                    path_map.get(socket.gethostname(),
+                                                 default_hvs_path))
+    #mat_d_signal_key = 'ECOG_signal'
+    mat_d_signal_key = 'ECOG_signal' #sEEG_signal
+    all_patient_maps = dict(UCSD={
+         4: [('UCSD', 1, 1)],
+         5: [('UCSD', 1, 1)],
+        10: [('UCSD', 1, 1)],
+        18: [('UCSD', 1, 1)],
+        19: [('UCSD', 1, 1)],
+        22: [('UCSD', 1, 1)],
+        28: [('UCSD', 1, 1)],
+    })
+    # UCSD04_Task_1.mat  UCSD10_Task_1.mat  UCSD19_Task_1.mat  UCSD28_Task_1.mat
+    # UCSD05_Task_1.mat  UCSD18_Task_1.mat  UCSD22_Task_1.mat
+#    window_description = attr.make_class("HarvardSentenceWindowDesc",
+#                                         dict(  # dataset_key=attr.ib(),
+#                                             lab_name=attr.ib(), sid=attr.ib(), tid=attr.ib(),
+#                                             ecog_i=attr.ib(),
+#                                             ecog_width=attr.ib(),
+#                                             wav_i=attr.ib(),
+#                                             wav_width=attr.ib(),
+#                                             label_id=attr.ib(),
+#                                         ))
+
+#    @classmethod
+#    def get_data_paths(cls, base_path=None, lab_name=None):
+#        base_path = cls.default_base_path if base_path is None else base_path
+#        lab_name = '*' if lab_name is None else lab_name
+#        return glob(os.path.join(base_path, lab_name, 'Data', '*.mat'))
+
 
     @classmethod
     def parse_meta_fname(cls, fname):
@@ -363,7 +687,7 @@ class HarvardSentences(BaseDataset):
 
 
 @attr.s
-class NorthwesternWords(BaseDataset):
+class NorthwesternWords(BaseASPEN):
     """
     Northwestern-style data: one spoken word per cue, aligned brain and audio data
 
@@ -458,82 +782,9 @@ class NorthwesternWords(BaseDataset):
                               for p, t_l in p_d.items()
                                for i, t in enumerate(t_l)}
 
-    # TODO: named tuple
-    #patient_tuples = attr.ib((
-    #                          ('Mayo Clinic', 19, 1, 1),
-    #                          ('Mayo Clinic', 19, 1, 2),
-    #                          ('Mayo Clinic', 19, 1, 3),
-    #))
-    base_path = attr.ib(None)
-
-
-    patient_tuples = attr.ib(tuple(mc_patient_set_map[19]))
-
-    # num_mfcc = 13
-    #signal_key = 'signal'
-    sensor_columns = attr.ib(None)
-    default_sensor_columns = list(range(64))
-    default_audio_sample_rate = 48000
-    default_ecog_sample_rate = 1200
-    #ecog_pass_band = attr.ib((70, 250))
-
-    # In terms of audio samples
-    # fixed_window_size = attr.ib(audio_sample_rate * 1)
-    # fixed_window_step = attr.ib(int(audio_sample_rate * .01))
-    #ecog_window_size = attr.ib(300)
-    num_mfcc = attr.ib(13)
-    verbose = attr.ib(True)
-
-    selected_word_indices = attr.ib(None)
-
-    #stim_indexing_source = attr.ib('stim_diff')
-    transform = attr.ib(None)
-    target_transform = attr.ib(None)
-
-    power_threshold = attr.ib(0.007)
-    power_q = attr.ib(0.70)
-    pre_processing_pipeline = attr.ib(None)
-    # If using one source of data, with different `selected_word_indices`, then
-    # passing the first NWW dataset to all subsequent ones built on the same source data
-    # can save on memory and reading+parsing time
-    data_from: 'NorthwesternWords' = attr.ib(None)
-
-    default_data_subset = 'Data'
-    data_subset = attr.ib('Data')
-
-
-    ###
+    # ##
     # Add new processing pipelines for NWW here
-    def make_pipeline_map(self, default='minimal'):
-        """
-        Pipeline parameters sometimes depend on the configuration of the dataset class,
-        so for now it is bound method (not classmethod or staticmethod).
-        """
 
-        self.sample_ixer = feature_processing.ChangSampleIndicesFromStim()
-
-        p_map = {
-            'threshold':
-                (feature_processing.SubsampleECOG()
-                 >> feature_processing.PowerThreshold(window_samples=48000 // 4)
-                 >> feature_processing.ChangSampleIndicesFromStim(stim_speaking_offset=pd.Timedelta(-0.25, 's'),
-                                                                  stim_silence_offset=pd.Timedelta(1.5, 's'))),
-            'threshold2': (feature_processing.SubsampleECOG()
-                 >> feature_processing.PowerThreshold(window_samples=48000 // 4)
-                 >> feature_processing.SampleIndicesFromStimV2()),
-            'quantile':
-                (
-                 feature_processing.SubsampleECOG() >>
-                 feature_processing.WordStopStartTimeMap() >>
-                 feature_processing.PowerQuantile(q=self.power_q) >>
-                 self.sample_ixer),
-            'minimal':
-
-                feature_processing.SubsampleECOG() >>
-                feature_processing.WordStopStartTimeMap() >> self.sample_ixer
-        }
-        p_map['default'] = p_map[default]
-        return p_map
 
     def __attrs_post_init__(self):
         # Build pipelines based on this NWW dataset state
@@ -567,7 +818,7 @@ class NorthwesternWords(BaseDataset):
                                                             #sensor_columns=self.sensor_columns,
                                                            # IMPORTANT: Don't parse data yet
                                                             parse_mat_data=False,
-                                                           subset=self.data_subset,
+                                                            subset=self.data_subset,
                                                             verbose=self.verbose)
                               for l_p_s_t_tuple in data_iter}
 
@@ -853,222 +1104,6 @@ class NorthwesternWords(BaseDataset):
         else:
             raise ValueError("Don't know location " + location)
 
-    @classmethod
-    def get_data_path(cls, patient, session, trial, location,
-                      subset=None, base_path=None):
-        fname = cls.make_filename(patient, session, trial, location)
-        base_path = cls.default_base_path if base_path is None else base_path
-        subset = cls.default_data_subset if subset is None else subset
-        p = os.path.join(base_path, location, subset, fname)
-        return p
-
-    ######
-    # Conversion of MATLAB data structure to map of pandas data objects
-    @classmethod
-    def parse_mat_arr_dict(cls, mat_d, sensor_columns=None,
-                           zero_repr='<ns>', defaults=None,
-                           bad_sensor_method='zero',
-                           verbose=True) -> dict:
-        """
-        Convert a raw matlab dataset into Python+Pandas with timeseries indices
-
-        Parameters
-
-        mat_d: dict()
-            Dictionary of data returned from scip.io matlab load
-        sensor_columns : list()
-            List of sensor IDs to use
-        zero_repr : string
-            String code for no-speech/class
-        defaults : dict()
-            Values are generally taken from the matlab dataset,
-            followed by this defaults dict, followed by the class
-            static default values
-        verbose : boolean
-            Print extra information
-
-
-        Returns : dict
-            Extracted and wrangled data and configurations
-        """
-        if defaults is None:
-            defaults = dict()
-
-        try:
-            fs_audio = mat_d['fs_audio'][0][0]
-        except KeyError:
-            #fs_audio = cls.audio_sample_rate
-            fs_audio = defaults.get('fs_audio',
-                                    cls.default_audio_sample_rate)
-
-        #assert fs_audio == cls.default_audio_sample_rate
-        cls.logger.info("Audio FS = " + str(fs_audio))
-
-        try:
-            fs_signal = mat_d['fs_signal'][0][0]
-        except KeyError:
-            fs_signal = defaults.get('fs_signal',
-                                     cls.default_ecog_sample_rate)
-
-        stim_arr = mat_d['stimcode'].reshape(-1).astype('int32')
-
-        # Create a dictonary map from index to word string repr
-        # **0 is neutral, word index starts from 1**?
-        word_code_d = {i + 1: w[0] for i, w in enumerate(mat_d['wordcode'].reshape(-1))}
-        # Code 0 as no-sound/signal/speech
-        word_code_d[0] = zero_repr
-
-        ########
-        # Check for repeated words by parsing to Series
-        word_code_s = pd.Series(word_code_d, name='word')
-        word_code_s.index.name = 'word_index'
-
-        w_vc = word_code_s.value_counts()
-        dup_words = w_vc[w_vc > 1].index.tolist()
-
-        if verbose:
-            cls.logger.info("Duplicate words (n=%d): %s"
-                  % (len(dup_words), ", ".join(dup_words)))
-
-        # Re-write duplicate words with index so they never collide
-        for dw in dup_words:
-            for w_ix in word_code_s[word_code_s == dw].index.tolist():
-                new_wrd = dw + ("-%d" % w_ix)
-                word_code_d[w_ix] = new_wrd
-                # if verbose: print(new_wrd)
-
-        # Recreate the word code series to include the new words
-        word_code_s = pd.Series(word_code_d, name='word')
-        word_code_s.index.name = 'word_index'
-
-        ######
-        # Stim parse
-        ix = pd.TimedeltaIndex(pd.RangeIndex(0, stim_arr.shape[0]) / fs_signal, unit='s')
-        stim_s = pd.Series(stim_arr, index=ix)
-        ecog_df = pd.DataFrame(mat_d[cls.mat_d_signal_key], index=ix)
-        if verbose:
-            cls.logger.info(f"{cls.mat_d_signal_key} shape: {ecog_df.shape} [{ecog_df.index[0], ecog_df.index[-1]}]")
-
-        ######
-        # Stim event codes and txt
-        # 0 is neutral, so running difference will identify the onsets
-        stim_diff_s = stim_s.diff().fillna(0).astype(int)
-
-        #####
-        # Channels/sensors status
-        # TODO: What are appropriate names for these indicators
-        bad_sensor_columns = None
-        if 'electrodes' in mat_d:
-            chann_code_cols = ["code_%d" % e for e in range(mat_d['electrodes'].shape[-1])]
-            channel_df = pd.DataFrame(mat_d['electrodes'], columns=chann_code_cols)
-            cls.logger.info("Found electrodes metadata, N trodes = %d" % channel_df.shape[0] )
-
-            #required_sensor_columns = channel_df.index.tolist() if sensor_columns is None else sensor_columns
-            # Mask for good sensors
-            ch_m = (channel_df['code_0'] == 1)
-            all_valid_sensors = ch_m[ch_m].index.tolist()
-
-            # Spec the number of sensors that the ecog array mush have
-            if sensor_columns is None:
-                required_sensor_columns = channel_df.index.tolist()
-            elif sensor_columns == 'valid':
-                sensor_columns = all_valid_sensors
-                required_sensor_columns = sensor_columns
-            else:
-                required_sensor_columns = sensor_columns
-
-                #
-                good_sensor_columns = [c for c in all_valid_sensors if c in required_sensor_columns]
-                bad_sensor_columns = list(set(required_sensor_columns) - set(good_sensor_columns))
-                if len(bad_sensor_columns) == 0:
-                    cls.logger.info("No bad sensors")
-                elif bad_sensor_method == 'zero' and len(bad_sensor_columns) > 0:
-                    cls.logger.info("Zeroing %d bad sensor columns: %s" % (len(bad_sensor_columns), str(bad_sensor_columns)))
-                    ecog_df.loc[:, bad_sensor_columns] = 0.
-                elif bad_sensor_method == 'ignore':
-                    cls.logger.info("Ignoring bad sensors")
-                else:
-                    raise ValueError("Unknown bad_sensor_method (use 'zero', 'ignore'): " + str(bad_sensor_method))
-
-
-        else:
-            channel_df = None
-            if sensor_columns is None:
-                sensor_columns = ecog_df.columns.tolist()
-            else:
-                missing_sensors = [s for s in sensor_columns if s not in ecog_df.columns.tolist()]
-                if len(missing_sensors) > 0:
-                    ecog_df.loc[:, missing_sensors] = 0.
-            #sensor_columns = ecog_df.columns.tolist() if sensor_columns is None else sensor_columns
-            cls.logger.info(f"No 'electrods' key in mat data - using all {len(sensor_columns)} columns")
-            #ch_m = ecog_df.columns.notnull()
-
-        cls.logger.info(f"Selected sensors (n={len(sensor_columns)}): "
-              + (", ".join(map(str, sensor_columns))))
-
-        ######
-        # Audio
-        if 'audio' in mat_d:
-            audio_arr = mat_d['audio'].reshape(-1)
-            ix = pd.TimedeltaIndex(pd.RangeIndex(0, audio_arr.shape[0]) / fs_audio, unit='s')
-            audio_s = pd.Series(audio_arr, index=ix)
-            if verbose:
-                cls.logger.info(f"Audio shape: {audio_s.shape} [{audio_s.index[0], audio_s.index[-1]}]")
-        else:
-            #audio = None
-            audio_s = None
-
-        ####
-        # TESTING AUTO ADJUSTING MASK
-        ret_d = dict(
-            fs_audio=fs_audio, fs_signal=fs_signal,
-            ecog_all=ecog_df,
-                     ecog=ecog_df.loc[:, sensor_columns],
-                     audio=audio_s,
-                     channel_status=channel_df,
-                     stim=stim_s,
-                     stim_diff=stim_diff_s,
-                     sensor_columns=sensor_columns,
-            bad_sensor_columns=bad_sensor_columns,
-                     #stim_diff=stim_diff_s,
-                     #stim_auto=stim_auto_s,
-                     #stim_auto_diff=stim_auto_diff_s,
-                     #start_times_d=start_time_map,
-                     #stop_times_d=stop_time_map,
-                     word_code_d=word_code_d,
-                     )
-        ret_d['remap'] = {k:k for k in ret_d.keys()}
-        return ret_d
-
-    #######
-    # Entry point to get data
-    @classmethod
-    def load_data(cls, location=None, patient=None, session=None, trial=None, base_path=None,
-                  parse_mat_data=True, sensor_columns=None, bad_sensor_method='zero',
-                  subset=None, verbose=True):
-
-        location = 'Mayo Clinic' if location is None else location
-        patient = 19 if patient is None else patient
-        location = 1 if location is None else location
-        session = 1 if session is None else session
-        trial = 1 if trial is None else trial
-        sensor_columns = cls.default_sensor_columns if sensor_columns is None else sensor_columns
-
-        if verbose:
-            cls.logger.info(f"---{patient}-{session}-{trial}-{location}---")
-            if subset is not None:
-                cls.logger.info("\t->Using Subset: " + str(subset))
-
-        p = cls.get_data_path(patient, session, trial, location, base_path=base_path, subset=subset)
-        mat_d = scipy.io.matlab.loadmat(p)
-        if parse_mat_data:
-            return cls.parse_mat_arr_dict(mat_d, sensor_columns=sensor_columns,
-                                          bad_sensor_method=bad_sensor_method,
-                                          verbose=verbose)
-
-        return mat_d
-
-
 
     @classmethod
     def make_tuples_from_sets_str(cls, sets_str):
@@ -1141,7 +1176,7 @@ class ChangNWW(NorthwesternWords):
     #data_subset = 'Preprocessed/Chang1'
     data_subset = 'Preprocessed/Chang3'
     mat_d_signal_key = 'signal'
-    default_ecog_sample_rate = 200
+    default_signal_sample_rate = 200
     patient_tuples = attr.ib(
         (('Mayo Clinic', 19, 1, 2),)
     )
