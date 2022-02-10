@@ -247,10 +247,6 @@ class BaseASPEN(BaseDataset):
     default_audio_sample_rate = 48000
     default_signal_sample_rate = 1200
 
-    mat_d_signal_key = None
-    mat_d_audio_key = 'audio'
-    mat_d_audio_fs_key = 'fs_audio'
-    mat_d_signal_fs_key= 'fs_signal'
     mat_d_keys = dict(
         signal=None,
         signal_fs=None,
@@ -286,6 +282,125 @@ class BaseASPEN(BaseDataset):
     default_patient = None
     default_session = None
     default_trial = None
+
+    def __attrs_post_init__(self):
+        # Build pipelines based on this NWW dataset state
+        self.pipeline_map = self.make_pipeline_map()
+
+        # If nothing passed, use 'default' pipeline
+        if self.pre_processing_pipeline is None:
+            self.logger.info("Default pipeline selected")
+            self.pipeline_f = self.pipeline_map['default']
+        # If string passed, use it to select the pipeline in the map
+        elif isinstance(self.pre_processing_pipeline, str):
+            self.logger.info(f"{self.pre_processing_pipeline} pipeline selected")
+            self.pipeline_f = self.pipeline_map[self.pre_processing_pipeline]
+        # Otherwise, just assume it will work, that a list of tuple(callable, kws) was passed
+        else:
+            self.logger.info(f"{str(self.pre_processing_pipeline)} pipeline passed directly")
+            self.pipeline_f = self.pre_processing_pipeline
+
+        # If no data sharing, then load and parse data from scratch
+        if self.data_from is None:
+            self.logger.info("Loading data directly")
+            # Leave this here for now...
+            #self.mfcc_m = torchaudio.transforms.MFCC(self.default_audio_sample_rate,
+            #                                         self.num_mfcc)
+
+            ## Data loading ##
+            # - Load the data, parsing into pandas data frame/series types
+            # - Only minimal processing into Python objects done here
+            data_iter = tqdm(self.patient_tuples, desc="Loading data")
+            mat_data_maps = {l_p_s_t_tuple: self.load_data(*l_p_s_t_tuple,
+                                                            #sensor_columns=self.sensor_columns,
+                                                           # IMPORTANT: Don't parse data yet
+                                                            parse_mat_data=False,
+                                                            subset=self.data_subset,
+                                                            verbose=self.verbose)
+                              for l_p_s_t_tuple in data_iter}
+
+            ###
+            # Sensor selection logic - based on the patients loaded - which sensors do we use?
+            if self.sensor_columns is None or isinstance(self.sensor_columns, str):
+                good_and_bad_tuple_d = {l_p_s_t_tuple: self.identify_good_and_bad_sensors(mat_d, self.sensor_columns)
+                                            for l_p_s_t_tuple, mat_d in mat_data_maps.items()}
+
+                good_and_bad_tuple_d = {k: (set(gs) if gs else (list(range(mat_data_maps[k][self.mat_d_signal_key].shape[1]))),
+                                            bs)
+                                         for k, (gs, bs) in good_and_bad_tuple_d.items()}
+                #print("GOOD AND BAD SENSORS: " + str(good_and_bad_tuple_d))
+                self.logger.info("GOOD AND BAD SENSORS: " + str(good_and_bad_tuple_d))
+                self.sensor_columns = 'union' if self.sensor_columns is None else self.sensor_columns
+                # UNION: Select all good sensors from all inputs, zeros will be filled for those missing
+                if self.sensor_columns == 'union':
+                    self.selected_columns = sorted(list({_gs for k, (gs, bs) in good_and_bad_tuple_d.items()
+                                                        for _gs in gs}))
+                # INTERSECTION: Select only sensors that are rated good in all inputs
+                elif self.sensor_columns == 'intersection' or self.sensor_columns == 'valid':
+                    s = [set(gs) for k, (gs, bs) in good_and_bad_tuple_d.items()]
+                    self.selected_columns = sorted(list(s[0].intersection(*s[1:])))
+
+                #elif self.sensor_columns == 'all':
+                else:
+                    raise ValueError("Unknown snsor columns argument: " + str(self.sensor_columns))
+                #print("Selected columns with -%s- method: %s"
+                #      % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
+                self.logger.info("Selected columns with -%s- method: %s"
+                                  % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
+            else:
+                self.selected_columns = self.sensor_columns
+            self.sensor_count = len(self.selected_columns)
+
+            # Finish processing the data mapping loaded from the mat data files
+            self.data_maps = {l_p_s_t_tuple: self.parse_mat_arr_dict(mat_d, self.selected_columns)
+                              for l_p_s_t_tuple, mat_d in tqdm(mat_data_maps.items(), desc='Parsing data')}
+            ###-----
+            assert self.sensor_count == len(self.selected_columns)
+            #print(f"Selected {len(self.selected_columns)} sensors")
+            self.logger.info(f"Selected {len(self.selected_columns)} sensors")
+            ###-----
+
+            ## Important processing ##
+            # - Process each subject in data map through pipeline func
+            self.sample_index_maps = dict()
+            for k in self.data_maps.keys():
+                dmap = self.data_maps[k]
+                res_dmap = self.pipeline_f(dmap)
+                self.data_maps[k] = res_dmap
+                self.sample_index_maps[k] = res_dmap['sample_index_map']
+                self.fs_signal = getattr(self, 'fs_signal', res_dmap[self.mat_d_keys['signal_fs']])
+                #self.ecog_window_size = getattr(self, 'ecog_window_size',
+                #                                int(self.fs_signal * self.sample_ixer.window_size.total_seconds()))
+                #self.ecog_window_size = int(self.fs_signal * self.sample_ixer.window_size.total_seconds())
+                self.n_samples_per_window = res_dmap['n_samples_per_window']
+                self.logger.info(f"N samples per window: {self.n_samples_per_window}")
+
+                if self.fs_signal != res_dmap[self.mat_d_keys['signal_fs']]:
+                    raise ValueError("Mismatch fs (%s!=%s) on %s" % (self.fs_signal, res_dmap['fs_signal'], str(k)))
+
+            # Map full description (word label, window index,...trial key elements..}
+            # to the actual pandas index
+            self.flat_index_map = {tuple([wrd_id, ix_i] + list(k_t)): ixes
+                                   for k_t, index_map in self.sample_index_maps.items()
+                                   for wrd_id, ix_list in index_map.items()
+                                   for ix_i, ixes in enumerate(ix_list)}
+
+            # Enumerate all the keys across flat_index_map into one large list for index-style,
+            # has a len() and can be indexed into nicely (via np.ndarray)
+            self.flat_keys = np.array([(k, k[2:])
+                                       for i, k in enumerate(self.flat_index_map.keys())],
+                                      dtype='object')
+
+        else:
+            #print("Warning: using naive shared-referencing across objects - only use when feeling lazy")
+            self.logger.warning("Warning: using naive shared-referencing across objects - only use when feeling lazy")
+            #self.mfcc_m = self.data_from.mfcc_m
+            self.data_maps = self.data_from.data_maps
+            self.sample_index_maps = self.data_from.sample_index_maps
+            self.flat_index_map = self.data_from.flat_index_map
+            self.flat_keys = self.data_from.flat_keys
+
+        self.select(self.selected_word_indices)
 
     def make_pipeline_map(self, default='audio_gate'):
         """
@@ -395,7 +510,7 @@ class BaseASPEN(BaseDataset):
             fs_signal = mat_d[cls.mat_d_keys['signal_fs']][0][0]
         except KeyError:
             fs_signal = defaults.get(cls.mat_d_keys['signal_fs'],
-                                     cls.default_ecog_sample_rate)
+                                     cls.default_signal_sample_rate)
 
         stim_arr = mat_d[cls.mat_d_keys['stimcode']].reshape(-1).astype('int32')
 
@@ -432,9 +547,9 @@ class BaseASPEN(BaseDataset):
         # Stim parse
         ix = pd.TimedeltaIndex(pd.RangeIndex(0, stim_arr.shape[0]) / fs_signal, unit='s')
         stim_s = pd.Series(stim_arr, index=ix)
-        signal_df = pd.DataFrame(mat_d[cls.mat_d_signal_key], index=ix)
-        if verbose:
-            cls.logger.info(f"{cls.mat_d_signal_key} shape: {signal_df.shape} [{signal_df.index[0], signal_df.index[-1]}]")
+        signal_df = pd.DataFrame(mat_d[cls.mat_d_keys['signal']], index=ix)
+        #if verbose:
+        cls.logger.debug(f"{cls.mat_d_keys['signal']} shape: {signal_df.shape} [{signal_df.index[0], signal_df.index[-1]}]")
 
         ######
         # Stim event codes and txt
@@ -445,9 +560,10 @@ class BaseASPEN(BaseDataset):
         # Channels/sensors status
         # TODO: What are appropriate names for these indicators
         bad_sensor_columns = None
-        if 'electrodes' in mat_d:
-            chann_code_cols = ["code_%d" % e for e in range(mat_d['electrodes'].shape[-1])]
-            channel_df = pd.DataFrame(mat_d['electrodes'], columns=chann_code_cols)
+        electrodes = mat_d.get(cls.mat_d_keys['electrodes'])
+        if electrodes is not None:
+            chann_code_cols = ["code_%d" % e for e in range(electrodes.shape[-1])]
+            channel_df = pd.DataFrame(electrodes, columns=chann_code_cols)
             cls.logger.info("Found electrodes metadata, N trodes = %d" % channel_df.shape[0] )
 
             #required_sensor_columns = channel_df.index.tolist() if sensor_columns is None else sensor_columns
@@ -492,15 +608,13 @@ class BaseASPEN(BaseDataset):
 
         ######
         # Audio
-        if 'audio' in mat_d:
-            audio_arr = mat_d['audio'].reshape(-1)
+        audio_arr = mat_d.get(cls.mat_d_keys['audio'])
+        audio_s = None
+        if audio_arr is not None:
+            audio_arr = audio_arr.reshape(-1)
             ix = pd.TimedeltaIndex(pd.RangeIndex(0, audio_arr.shape[0]) / fs_audio, unit='s')
             audio_s = pd.Series(audio_arr, index=ix)
-            if verbose:
-                cls.logger.info(f"Audio shape: {audio_s.shape} [{audio_s.index[0], audio_s.index[-1]}]")
-        else:
-            #audio = None
-            audio_s = None
+            cls.logger.debug(f"Audio shape: {audio_s.shape} [{audio_s.index[0], audio_s.index[-1]}]")
 
         ####
         # TESTING AUTO ADJUSTING MASK
@@ -577,8 +691,6 @@ class HarvardSentences(BaseASPEN):
     default_base_path = environ.get(env_key,
                                     path_map.get(socket.gethostname(),
                                                  default_hvs_path))
-    #mat_d_signal_key = 'ECOG_signal'
-    mat_d_signal_key = 'ECOG_signal' #sEEG_signal
     all_patient_maps = dict(UCSD={
          4: [('UCSD', 1, 1)],
          5: [('UCSD', 1, 1)],
@@ -588,24 +700,6 @@ class HarvardSentences(BaseASPEN):
         22: [('UCSD', 1, 1)],
         28: [('UCSD', 1, 1)],
     })
-    # UCSD04_Task_1.mat  UCSD10_Task_1.mat  UCSD19_Task_1.mat  UCSD28_Task_1.mat
-    # UCSD05_Task_1.mat  UCSD18_Task_1.mat  UCSD22_Task_1.mat
-#    window_description = attr.make_class("HarvardSentenceWindowDesc",
-#                                         dict(  # dataset_key=attr.ib(),
-#                                             lab_name=attr.ib(), sid=attr.ib(), tid=attr.ib(),
-#                                             ecog_i=attr.ib(),
-#                                             ecog_width=attr.ib(),
-#                                             wav_i=attr.ib(),
-#                                             wav_width=attr.ib(),
-#                                             label_id=attr.ib(),
-#                                         ))
-
-#    @classmethod
-#    def get_data_paths(cls, base_path=None, lab_name=None):
-#        base_path = cls.default_base_path if base_path is None else base_path
-#        lab_name = '*' if lab_name is None else lab_name
-#        return glob(os.path.join(base_path, lab_name, 'Data', '*.mat'))
-
 
     @classmethod
     def parse_meta_fname(cls, fname):
@@ -694,7 +788,6 @@ class NorthwesternWords(BaseASPEN):
     This class can load multiple trails as once - ensuring correct windowing, but allowing
     for torch data sampling and other support.
     """
-    #logger = logging.getLogger('ecog.' + __name__)
     logger = utils.get_logger('ecog.' + __name__)
 
     env_key = 'NORTHWESTERNWORDS_DATASET'
@@ -704,8 +797,15 @@ class NorthwesternWords(BaseASPEN):
                                                            #'3-Vetted Datasets',
                                                            'SingleWord')
                                                  ))
-    #data_subset = 'Data'# attr.ib('Data')
-    mat_d_signal_key = 'ECOG_signal'
+    mat_d_keys = dict(
+        signal='ECOG_signal',
+        signal_fs='fs_signal',
+        audio='audio',
+        audio_fs='fs_audio',
+        stimcode='stimcode',
+        electrodes='electrodes',
+        wordcode='wordcode',
+    )
 
     mc_patient_set_map = {
         19: [('MayoClinic', 19, 1, 1),
@@ -781,125 +881,6 @@ class NorthwesternWords(BaseASPEN):
                              for l, p_d in all_patient_maps.items()
                               for p, t_l in p_d.items()
                                for i, t in enumerate(t_l)}
-
-    # ##
-    # Add new processing pipelines for NWW here
-
-
-    def __attrs_post_init__(self):
-        # Build pipelines based on this NWW dataset state
-        self.pipeline_map = self.make_pipeline_map()
-
-        # If nothing passed, use 'default' pipeline
-        if self.pre_processing_pipeline is None:
-            self.logger.info("Default pipeline selected")
-            self.pipeline_f = self.pipeline_map['default']
-        # If string passed, use it to select the pipeline in the map
-        elif isinstance(self.pre_processing_pipeline, str):
-            self.logger.info(f"{self.pre_processing_pipeline} pipeline selected")
-            self.pipeline_f = self.pipeline_map[self.pre_processing_pipeline]
-        # Otherwise, just assume it will work, that a list of tuple(callable, kws) was passed
-        else:
-            self.logger.info(f"{str(self.pre_processing_pipeline)} pipeline passed directly")
-            self.pipeline_f = self.pre_processing_pipeline
-
-        # If no data sharing, then load and parse data from scratch
-        if self.data_from is None:
-            self.logger.info("Loading data directly")
-            # Leave this here for now...
-            #self.mfcc_m = torchaudio.transforms.MFCC(self.default_audio_sample_rate,
-            #                                         self.num_mfcc)
-
-            ## Data loading ##
-            # - Load the data, parsing into pandas data frame/series types
-            # - Only minimal processing into Python objects done here
-            data_iter = tqdm(self.patient_tuples, desc="Loading data")
-            mat_data_maps = {l_p_s_t_tuple: self.load_data(*l_p_s_t_tuple,
-                                                            #sensor_columns=self.sensor_columns,
-                                                           # IMPORTANT: Don't parse data yet
-                                                            parse_mat_data=False,
-                                                            subset=self.data_subset,
-                                                            verbose=self.verbose)
-                              for l_p_s_t_tuple in data_iter}
-
-            ###
-            # Sensor selection logic - based on the patients loaded - which sensors do we use?
-            if self.sensor_columns is None or isinstance(self.sensor_columns, str):
-                good_and_bad_tuple_d = {l_p_s_t_tuple: self.identify_good_and_bad_sensors(mat_d, self.sensor_columns)
-                                            for l_p_s_t_tuple, mat_d in mat_data_maps.items()}
-
-                good_and_bad_tuple_d = {k: (set(gs) if gs else (list(range(mat_data_maps[k][self.mat_d_signal_key].shape[1]))),
-                                            bs)
-                                         for k, (gs, bs) in good_and_bad_tuple_d.items()}
-                #print("GOOD AND BAD SENSORS: " + str(good_and_bad_tuple_d))
-                self.logger.info("GOOD AND BAD SENSORS: " + str(good_and_bad_tuple_d))
-                self.sensor_columns = 'union' if self.sensor_columns is None else self.sensor_columns
-                # UNION: Select all good sensors from all inputs, zeros will be filled for those missing
-                if self.sensor_columns == 'union':
-                    self.selected_columns = sorted(list({_gs for k, (gs, bs) in good_and_bad_tuple_d.items()
-                                                        for _gs in gs}))
-                # INTERSECTION: Select only sensors that are rated good in all inputs
-                elif self.sensor_columns == 'intersection' or self.sensor_columns == 'valid':
-                    s = [set(gs) for k, (gs, bs) in good_and_bad_tuple_d.items()]
-                    self.selected_columns = sorted(list(s[0].intersection(*s[1:])))
-
-                #elif self.sensor_columns == 'all':
-                else:
-                    raise ValueError("Unknown snsor columns argument: " + str(self.sensor_columns))
-                #print("Selected columns with -%s- method: %s"
-                #      % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
-                self.logger.info("Selected columns with -%s- method: %s"
-                                  % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
-            else:
-                self.selected_columns = self.sensor_columns
-            self.sensor_count = len(self.selected_columns)
-
-            # Finish processing the data mapping loaded from the mat data files
-            self.data_maps = {l_p_s_t_tuple: self.parse_mat_arr_dict(mat_d, self.selected_columns)
-                              for l_p_s_t_tuple, mat_d in tqdm(mat_data_maps.items(), desc='Parsing data')}
-            ###-----
-            assert self.sensor_count == len(self.selected_columns)
-            #print(f"Selected {len(self.selected_columns)} sensors")
-            self.logger.info(f"Selected {len(self.selected_columns)} sensors")
-            ###-----
-
-            ## Important processing ##
-            # - Process each subject in data map through pipeline func
-            self.sample_index_maps = dict()
-            for k in self.data_maps.keys():
-                dmap = self.data_maps[k]
-                res_dmap = self.pipeline_f(dmap)
-                self.data_maps[k] = res_dmap
-                self.sample_index_maps[k] = res_dmap['sample_index_map']
-                self.fs_signal = getattr(self, 'fs_signal', res_dmap['fs_signal'])
-                self.ecog_window_size = getattr(self, 'ecog_window_size',
-                                                int(self.fs_signal * self.sample_ixer.window_size.total_seconds()))
-                if self.fs_signal != res_dmap['fs_signal']:
-                    raise ValueError("Mismatch fs (%s!=%s) on %s" % (self.fs_signal, res_dmap['fs_signal'], str(k)))
-
-            # Map full description (word label, window index,...trial key elements..}
-            # to the actual pandas index
-            self.flat_index_map = {tuple([wrd_id, ix_i] + list(k_t)): ixes
-                                   for k_t, index_map in self.sample_index_maps.items()
-                                   for wrd_id, ix_list in index_map.items()
-                                   for ix_i, ixes in enumerate(ix_list)}
-
-            # Enumerate all the keys across flat_index_map into one large list for index-style,
-            # has a len() and can be indexed into nicely (via np.ndarray)
-            self.flat_keys = np.array([(k, k[2:])
-                                       for i, k in enumerate(self.flat_index_map.keys())],
-                                      dtype='object')
-
-        else:
-            #print("Warning: using naive shared-referencing across objects - only use when feeling lazy")
-            self.logger.warning("Warning: using naive shared-referencing across objects - only use when feeling lazy")
-            #self.mfcc_m = self.data_from.mfcc_m
-            self.data_maps = self.data_from.data_maps
-            self.sample_index_maps = self.data_from.sample_index_maps
-            self.flat_index_map = self.data_from.flat_index_map
-            self.flat_keys = self.data_from.flat_keys
-
-        self.select(self.selected_word_indices)
 
     def __len__(self):
         return len(self.selected_flat_keys)
@@ -1104,7 +1085,6 @@ class NorthwesternWords(BaseASPEN):
         else:
             raise ValueError("Don't know location " + location)
 
-
     @classmethod
     def make_tuples_from_sets_str(cls, sets_str):
         """
@@ -1180,11 +1160,6 @@ class ChangNWW(NorthwesternWords):
     patient_tuples = attr.ib(
         (('Mayo Clinic', 19, 1, 2),)
     )
-    #ecog_window_size = attr.ib(100)
-    #ecog_window_shift_sec = pd.Timedelta(0.75, 's')
-    #ecog_window_step_sec = attr.ib(0.01, factory=lambda s: pd.Timedelta(s, 's'))
-    #ecog_window_step_sec = pd.Timedelta(0.01, 's')
-    #ecog_window_n = attr.ib(60)
 
     # ecog samples
     ecog_window_size = attr.ib(100)
