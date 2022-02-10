@@ -794,7 +794,6 @@ class NorthwesternWords(BaseASPEN):
     default_base_path = environ.get(env_key,
                                     path_map.get(socket.gethostname(),
                                                  path.join(pkg_data_dir,
-                                                           #'3-Vetted Datasets',
                                                            'SingleWord')
                                                  ))
     mat_d_keys = dict(
@@ -1040,41 +1039,6 @@ class NorthwesternWords(BaseASPEN):
         fig.tight_layout()
 
         return axs
-
-    @classmethod
-    def make_sample_object(cls, ix, text_label, ecog_df,
-                           speech_df, #max_ecog_samples,
-                           ecog_transform=None,
-                           fields=('ecog_arr', 'text_arr'),
-                           mfcc_f=None):
-
-        kws = dict()
-        # TODO: Reindexing may cause problems here - need tolerance param?
-        # kws['ecog'] = ecog_df.reindex(ix).dropna()
-        if 'ecog_arr' in fields:
-            #kws['ecog'] = ecog_df.loc[ix.min() - cls.ecog_window_shift_sec:].iloc[:max_ecog_samples]
-            kws['ecog'] = ecog_df.loc[ix ]
-            # Transpose to keep time as last index for torch
-            np_ecog_arr = kws['ecog'].values.T
-            if ecog_transform is not None:
-                #print("Apply transform to shape of " + str(np_ecog_arr.shape))
-                np_ecog_arr = ecog_transform(np_ecog_arr)
-            kws['ecog_arr'] = torch.from_numpy(np_ecog_arr).float()  # / 10.
-        # Can't do this for non-contihous label regions
-        # ecog=nww.ecog_df.loc[ixes.min(): ixes.max()],
-        # Word index is base on wave file, so just reindex
-
-        if 'speech_arr' in fields:
-            kws['speech'] = speech_df.reindex(ix)
-            kws['speech_arr'] = torch.from_numpy(kws['speech'].values).float()
-
-        if 'text_arr' in fields:
-            kws['text'] = '<silence>' if text_label <= 0 else '<speech>'
-            kws['text_arr'] = torch.Tensor([0] if text_label <= 0 else [1])
-            # kws['test'] = text_enc_f()
-            #kws['text_arr'] = torch.Tensor({'<silence>': [0], '<speech>': [1]}.get(kws['text']))
-
-        return kws
 
     #######
     ## Path handling
