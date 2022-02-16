@@ -255,6 +255,36 @@ class PowerThreshold(DictTrf):
         return updates
 
 
+class StimFromStartStopWordTimes(DictTrf):
+
+    def process(self, data_map):
+        word_df = pd.DataFrame(data_map['start_stop_word_ms'],
+                               columns=['start_t', 'stop_t', 'word'])
+
+        stim = data_map['stim']
+
+        listening_stim_s = stim[stim.lt(51) & stim.gt(0)]
+
+        word_df['start_t'] = word_df.start_t.astype(float).apply(lambda v: pd.Timedelta(v, 's'))
+        word_df['stop_t'] = word_df.stop_t.astype(float).apply(lambda v: pd.Timedelta(v, 's'))
+
+        sent_code_ixes = word_df.start_t.apply(lambda v: listening_stim_s.index.get_loc(v, method='nearest'))
+        start_ixes = word_df.start_t.apply(lambda v: stim.index.get_loc(v, method='nearest'))
+
+        word_df['stim_start_t'] = stim.index[start_ixes]
+
+        word_df['stim_sentcode'] = listening_stim_s.iloc[sent_code_ixes].values
+        word_df['stim_sentcode_t'] = stim.index[sent_code_ixes]
+
+        word_df = word_df.set_index('stim_start_t').join(stim)
+
+        sent_df = pd.concat([word_df.groupby('stim_sentcode').start_t.min(),
+                             word_df.groupby('stim_sentcode').stop_t.max()], axis=1)
+
+        sent_df['length'] = sent_df.diff(axis=1).stop_t.rename('length')
+        # sent_df = sent_df.join(sent_df.diff(axis=1).stop_t.rename('length'))
+
+
 @attr.s
 @with_logger
 class WindowSampleIndicesFromIndex(DictTrf):
