@@ -391,7 +391,7 @@ class BaseASPEN(BaseDataset):
             self.logger.info(f"Selected {len(self.selected_columns)} sensors")
             ###-----
 
-            self.sensor_selection_trf = skl_feature_processing.ApplySensorSelection(selection=self.selected_columns)
+            self.sensor_selection_trf = pipeline.ApplySensorSelection(selection=self.selected_columns)
             self.data_maps = {l_p_s_t_tuple: self.sensor_selection_trf.transform(mat_d)
                               for l_p_s_t_tuple, mat_d in tqdm(self.data_maps.items(),
                                                                desc='Applying sensor selection')}
@@ -416,24 +416,24 @@ class BaseASPEN(BaseDataset):
 
         p_map = {
             'audio_gate': Pipeline([
-                ('parse_signal', skl_feature_processing.ParseTimeSeriesArrToFrame(self.mat_d_keys['signal'],
+                ('parse_signal', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['signal'],
                                                                                  self.mat_d_keys['signal_fs'],
                                                                                  1200, output_key='signal')),
-                ('parse_audio', skl_feature_processing.ParseTimeSeriesArrToFrame(self.mat_d_keys['audio'],
+                ('parse_audio', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['audio'],
                                                                                   self.mat_d_keys['audio_fs'],
                                                                                   48000, reshape=-1)),
-                ('parse_stim', skl_feature_processing.ParseTimeSeriesArrToFrame(self.mat_d_keys['stimcode'],
+                ('parse_stim', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['stimcode'],
                                                                                  self.mat_d_keys['signal_fs'],
                                                                                  1200, reshape=-1, output_key='stim')),
-                ('sensor_selection', skl_feature_processing.IdentifyGoodAndBadSensors(sensor_selection=self.sensor_columns)),
-                ('subsample', skl_feature_processing.SubsampleSignal()),
-                ('Threshold', skl_feature_processing.PowerThreshold(speaking_window_samples=48000 // 16,
+                ('sensor_selection', pipeline.IdentifyGoodAndBadSensors(sensor_selection=self.sensor_columns)),
+                ('subsample', pipeline.SubsampleSignal()),
+                ('Threshold', pipeline.PowerThreshold(speaking_window_samples=48000 // 16,
                                                                     silence_window_samples=int(48000 * 1.5),
                                                                     speaking_quantile_threshold=0.9,
                                                                     #silence_threshold=0.001,
                                                                     #silGence_quantile_threshold=0.05,
                                                                     silence_n_smallest=5000)),
-                ('speaking_indices', skl_feature_processing.WindowSampleIndicesFromStim('stim_pwrt',
+                ('speaking_indices', pipeline.WindowSampleIndicesFromStim('stim_pwrt',
                                                                                     target_onset_shift=pd.Timedelta(-.5, 's'),
                                                                                     # input are centers, and output is a window of .5 sec
                                                                                     # so to center it, move the point (center) back .25 secods
@@ -443,7 +443,7 @@ class BaseASPEN(BaseDataset):
                                                                                     )
                  ),
 
-                ('silence_indices', skl_feature_processing.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
+                ('silence_indices', pipeline.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
                                                                                     # Center the extracted 0.5 second window
                                                                                     index_shift=pd.Timedelta(-0.25, 's'),
                                                                                     stim_value_remap=0
