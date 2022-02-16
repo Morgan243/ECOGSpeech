@@ -254,8 +254,10 @@ class PowerThreshold(DictTrf):
                        rolling_audio_pwr=rolling_pwr)
         return updates
 
-
+@attr.s
+@with_logger
 class StimFromStartStopWordTimes(DictTrf):
+    stim_speaking_value = attr.ib(51)
 
     def process(self, data_map):
         word_df = pd.DataFrame(data_map['start_stop_word_ms'],
@@ -263,26 +265,33 @@ class StimFromStartStopWordTimes(DictTrf):
 
         stim = data_map['stim']
 
-        listening_stim_s = stim[stim.lt(51) & stim.gt(0)]
+        speaking_stim_s = stim[stim.lt(self.stim_speaking_value) & stim.gt(0)]
 
+        # convert to time in secodes
         word_df['start_t'] = word_df.start_t.astype(float).apply(lambda v: pd.Timedelta(v, 's'))
         word_df['stop_t'] = word_df.stop_t.astype(float).apply(lambda v: pd.Timedelta(v, 's'))
 
-        sent_code_ixes = word_df.start_t.apply(lambda v: listening_stim_s.index.get_loc(v, method='nearest'))
+        # Get the  index nearest to the words start time from the listening index
+        sent_code_ixes = word_df.start_t.apply(lambda v: speaking_stim_s.index.get_loc(v, method='nearest'))
+        # Get the nearest to the words start time for the stim values
         start_ixes = word_df.start_t.apply(lambda v: stim.index.get_loc(v, method='nearest'))
 
         word_df['stim_start_t'] = stim.index[start_ixes]
 
-        word_df['stim_sentcode'] = listening_stim_s.iloc[sent_code_ixes].values
+        word_df['stim_sentcode'] = speaking_stim_s.iloc[sent_code_ixes].values
         word_df['stim_sentcode_t'] = stim.index[sent_code_ixes]
 
         word_df = word_df.set_index('stim_start_t').join(stim)
 
+        # Extract sentence level stim
         sent_df = pd.concat([word_df.groupby('stim_sentcode').start_t.min(),
                              word_df.groupby('stim_sentcode').stop_t.max()], axis=1)
 
         sent_df['length'] = sent_df.diff(axis=1).stop_t.rename('length')
         # sent_df = sent_df.join(sent_df.diff(axis=1).stop_t.rename('length'))
+
+        return dict(word_start_stop_times=word_df,
+                    sent_start_stop_time=sent_df)
 
 
 @attr.s
