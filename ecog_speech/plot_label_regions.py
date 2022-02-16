@@ -1,5 +1,5 @@
 from ecog_speech import datasets, experiments, result_parsing, utils
-from ecog_speech import skl_feature_processing as feature_processing
+from ecog_speech import pipeline as feature_processing
 from ecog_speech import visuals as viz
 import pandas as pd
 import matplotlib

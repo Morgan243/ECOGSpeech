@@ -8,7 +8,7 @@ def get_logger(logname='ecog', console_level=logging.DEBUG, file_level=logging.D
                format_string='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                output_file=None):
     if logging.getLogger(logname).hasHandlers():
-        logging.getLogger(logname)
+        return logging.getLogger(logname)
     #logger = < create_my_logger > if not logging.getLogger().hasHandlers() else logging.getLogger()
     # create logger with 'spam_application'
     logger = logging.getLogger(logname)
@@ -30,6 +30,16 @@ def get_logger(logname='ecog', console_level=logging.DEBUG, file_level=logging.D
     # add the handlers to the logger
     logger.addHandler(ch)
     return logger
+
+def with_logger(cls=None, prefix_name=None):
+    def _make_cls(cls):
+        n = __name__ if prefix_name is None else prefix_name
+        cls.logger = get_logger(n + '.' + cls.__name__)
+        return cls
+
+    cls = _make_cls if cls is None else _make_cls(cls)
+
+    return cls
 
 def print_sequential_arch(m, t_x):
     for i in range(0, len(m)):

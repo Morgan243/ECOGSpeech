@@ -7,21 +7,142 @@ import attr
 import logging
 from ecog_speech import utils
 
+with_logger = utils.with_logger(prefix_name=__name__)
+
 
 @attr.s
+@with_logger
 class DictTrf(BaseEstimator, TransformerMixin):
     def transform(self, data_map):
+        in_keys = set(data_map.keys())
         updates = self.process(data_map)
+        out_keys = set(updates.keys())
+        self.logger.info(f"Updated keys: {out_keys}" )
         data_map.update(updates)
         return data_map
 
     def process(self, data_map):
         raise NotImplementedError()
 
+@attr.s
+@with_logger
+class ParseTimeSeriesArrToFrame(DictTrf):
+    array_key = attr.ib()
+    fs_key = attr.ib()
+    default_fs = attr.ib()
+    dtype = attr.ib(None)
+    reshape = attr.ib(None)
+    output_key = attr.ib(None)
+
+    def process(self, data_map):
+        arr_key = self.array_key if self.output_key is None else self.output_key
+        _fs = data_map.get(self.fs_key, self.default_fs)
+
+        if isinstance(_fs, np.ndarray):
+            fs = data_map[self.fs_key].reshape(-1)[0]
+        else:
+            fs = int(_fs)
+
+        self.logger.info(f"{self.array_key} FS = " + str(fs))
+
+        arr = data_map[self.array_key]
+
+        if self.reshape is not None:
+            arr = arr.reshape(self.reshape)
+
+        ix = pd.TimedeltaIndex(pd.RangeIndex(0, arr.shape[0]) / fs, unit='s')
+        if arr.ndim == 1:
+            arr_df = pd.Series(arr, index=ix, dtype=self.dtype, name=arr_key)
+        else:
+            arr_df = pd.DataFrame(arr, index=ix, dtype=self.dtype)
+        self.logger.debug(f"{self.array_key} shape: {arr_df.shape} [{arr_df.index[0], arr_df.index[-1]}]")
+
+
+        return {self.fs_key:fs, arr_key: arr_df}
+
 
 @attr.s
+@with_logger
+class IdentifyGoodAndBadSensors(DictTrf):
+    electrode_qual_key = attr.ib('electrodes')
+    on_missing = attr.ib('ignore')
+    sensor_selection = attr.ib(None)
+    good_electrode_ind_column = attr.ib(0)
+
+    def process(self, data_map):
+        k = self.electrode_qual_key
+        if k not in data_map:
+            msg = f"Electrodes with key {self.electrode_qual_key} not found among {list(data_map.keys())}"
+            if self.on_missing == 'ignore':
+                self.logger.warning(msg)
+                return dict(good_sensor_columns=None, bad_sensor_columns=None)
+            else:
+                raise KeyError("ERROR: " + msg)
+
+        chann_code_cols = ["code_%d" % e for e in range(data_map[k].shape[-1])]
+        channel_df = pd.DataFrame(data_map['electrodes'], columns=chann_code_cols)
+        self.logger.info("Found N electrodes = %d" % channel_df.shape[0])
+
+        # required_sensor_columns = channel_df.index.tolist() if sensor_columns is None else sensor_columns
+        # Mask for good sensors
+        ch_m = (channel_df.iloc[:, self.good_electrode_ind_column] == 1)
+        all_valid_sensors = ch_m[ch_m].index.tolist()
+
+        # Spec the number of sensors that the ecog array mush have
+        if self.sensor_selection is None:
+            required_sensor_columns = channel_df.index.tolist()
+        elif self.sensor_selection == 'valid':
+            sensor_columns = all_valid_sensors
+            required_sensor_columns = sensor_columns
+        else:
+            required_sensor_columns = self.sensor_selection
+
+        #
+        good_sensor_columns = [c for c in all_valid_sensors if c in required_sensor_columns]
+        bad_sensor_columns = list(set(required_sensor_columns) - set(good_sensor_columns))
+        return dict(good_sensor_columns=good_sensor_columns, bad_sensor_columns=bad_sensor_columns,
+                    channel_status=channel_df)
+
+
+@attr.s
+@with_logger
+class ApplySensorSelection(DictTrf):
+    selection = attr.ib(None)
+    signal_key = attr.ib('signal')
+    bad_sensor_method = attr.ib('zero')
+
+    def process(self, data_map):
+        signal_df = data_map[self.signal_key]
+
+        if self.selection is None:
+            selected_cols = data_map.get('good_sensor_columns')
+        elif isinstance(self.selection, list):
+            selected_cols = self.selection
+        else:
+            raise ValueError(f"Don't understand selection: {self.selection}")
+
+        if selected_cols is None:
+            selected_cols = signal_df.columns.tolist()
+
+
+        bs_cols = data_map['bad_sensor_columns']
+        sel_signal_df = signal_df.copy()
+        if bs_cols is not None and len(bs_cols) > 0:
+            if self.bad_sensor_method == 'zero':
+                signal_df.loc[:, bs_cols] = 0.
+            elif self.bad_sensor_method == 'ignore':
+                self.logger.warning(f"Ignoring bad sensor columns: {bs_cols}")
+            else:
+                raise KeyError(f"Don't understand bad_sensor_method: {self.bad_sensor_method}")
+
+        return {self.signal_key: sel_signal_df}
+
+
+
+@attr.s
+@with_logger
 class SubsampleSignal(DictTrf):
-    signal_keys = attr.ib(('ecog', 'stim', 'stim_diff'))
+    signal_keys = attr.ib(('signal', 'stim'))
     signal_rate_key = attr.ib('fs_signal')
     rate = attr.ib(2)
 
@@ -32,9 +153,8 @@ class SubsampleSignal(DictTrf):
 
 
 @attr.s
+@with_logger
 class PowerThreshold(DictTrf):
-    logger = utils.get_logger(__name__ + '.PowerThreshold')
-
     speaking_threshold = attr.ib(0.005)
     silence_threshold = attr.ib(0.002)
 
@@ -88,7 +208,7 @@ class PowerThreshold(DictTrf):
                                #.max().reindex(stim_s.index, method='nearest').fillna(0))
 
         if silence_n_smallest is not None:
-            cls.logger.info("Using silence nsmallest")
+            cls.logger.info(f"Using silence nsmallest on {type(silence_rolling_pwr)}")
             silence_n_smallest = int(silence_n_smallest)
             n_smallest = silence_rolling_pwr.nsmallest(silence_n_smallest)
             n_smallest_ix = n_smallest.index
@@ -136,8 +256,8 @@ class PowerThreshold(DictTrf):
 
 
 @attr.s
+@with_logger
 class WindowSampleIndicesFromIndex(DictTrf):
-    logger = utils.get_logger(__name__ + '.WindowSampleIndicesFromIndex')
     stim_key = attr.ib('stim')
     fs_key = attr.ib('fs_signal')
     index_shift = attr.ib(None)
@@ -179,11 +299,12 @@ class WindowSampleIndicesFromIndex(DictTrf):
         if existing_sample_indices_map is not None:
             existing_sample_indices_map.update(sample_indices)
             sample_indices = existing_sample_indices_map
-        return dict(sample_index_map=sample_indices)
+        return dict(sample_index_map=sample_indices, n_samples_per_window=expected_window_samples)
+
 
 @attr.s
+@with_logger
 class WindowSampleIndicesFromStim(DictTrf):
-    logger = utils.get_logger(__name__ + '.WindowSampleIndicesFromStim')
 
     stim_key = attr.ib('stim')
     fs_key = attr.ib('fs_signal')
@@ -230,7 +351,7 @@ class WindowSampleIndicesFromStim(DictTrf):
         # TODO: This will not work for constant stim value (i.e. True/False, 1/0)?
         # TODO: Need to review UCSD data and how to write something that will work for its regions
         s_grp = stim[stim > 0].pipe(lambda _s: _s.groupby(_s))
-        for stim_value, g_s in tqdm(s_grp):
+        for stim_value, g_s in tqdm(s_grp, desc=f"Processing stim regions"):
             start_t = g_s.index.min()
             stop_t = g_s.index.max()
 
@@ -275,12 +396,12 @@ class WindowSampleIndicesFromStim(DictTrf):
         for k, _s in sample_indices.items():
             for i, _ixs in enumerate(_s):
                 if len(_ixs) != expected_window_samples:
-                    cls.logger.info(f"[{k}][{i}] ({len(_ixs)}): {_ixs}")
+                    cls.logger.warning(f"[{k}][{i}] ({len(_ixs)}): {_ixs}")
 
         # Debug code printing the unique lengths of each window for each word code
         #print({k : sorted(list(set(map(len, _s)))) for k, _s in sample_indices.items()})
         if existing_sample_indices_map is not None:
             existing_sample_indices_map.update(sample_indices)
             sample_indices = existing_sample_indices_map
-        return dict(sample_index_map=sample_indices)
+        return dict(sample_index_map=sample_indices, n_samples_per_window=expected_window_samples)
 
