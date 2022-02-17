@@ -5,7 +5,8 @@ import sys
 
 
 def get_logger(logname='ecog', console_level=logging.DEBUG, file_level=logging.DEBUG,
-               format_string='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+               format_string='%(asctime)s - %(name)s.%(funcName)s - %(levelname)s - %(message)s',
+               #format_string='%(asctime)s - %(module)s.%(funcName)s - %(levelname)s - %(message)s',
                output_file=None):
     if logging.getLogger(logname).hasHandlers():
         return logging.getLogger(logname)
@@ -31,6 +32,7 @@ def get_logger(logname='ecog', console_level=logging.DEBUG, file_level=logging.D
     logger.addHandler(ch)
     return logger
 
+
 def with_logger(cls=None, prefix_name=None):
     def _make_cls(cls):
         n = __name__ if prefix_name is None else prefix_name
@@ -40,6 +42,7 @@ def with_logger(cls=None, prefix_name=None):
     cls = _make_cls if cls is None else _make_cls(cls)
 
     return cls
+
 
 def print_sequential_arch(m, t_x):
     for i in range(0, len(m)):
