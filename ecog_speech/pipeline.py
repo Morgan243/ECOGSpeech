@@ -24,6 +24,7 @@ class DictTrf(BaseEstimator, TransformerMixin):
     def process(self, data_map):
         raise NotImplementedError()
 
+
 @attr.s
 @with_logger
 class ParseTimeSeriesArrToFrame(DictTrf):
@@ -138,7 +139,6 @@ class ApplySensorSelection(DictTrf):
         return {self.signal_key: sel_signal_df}
 
 
-
 @attr.s
 @with_logger
 class SubsampleSignal(DictTrf):
@@ -155,6 +155,9 @@ class SubsampleSignal(DictTrf):
 @attr.s
 @with_logger
 class PowerThreshold(DictTrf):
+    stim_key = attr.ib('stim')
+    audio_key = attr.ib('audio')
+
     speaking_threshold = attr.ib(0.005)
     silence_threshold = attr.ib(0.002)
 
@@ -167,7 +170,7 @@ class PowerThreshold(DictTrf):
     speaking_quantile_threshold = attr.ib(None)
 
     def process(self, data_map):
-        return self.power_threshold(data_map['audio'], data_map['stim'],
+        return self.power_threshold(data_map[self.audio_key], data_map[self.stim_key],
                                     speaking_threshold=self.speaking_threshold,
                                     speaking_window_samples=self.speaking_window_samples,
                                     silence_threshold=self.silence_threshold,
@@ -254,6 +257,7 @@ class PowerThreshold(DictTrf):
                        rolling_audio_pwr=rolling_pwr)
         return updates
 
+
 @attr.s
 @with_logger
 class StimFromStartStopWordTimes(DictTrf):
@@ -290,8 +294,33 @@ class StimFromStartStopWordTimes(DictTrf):
         sent_df['length'] = sent_df.diff(axis=1).stop_t.rename('length')
         # sent_df = sent_df.join(sent_df.diff(axis=1).stop_t.rename('length'))
 
+        ix = stim.index
+        sentence_stim = pd.Series(0, index=ix)
+        word_stim = pd.Series(0, index=ix)
+
+        # # #
+        for i, (gname, gdf) in enumerate(word_df.groupby('stim_sentcode')):
+            start_t = gdf.start_t.min()
+            stop_t = gdf.stop_t.max()
+
+            start_i = sentence_stim.index.get_loc(start_t, method='nearest')
+            stop_i = sentence_stim.index.get_loc(stop_t, method='nearest')
+
+            sentence_stim.iloc[start_i: stop_i] = sentence_stim.max() + 1
+
+            is_word_m = gdf.word.str.upper() == gdf.word
+
+            for ii, (_gname, _gdf) in enumerate(gdf[is_word_m].groupby('word')):
+                _start_t = _gdf.start_t.min()
+                _stop_t = _gdf.stop_t.max()
+
+                _start_i = sentence_stim.index.get_loc(_start_t, method='nearest')
+                _stop_i = sentence_stim.index.get_loc(_stop_t, method='nearest')
+                word_stim.iloc[_start_i: _stop_i] = word_stim.max() + 1
+
         return dict(word_start_stop_times=word_df,
-                    sent_start_stop_time=sent_df)
+                    sent_start_stop_time=sent_df,
+                    word_stim=word_stim, sentence_stim=sentence_stim)
 
 
 @attr.s
