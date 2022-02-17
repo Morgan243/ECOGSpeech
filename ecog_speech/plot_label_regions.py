@@ -121,34 +121,38 @@ if __name__ == """__main__""":
     from matplotlib import pyplot as plt
     from sklearn.pipeline import FeatureUnion, Pipeline
     import pathlib
-    psubset = 'MC'
 
-    sk_pl = Pipeline([
-        ('subsample', feature_processing.SubsampleSignal()),
-        ('Threshold', feature_processing.PowerThreshold(speaking_window_samples=48000 // 16,
-                                                        silence_window_samples=int(48000 * 1.5),
-                                                        speaking_quantile_threshold=0.9,
-                                                            #silence_threshold=0.001,
-                                                        #silGence_quantile_threshold=0.05,
-                                                        silence_n_smallest=5000,
-                                                           )),
-        ('speaking_indices', feature_processing.WindowSampleIndicesFromStim('stim_pwrt',
-                                                                            target_onset_shift=pd.Timedelta(-.5, 's'),
-                                                                            # input are centers, and output is a window of .5 sec
-                                                                            # so to center it, move the point (center) back .25 secods
-                                                                            # so that extracted 0.5 sec window saddles the original center
-                                                                            #target_offset_shift=pd.Timedelta(-0.25, 's')
-                                                                            target_offset_shift=pd.Timedelta(-0.5, 's')
-                                                                            )
-         ),
+#    sk_pl = Pipeline([
+#        ('subsample', feature_processing.SubsampleSignal()),
+#        ('Threshold', feature_processing.PowerThreshold(speaking_window_samples=48000 // 16,
+#                                                        silence_window_samples=int(48000 * 1.5),
+#                                                        speaking_quantile_threshold=0.9,
+#                                                            #silence_threshold=0.001,
+#                                                        #silGence_quantile_threshold=0.05,
+#                                                        silence_n_smallest=5000,
+#                                                           )),
+#        ('speaking_indices', feature_processing.WindowSampleIndicesFromStim('stim_pwrt',
+#                                                                            target_onset_shift=pd.Timedelta(-.5, 's'),
+#                                                                            # input are centers, and output is a window of .5 sec
+#                                                                            # so to center it, move the point (center) back .25 secods
+#                                                                            # so that extracted 0.5 sec window saddles the original center
+#                                                                            #target_offset_shift=pd.Timedelta(-0.25, 's')
+#                                                                            target_offset_shift=pd.Timedelta(-0.5, 's')
+#                                                                            )
+#         ),
+#
+#        ('silence_indices', feature_processing.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
+#                                                                            # Center the extracted 0.5 second window
+#                                                                            index_shift=pd.Timedelta(-0.25, 's'),
+#                                                                            stim_value_remap=0
+#                                                                          )),
+#        ('output', 'passthrough')
+#    ])
 
-        ('silence_indices', feature_processing.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
-                                                                            # Center the extracted 0.5 second window
-                                                                            index_shift=pd.Timedelta(-0.25, 's'),
-                                                                            stim_value_remap=0
-                                                                          )),
-        ('output', 'passthrough')
-    ])
+    #psubset = 'MC'
+    #dataset_cls = datasets.NorthwesternWords
+    psubset = 'UCSD'
+    dataset_cls = datasets.HarvardSentences
 
     def run_one(pid, pt, ptuples):
         output_path = f'{psubset}-{pt[1]}-{pt[3]}_label_inspection_plots.pdf'
@@ -156,7 +160,7 @@ if __name__ == """__main__""":
             print("Skipping " + str(output_path))
             return
         print("LOADING NWW")
-        dset = datasets.NorthwesternWords(patient_tuples=[pt], pre_processing_pipeline=sk_pl.transform)
+        dset = dataset_cls(patient_tuples=[pt])#, pre_processing_pipeline=sk_pl.transform)
         print("Getting data map")
         data_map = dset.data_maps[pt]
         # Should only be onw
@@ -180,10 +184,11 @@ if __name__ == """__main__""":
 
 
     from multiprocessing import Pool
-    p = Pool(5)
-    for pid, ptuples in tqdm(datasets.NorthwesternWords.all_patient_maps[psubset].items()):
+    p = Pool(4)
+    for pid, ptuples in tqdm(dataset_cls.all_patient_maps[psubset].items()):
         for pt in ptuples:
             p.apply_async(run_one, kwds=dict(pid=pid, pt=pt, ptuples=ptuples))
+            #run_one(pid=pid, pt=pt, ptuples=ptuples)
 
     p.close()
     p.join()
