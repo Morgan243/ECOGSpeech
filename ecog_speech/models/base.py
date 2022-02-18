@@ -5,6 +5,9 @@ import pandas as pd
 import torch
 from ecog_speech import utils
 import matplotlib
+from ecog_speech.models import kaldi_nn
+
+SincNN = kaldi_nn.SincConv
 
 
 def weights_init(m):
@@ -32,7 +35,6 @@ class ScaleByConstant(torch.nn.Module):
         return input / self.divide_by
 
 
-## Modules
 class Permute(torch.nn.Module):
     def __init__(self, p):
         super(Permute, self).__init__()
@@ -116,10 +118,6 @@ class CogAttn(torch.nn.Module):
         y = torch.cat(attended_out_l, -1).permute(0, 3, 1, 2)
         return y
         # attended_out.shape
-
-
-from ecog_speech.models import kaldi_nn
-SincNN = kaldi_nn.SincConv
 
 
 class MultiChannelSincNN(torch.nn.Module):
@@ -522,8 +520,6 @@ class MultiDim_Conv1D(torch.nn.Module):
         return o
 
 
-
-
 @attr.attrs
 class Trainer:
     model_map = attr.ib()
@@ -542,18 +538,15 @@ class Trainer:
     # how much better the new score has to be (0 means at least equal)
     early_stopping_threshold = attr.ib(0)
 
-
     cv_data_gen = attr.ib(None)
     epochs_trained = attr.ib(0)
     device = attr.ib(torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
 
-    #weights_init_f = attr.ib(Trainer.weights_init)
     weights_init_f = attr.ib(None)
 
     epoch_cb_history = attr.ib(attr.Factory(list), init=False)
     batch_cb_history = attr.ib(attr.Factory(list), init=False)
     model_regularizer = attr.ib(None)
-    
 
     default_optim_cls = torch.optim.Adam
 
@@ -603,7 +596,9 @@ class Trainer:
                           for k, v in m.state_dict().items()])
         return s
 
-    def train(self, n_epochs, epoch_callbacks=None, batch_callbacks=None,
+    def train(self, n_epochs,
+              epoch_callbacks=None,
+              batch_callbacks=None,
               batch_cb_delta=3):
 
         epoch_callbacks = dict() if epoch_callbacks is None else epoch_callbacks
@@ -616,7 +611,6 @@ class Trainer:
         self.batch_cb_history = {k: list() for k in batch_callbacks.keys()}
 
         self.n_samples = len(self.train_data_gen)
-        #train_loss_key = 'loss'
 
         with tqdm(total=n_epochs,
                   desc='Training epoch',
