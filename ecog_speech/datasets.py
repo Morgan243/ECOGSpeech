@@ -232,7 +232,6 @@ class DEAP(BaseDataset):
             dat_map = self.load_all_from_dat(subject_p_map)
             self.save_to_npz(dat_map, self.base_path)
 
-
 @attr.s
 @with_logger
 class BaseASPEN(BaseDataset):
@@ -270,7 +269,9 @@ class BaseASPEN(BaseDataset):
     # If using one source of data, with different `selected_word_indices`, then
     # passing the first NWW dataset to all subsequent ones built on the same source data
     # can save on memory and reading+parsing time
-    data_from: 'NorthwesternWords' = attr.ib(None)
+    data_from: 'BaseASPEN' = attr.ib(None)
+
+    selected_flat_keys = attr.ib(None, init=False)
 
     default_data_subset = 'Data'
     default_location = None
@@ -279,8 +280,10 @@ class BaseASPEN(BaseDataset):
     default_trial = None
 
     def __attrs_post_init__(self):
+        self.logger.debug(f"preparing pipeline")
         # Build pipelines based on this NWW dataset state
         self.pipeline_map = self.make_pipeline_map()
+        self.logger.debug(f"Available pipelines: {list(self.pipeline_map.keys())}")
 
         # If nothing passed, use 'default' pipeline
         if self.pre_processing_pipeline is None:
@@ -288,7 +291,7 @@ class BaseASPEN(BaseDataset):
             self.pipeline_f = self.pipeline_map['default']
         # If string passed, use it to select the pipeline in the map
         elif isinstance(self.pre_processing_pipeline, str):
-            self.logger.info(f"{self.pre_processing_pipeline} pipeline selected")
+            self.logger.info(f"'{self.pre_processing_pipeline}' pipeline selected")
             self.pipeline_f = self.pipeline_map[self.pre_processing_pipeline]
         # Otherwise, just assume it will work, that a callable is passed
         # TODO: Check that pipeline_f is callable
@@ -310,7 +313,7 @@ class BaseASPEN(BaseDataset):
             mat_data_maps = {l_p_s_t_tuple: self.load_data(*l_p_s_t_tuple,
                                                             #sensor_columns=self.sensor_columns,
                                                            # IMPORTANT: Don't parse data yet
-                                                            parse_mat_data=False,
+                                                            #parse_mat_data=False,
                                                             subset=self.data_subset,
                                                             verbose=self.verbose)
                               for l_p_s_t_tuple in data_iter}
@@ -413,18 +416,18 @@ class BaseASPEN(BaseDataset):
         Pipeline parameters sometimes depend on the configuration of the dataset class,
         so for now it is bound method (not classmethod or staticmethod).
         """
-
+        self.logger.debug(f"default pipeline: {default}")
         p_map = {
             'audio_gate': Pipeline([
                 ('parse_signal', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['signal'],
-                                                                                 self.mat_d_keys['signal_fs'],
-                                                                                 1200, output_key='signal')),
+                                                                    self.mat_d_keys['signal_fs'],
+                                                                    default_fs=1200, output_key='signal')),
                 ('parse_audio', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['audio'],
-                                                                                  self.mat_d_keys['audio_fs'],
-                                                                                  48000, reshape=-1)),
+                                                                   self.mat_d_keys['audio_fs'],
+                                                                   default_fs=48000, reshape=-1)),
                 ('parse_stim', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['stimcode'],
-                                                                                 self.mat_d_keys['signal_fs'],
-                                                                                 1200, reshape=-1, output_key='stim')),
+                                                                  self.mat_d_keys['signal_fs'],
+                                                                  default_fs=1200, reshape=-1, output_key='stim')),
                 ('sensor_selection', pipeline.IdentifyGoodAndBadSensors(sensor_selection=self.sensor_columns)),
                 ('subsample', pipeline.SubsampleSignal()),
                 ('Threshold', pipeline.PowerThreshold(speaking_window_samples=48000 // 16,
@@ -456,6 +459,8 @@ class BaseASPEN(BaseDataset):
                 feature_processing.WordStopStartTimeMap() >> feature_processing.ChangSampleIndicesFromStim()
         }
         p_map['default'] = p_map[default]
+
+
         return p_map
 
     def to_eval_replay_dataloader(self, patient_k=None, win_step=1, batch_size=1024, num_workers=4,
@@ -536,12 +541,11 @@ class BaseASPEN(BaseDataset):
         try:
             mat_dat_map = scipy.io.loadmat(p)
         except NotImplementedError as e:
-            #cls.logger.info(f"Couldn't load {p} with scipy (vers > 7.3?) - manually loading as H5PY")
-            cls.logger.info(f"Couldn't load {p} with scipy (vers > 7.3?) - using package 'mat73' to load")
+            msg = f"Couldn't load {os.path.split(p)[-1]} with scipy (vers > 7.3?) - using package 'mat73' to load"
+            cls.logger.info(msg)
+
             import mat73
             mat_dat_map = mat73.loadmat(p)
-            #with h5py.File(p, 'r') as f:
-            #    mat_dat_map = {k: np.array(f[k]) for k in f.keys()}
         return mat_dat_map
 
     @classmethod
@@ -561,27 +565,22 @@ class BaseASPEN(BaseDataset):
     # Entry point to get data
     @classmethod
     def load_data(cls, location=None, patient=None, session=None, trial=None, base_path=None,
-                  parse_mat_data=True, sensor_columns=None, bad_sensor_method='zero',
-                  subset=None, verbose=True):
+                  sensor_columns=None,  subset=None):
 
         location = cls.default_location if location is None else location
         patient = cls.default_patient if patient is None else patient
-        #location = 1 if location is None else location
         session = cls.default_session if session is None else session
         trial = cls.default_trial if trial is None else trial
         sensor_columns = cls.default_sensor_columns if sensor_columns is None else sensor_columns
 
-        if verbose:
-            cls.logger.info(f"---{patient}-{session}-{trial}-{location}---")
-            if subset is not None:
-                cls.logger.info("\t->Using Subset: " + str(subset))
+        cls.logger.info(f"---{patient}-{session}-{trial}-{location}---")
+        cls.logger.info("|--->Using Subset: " + str(subset))
 
         p = cls.get_data_path(patient, session, trial, location, base_path=base_path, subset=subset)
+        cls.logger.debug(f"Path : {p}")
+
         mat_d = cls.load_mat_from_path(p)
-        #if parse_mat_data:
-        #    return cls.parse_mat_arr_dict(mat_d, sensor_columns=sensor_columns,
-        #                                  bad_sensor_method=bad_sensor_method,
-        #                                  verbose=verbose)
+        cls.logger.debug(f"Matlab keys : {list(mat_d.keys())}")
 
         return mat_d
 
@@ -872,6 +871,7 @@ class NorthwesternWords(BaseASPEN):
             ('Northwestern', 6, 1, 9),
         ],
     }
+
     syn_patient_set_map = {
         1: [('Synthetic', 1, 1, 1)],
         2: [('Synthetic', 2, 1, 1)],
@@ -885,6 +885,7 @@ class NorthwesternWords(BaseASPEN):
         8: [('Synthetic', 8, 1, 1),
             ('Synthetic', 8, 1, 2)],
     }
+
     all_patient_maps = dict(MC=mc_patient_set_map,
                             SN=syn_patient_set_map,
                             NW=nw_patient_set_map)
@@ -923,31 +924,8 @@ class ChangNWW(NorthwesternWords):
     pre_processing_pipeline = attr.ib('minimal')
     data_from: 'NorthwesternWords' = attr.ib(None)
 
-    def make_pipeline_map(self, default='quantile'):
-        """
-        Pipeline parameters sometimes depend on the configuration of the dataset class,
-        so for now it is bound method (not classmethod or staticmethod).
-        """
-        #samp_ix = feature_processing.SampleIndicesFromStim(ecog_window_size=self.ecog_window_size,
-        #                                                   ecog_window_n=self.ecog_window_n,
-        #                                                   ecog_window_step_sec=self.ecog_window_step_sec,
-        #                                                   ecog_window_shift_sec=self.ecog_window_shift_sec)
-        self.sample_ixer = feature_processing.ChangSampleIndicesFromStim()
-        self.mfcc = feature_processing.MFCC(self.num_mfcc)
-
-        p_map = {
-            'threshold':
-                (feature_processing.WordStopStartTimeMap() >>
-                 feature_processing.PowerThreshold(threshold=self.power_threshold) >>
-                 self.sample_ixer >> self.mfcc),
-            'quantile':
-                (feature_processing.WordStopStartTimeMap() >>
-                 feature_processing.PowerQuantile(q=self.power_q) >>
-                 self.sample_ixer >> self.mfcc),
-            'minimal': feature_processing.WordStopStartTimeMap() >> self.sample_ixer >> self.mfcc
-        }
-        p_map['default'] = p_map[default]
-        return p_map
+    def make_pipeline_map(self, default='audio_gate'):
+        raise NotImplementedError("ChangNWW with MFC pipeline components not in new skl framework")
 
     @staticmethod
     def get_features(data_map, ix, label, ecog_transform=None, index_loc=False):
@@ -959,24 +937,3 @@ class ChangNWW(NorthwesternWords):
         kws = NorthwesternWords.get_targets(data_map, ix, label, target_transform=target_transform)
         kws['mfcc'] = torch.from_numpy(data_map['mfcc'].loc[ix].values).float()
         return kws
-
-    @classmethod
-    def load_data(cls, location=None, patient=None, session=None, trial=None, base_path=None,
-                  parse_mat_data=True, sensor_columns=None, bad_sensor_method='zero', verbose=True):
-        #kws = dict(location=lcoa
-        #           )
-        kws = locals()
-        print(kws.keys())
-        no_parse_kws = {k: False if k == 'parse_mat_data' else v
-                        for k, v in kws.items()
-                        if k not in ('cls', '__class__')}
-        chang_data = super(ChangNWW, cls).load_data(**no_parse_kws)
-        nww_data = NorthwesternWords.load_data(**no_parse_kws)
-
-        chang_data['audio'] = nww_data['audio']
-
-        if parse_mat_data:
-            return cls.parse_mat_arr_dict(chang_data,
-                                          sensor_columns=cls.default_sensor_columns if sensor_columns is None else sensor_columns,
-                                          verbose=verbose)
-        return chang_data
