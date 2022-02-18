@@ -544,187 +544,6 @@ class BaseASPEN(BaseDataset):
             #    mat_dat_map = {k: np.array(f[k]) for k in f.keys()}
         return mat_dat_map
 
-    # Conversion of MATLAB data structure to map of pandas data objects
-#    @classmethod
-#    def REMOVE_parse_mat_arr_dict(cls, mat_d, sensor_columns=None,
-#                           zero_repr='<ns>', defaults=None,
-#                           bad_sensor_method='zero',
-#                           verbose=True) -> dict:
-#        """
-#        Convert a raw matlab dataset into Python+Pandas with timeseries indices
-#
-#        Parameters
-#
-#        mat_d: dict()
-#            Dictionary of data returned from scip.io matlab load
-#        sensor_columns : list()
-#            List of sensor IDs to use
-#        zero_repr : string
-#            String code for no-speech/class
-#        defaults : dict()
-#            Values are generally taken from the matlab dataset,
-#            followed by this defaults dict, followed by the class
-#            static default values
-#        verbose : boolean
-#            Print extra information
-#
-#
-#        Returns : dict
-#            Extracted and wrangled data and configurations
-#        """
-#        if defaults is None:
-#            defaults = dict()
-#
-#        #try:
-#        #    fs_audio = mat_d[cls.mat_d_keys['audio_fs']][0][0]
-#        #except IndexError:
-#        #    fs_audio = int(mat_d[cls.mat_d_keys['audio_fs']])
-#        #except KeyError:
-#        #    #fs_audio = cls.audio_sample_rate
-#        #    fs_audio = defaults.get(cls.mat_d_keys['audio_fs'],
-#        #                            cls.default_audio_sample_rate)
-#
-#        ##assert fs_audio == cls.default_audio_sample_rate
-#        #cls.logger.info("Audio FS = " + str(fs_audio))
-#
-#        #try:
-#        #    fs_signal = mat_d[cls.mat_d_keys['signal_fs']][0][0]
-#        #except IndexError:
-#        #    fs_signal = int(mat_d[cls.mat_d_keys['signal_fs']])
-#        #except KeyError:
-#        #    fs_signal = defaults.get(cls.mat_d_keys['signal_fs'],
-#        #                             cls.default_signal_sample_rate)
-#
-#        #stim_arr = mat_d[cls.mat_d_keys['stimcode']].reshape(-1).astype('int32')
-#
-#        ## Create a dictonary map from index to word string repr
-#        ## **0 is neutral, word index starts from 1**?
-#        #if cls.mat_d_keys['wordcode'] is not None:
-#        #    word_code_d = {i + 1: w[0] for i, w in enumerate(mat_d[cls.mat_d_keys['wordcode']].reshape(-1))}
-#        ## Code 0 as no-sound/signal/speech
-#        #    word_code_d[0] = zero_repr
-#        #else:
-#        #    word_code_d = None
-#
-#        ########
-#        # Check for repeated words by parsing to Series
-#        #word_code_s = pd.Series(word_code_d, name='word')
-#        #word_code_s.index.name = 'word_index'
-#
-#        #w_vc = word_code_s.value_counts()
-#        #dup_words = w_vc[w_vc > 1].index.tolist()
-#
-#        #if verbose:
-#        #    cls.logger.info("Duplicate words (n=%d): %s"
-#        #          % (len(dup_words), ", ".join(dup_words)))
-#
-#        ## Re-write duplicate words with index so they never collide
-#        #for dw in dup_words:
-#        #    for w_ix in word_code_s[word_code_s == dw].index.tolist():
-#        #        new_wrd = dw + ("-%d" % w_ix)
-#        #        word_code_d[w_ix] = new_wrd
-#        #        # if verbose: print(new_wrd)
-#
-#        ## Recreate the word code series to include the new words
-#        #word_code_s = pd.Series(word_code_d, name='word')
-#        #word_code_s.index.name = 'word_index'
-#
-#        ######
-#        # Stim parse
-#        #ix = pd.TimedeltaIndex(pd.RangeIndex(0, stim_arr.shape[0]) / fs_signal, unit='s')
-#        #stim_s = pd.Series(stim_arr, index=ix)
-#        #signal_df = pd.DataFrame(mat_d[cls.mat_d_keys['signal']], index=ix)
-#        #if verbose:
-#        #cls.logger.debug(f"{cls.mat_d_keys['signal']} shape: {signal_df.shape} [{signal_df.index[0], signal_df.index[-1]}]")
-#
-#        ######
-#        # Stim event codes and txt
-#        # 0 is neutral, so running difference will identify the onsets
-#        #stim_diff_s = stim_s.diff().fillna(0).astype(int)
-#
-#        #####
-#        # Channels/sensors status
-#        # TODO: What are appropriate names for these indicators
-#        bad_sensor_columns = mat_d.get('bad_sensor_columns', list())
-#        #electrodes = mat_d.get(cls.mat_d_keys['electrodes'])
-#        #if electrodes is not None:
-#        #    chann_code_cols = ["code_%d" % e for e in range(electrodes.shape[-1])]
-#        #    channel_df = pd.DataFrame(electrodes, columns=chann_code_cols)
-#        #    cls.logger.info("Found electrodes metadata, N trodes = %d" % channel_df.shape[0] )
-#
-#        #    #required_sensor_columns = channel_df.index.tolist() if sensor_columns is None else sensor_columns
-#        #    # Mask for good sensors
-#        #    ch_m = (channel_df['code_0'] == 1)
-#        #    all_valid_sensors = ch_m[ch_m].index.tolist()
-#
-#        #    # Spec the number of sensors that the ecog array mush have
-#        #    if sensor_columns is None:
-#        #        required_sensor_columns = channel_df.index.tolist()
-#        #    elif sensor_columns == 'valid':
-#        #        sensor_columns = all_valid_sensors
-#        #        required_sensor_columns = sensor_columns
-#        #    else:
-#        #        required_sensor_columns = sensor_columns
-#        #        #
-#        #        good_sensor_columns = [c for c in all_valid_sensors if c in required_sensor_columns]
-#        #        bad_sensor_columns = list(set(required_sensor_columns) - set(good_sensor_columns))
-#        if len(bad_sensor_columns) == 0:
-#            cls.logger.info("No bad sensors")
-#        elif bad_sensor_method == 'zero' and len(bad_sensor_columns) > 0:
-#            cls.logger.info("Zeroing %d bad sensor columns: %s" % (len(bad_sensor_columns), str(bad_sensor_columns)))
-#            mat_d['signal'].loc[:, bad_sensor_columns] = 0.
-#        elif bad_sensor_method == 'ignore':
-#            cls.logger.info("Ignoring bad sensors")
-#        else:
-#            raise ValueError("Unknown bad_sensor_method (use 'zero', 'ignore'): " + str(bad_sensor_method))
-#
-#        else:
-#            channel_df = None
-#            if sensor_columns is None:
-#                sensor_columns = signal_df.columns.tolist()
-#            else:
-#                missing_sensors = [s for s in sensor_columns if s not in signal_df.columns.tolist()]
-#                if len(missing_sensors) > 0:
-#                    signal_df.loc[:, missing_sensors] = 0.
-#            #sensor_columns = ecog_df.columns.tolist() if sensor_columns is None else sensor_columns
-#            cls.logger.info(f"No 'electrods' key in mat data - using all {len(sensor_columns)} columns")
-#            #ch_m = ecog_df.columns.notnull()
-#
-#        cls.logger.info(f"Selected sensors (n={len(sensor_columns)}): "
-#              + (", ".join(map(str, sensor_columns))))
-#
-#        ######
-#        # Audio
-#        audio_arr = mat_d.get(cls.mat_d_keys['audio'])
-#        audio_s = None
-#        if audio_arr is not None:
-#            audio_arr = audio_arr.reshape(-1)
-#            ix = pd.TimedeltaIndex(pd.RangeIndex(0, audio_arr.shape[0]) / fs_audio, unit='s')
-#            audio_s = pd.Series(audio_arr, index=ix)
-#            cls.logger.debug(f"Audio shape: {audio_s.shape} [{audio_s.index[0], audio_s.index[-1]}]")
-#
-#        ####
-#        # TESTING AUTO ADJUSTING MASK
-#        ret_d = dict(
-#            #fs_audio=fs_audio, fs_signal=fs_signal,
-#            ecog_all=signal_df,
-#                     ecog=signal_df.loc[:, sensor_columns],
-#                     audio=audio_s,
-#                     channel_status=channel_df,
-#                     stim=stim_s,
-#                     stim_diff=stim_diff_s,
-#                     sensor_columns=sensor_columns,
-#            bad_sensor_columns=bad_sensor_columns,
-#                     #stim_diff=stim_diff_s,
-#                     #stim_auto=stim_auto_s,
-#                     #stim_auto_diff=stim_auto_diff_s,
-#                     #start_times_d=start_time_map,
-#                     #stop_times_d=stop_time_map,
-#                     #word_code_d=word_code_d,
-#                     )
-#        ret_d['remap'] = {k:k for k in ret_d.keys()}
-#        return ret_d
-
     @classmethod
     def make_filename(cls, patient, session, trial, location):
         raise NotImplementedError()
@@ -812,50 +631,6 @@ class BaseASPEN(BaseDataset):
         kws['signal_arr'] = torch.from_numpy(np_ecog_arr).float()
         return kws
 
-    @classmethod
-    def REMOVE_identify_good_and_bad_sensors(cls, mat_d, sensor_columns=None, ):
-
-        if 'electrodes' in mat_d:
-            chann_code_cols = ["code_%d" % e for e in range(mat_d['electrodes'].shape[-1])]
-            channel_df = pd.DataFrame(mat_d['electrodes'], columns=chann_code_cols)
-            cls.logger.info("Found electrodes metadata, N trodes = %d" % channel_df.shape[0] )
-
-            #required_sensor_columns = channel_df.index.tolist() if sensor_columns is None else sensor_columns
-            # Mask for good sensors
-            ch_m = (channel_df['code_0'] == 1)
-            all_valid_sensors = ch_m[ch_m].index.tolist()
-
-            # Spec the number of sensors that the ecog array mush have
-            if sensor_columns is None:
-                required_sensor_columns = channel_df.index.tolist()
-            elif sensor_columns == 'valid':
-                sensor_columns = all_valid_sensors
-                required_sensor_columns = sensor_columns
-            else:
-                required_sensor_columns = sensor_columns
-
-            #
-            good_sensor_columns = [c for c in all_valid_sensors if c in required_sensor_columns]
-            bad_sensor_columns = list(set(required_sensor_columns) - set(good_sensor_columns))
-        else:
-            good_sensor_columns = None
-            bad_sensor_columns = None
-
-        return good_sensor_columns, bad_sensor_columns
-
-    def REMOVE_get_indices(self, key='ecog', only_longest=False):
-        ix_map = {ptuple: dmap[key].index
-                  for ptuple, dmap in self.data_maps.items()}
-
-        if only_longest:
-            ptuple = longest = longest_k = None
-            for ptuple, ix in ix_map.items():
-                if longest is None or len(ix) > len(longest):
-                    longest, longest_k = ix, ptuple
-            return ptuple, longest
-        else:
-            return ix_map
-
     @staticmethod
     def get_targets(data_map, ix, label, target_transform=None):
         kws = dict(text='<silence>' if label <= 0 else '<speech>',
@@ -925,7 +700,6 @@ class BaseASPEN(BaseDataset):
 class HarvardSentences(BaseASPEN):
     """
     """
-    #logger = utils.get_logger('ecog.' + __name__)
 
     env_key = 'HARVARDSENTENCES_DATASET'
     default_hvs_path = path.join(pkg_data_dir, 'HarvardSentences')
@@ -1128,9 +902,6 @@ class NorthwesternWords(BaseASPEN):
             return f"{cls.fname_prefix_map.get(location)}{str(patient).zfill(3)}-SW-S{session}-R{trial}.mat"
         else:
             raise ValueError("Don't know location " + location)
-
-
-
 
 
 @attr.s
