@@ -36,13 +36,24 @@ class ParseTimeSeriesArrToFrame(DictTrf):
     output_key = attr.ib(None)
 
     def process(self, data_map):
+        # determine what the output key will be
         arr_key = self.array_key if self.output_key is None else self.output_key
-        _fs = data_map.get(self.fs_key, self.default_fs)
 
+        try:
+            _fs = data_map[self.fs_key]
+        except KeyError as ke:
+            msg = f"provided fs_key={self.fs_key} not in data_map, expected one of: {list(data_map.keys())}"
+            self.logger.warning()
+            _fs = self.default_fs
+
+        self.logger.debug(f"Input source frequency, fs object: {_fs}")
+
+        # Sometimes it's a scalar value inside some arrays
         if isinstance(_fs, np.ndarray):
             fs = data_map[self.fs_key].reshape(-1)[0]
-        else:
-            fs = int(_fs)
+
+        # Otherwise, just make sure it is integer
+        fs = int(_fs)
 
         self.logger.info(f"{self.array_key} FS = " + str(fs))
 
@@ -58,8 +69,7 @@ class ParseTimeSeriesArrToFrame(DictTrf):
             arr_df = pd.DataFrame(arr, index=ix, dtype=self.dtype)
         self.logger.debug(f"{self.array_key} shape: {arr_df.shape} [{arr_df.index[0], arr_df.index[-1]}]")
 
-
-        return {self.fs_key:fs, arr_key: arr_df}
+        return {self.fs_key: fs, arr_key: arr_df}
 
 
 @attr.s
