@@ -520,6 +520,9 @@ class MultiDim_Conv1D(torch.nn.Module):
         return o
 
 
+with_logger = utils.with_logger(prefix_name=__name__)
+
+@with_logger
 @attr.attrs
 class Trainer:
     model_map = attr.ib()
@@ -658,15 +661,15 @@ class Trainer:
                     if self.early_stopping_patience is not None:
                         self.last_best_cv_l = getattr(self, 'last_best_cv_l', np.inf)
                         if (self.last_best_cv_l - cv_l_mean) > self.early_stopping_threshold:
-                            print("-------------------------")
-                            print("---New best for early stopping---")
-                            print("-------------------------")
+                            self.logger.info("-------------------------")
+                            self.logger.info("---New best for early stopping---")
+                            self.logger.info("-------------------------")
                             self.last_best_epoch = epoch
                             self.last_best_cv_l = cv_l_mean
                         elif (epoch - self.last_best_epoch) > self.early_stopping_patience:
-                            print("--------EARLY STOPPING----------")
-                            print(f"{epoch} - {self.last_best_epoch} > {self.early_stopping_patience} :: {cv_l_mean}, {self.last_best_cv_l}")
-                            print("-------------------------")
+                            self.logger.info("--------EARLY STOPPING----------")
+                            self.logger.info(f"{epoch} - {self.last_best_epoch} > {self.early_stopping_patience} :: {cv_l_mean}, {self.last_best_cv_l}")
+                            self.logger.info("-------------------------")
                             break
                     #cv_o_map, new_best = self._eval(epoch, self.cv_data_gen)
                     #self.epoch_res_map[epoch]['cv_loss'] = np.mean(cv_o_map['loss'])
