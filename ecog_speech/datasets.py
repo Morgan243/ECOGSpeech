@@ -1,20 +1,19 @@
-import matplotlib
-import pandas as pd
-from glob import glob
-from os import path
-import numpy as np
-import torch
-from torch.utils import data as tdata
-from tqdm.auto import tqdm
-import h5py
-import scipy.io
-import logging
-
-from os import environ
 import os
 import attr
-#import torchaudio
 import socket
+from glob import glob
+from os import path
+from os import environ
+
+import pandas as pd
+import numpy as np
+import scipy.io
+
+import torch
+from torch.utils import data as tdata
+
+from tqdm.auto import tqdm
+
 from ecog_speech import feature_processing, utils, pipeline
 from sklearn.pipeline import  Pipeline
 
@@ -81,12 +80,6 @@ class RandomIntLike:
     def __call__(self, sample):
         return torch.randint(self.low, self.high, sample.shape, device=sample.device).type_as(sample)
 
-
-## TODO
-# - Datasets
-#   - Open ECOG from stanford (a bunch of tasks, including speech)
-#   - DEAP dataset for emotion recognition
-#   - VR + Workload (ball into a cup in VR) wearing EEG
 
 class BaseDataset(tdata.Dataset):
     env_key = None
@@ -257,7 +250,6 @@ class BaseASPEN(BaseDataset):
     data_subset = attr.ib('Data')
 
     num_mfcc = attr.ib(13)
-    verbose = attr.ib(True)
 
     selected_word_indices = attr.ib(None)
     transform = attr.ib(None)
@@ -314,8 +306,7 @@ class BaseASPEN(BaseDataset):
                                                             #sensor_columns=self.sensor_columns,
                                                            # IMPORTANT: Don't parse data yet
                                                             #parse_mat_data=False,
-                                                            subset=self.data_subset,
-                                                            verbose=self.verbose)
+                                                            subset=self.data_subset)
                               for l_p_s_t_tuple in data_iter}
 
             ## Important processing ##
@@ -529,6 +520,7 @@ class BaseASPEN(BaseDataset):
         """
         Returns only the keys in the HDF5 file without loading the data
         """
+        import h5py
         with h5py.File(p, 'r') as f:
             keys = list(f.keys())
         return keys
@@ -614,6 +606,9 @@ class BaseASPEN(BaseDataset):
             pmap, pid = cls.all_patient_maps[org], int(pid)
             assert pid in pmap, f"PID: {pid} not in {org}'s known data map"
             p_list = pmap[pid]
+        else:
+            raise ValueError(f"Don't understand the {len(set_terms)} terms: {set_terms}")
+
         return p_list
 
     @staticmethod
@@ -926,14 +921,3 @@ class ChangNWW(NorthwesternWords):
 
     def make_pipeline_map(self, default='audio_gate'):
         raise NotImplementedError("ChangNWW with MFC pipeline components not in new skl framework")
-
-    @staticmethod
-    def get_features(data_map, ix, label, ecog_transform=None, index_loc=False):
-        kws = NorthwesternWords.get_features(data_map, ix, label, ecog_transform, index_loc)
-        return kws
-
-    @staticmethod
-    def get_targets(data_map, ix, label, target_transform=None):
-        kws = NorthwesternWords.get_targets(data_map, ix, label, target_transform=target_transform)
-        kws['mfcc'] = torch.from_numpy(data_map['mfcc'].loc[ix].values).float()
-        return kws
