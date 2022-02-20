@@ -7,6 +7,7 @@ import torch
 from ecog_speech import datasets, utils
 from ecog_speech.models import base, sinc_ieeg
 
+logger = utils.get_logger(__name__)
 
 def make_model(options=None, nww=None, model_name=None, model_kws=None, print_details=True):
     """
@@ -14,8 +15,9 @@ def make_model(options=None, nww=None, model_name=None, model_kws=None, print_de
     specified in the options.
     """
     assert not (nww is None and model_kws is None)
+    base_kws = dict()
     if options is not None:
-        base_kws = dict(
+        base_kws.update(dict(
             window_size=int(nww.sample_ixer.window_size.total_seconds() * nww.fs_signal),
             dropout=options.dropout,
             dropout2d=options.dropout_2d,
@@ -23,7 +25,7 @@ def make_model(options=None, nww=None, model_name=None, model_kws=None, print_de
             dense_width=options.dense_width,
             activation_cls=options.activation_class,
             print_details=print_details
-        )
+        ))
 
     model_name = options.model_name if model_name is None else model_name
 
@@ -51,7 +53,7 @@ def make_model(options=None, nww=None, model_name=None, model_kws=None, print_de
                              cog_attn=options.cog_attn,
                              band_spacing=options.sn_band_spacing,
                              **base_kws)
-        model = base.TimeNormBaseMultiSincNN(**model_kws)
+        model = sinc_ieeg.TimeNormBaseMultiSincNN(**model_kws)
     elif 'tnorm-base-sn-v' in model_name:
         if model_kws is None:
             model_kws = dict(in_channels=len(nww.selected_columns),
@@ -119,9 +121,9 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
                                                         else cv_sets_str)
     test_p_tuples = dataset_cls.make_tuples_from_sets_str(options.test_sets if test_sets_str is None
                                                           else test_sets_str)
-    print("Train tuples: " + str(train_p_tuples))
-    print("CV tuples: " + str(cv_p_tuples))
-    print("Test tuples: " + str(test_p_tuples))
+    logger.info("Train tuples: " + str(train_p_tuples))
+    logger.info("CV tuples: " + str(cv_p_tuples))
+    logger.info("Test tuples: " + str(test_p_tuples))
 
     base_kws = dict(pre_processing_pipeline=options.pre_processing_pipeline,
                     data_subset=options.data_subset)
@@ -138,7 +140,7 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
                        shuffle=False, random_sample=False)
 
     dataset_map = dict()
-    print("Using dataset class: %s" % str(dataset_cls))
+    logger.info("Using dataset class: %s" % str(dataset_cls))
     train_nww = dataset_cls(power_q=options.power_q,
                             # sensor_columns='valid',
                             sensor_columns=train_sensor_columns,
@@ -146,19 +148,19 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     if options.roll_channels and options.shuffle_channels:
         raise ValueError("--roll-channels and --shuffle-channels are mutually exclusive")
     elif options.roll_channels:
-        print("-->Rolling channels transform<--")
+        logger.info("-->Rolling channels transform<--")
         train_nww.transform = transforms.Compose([
             datasets.RollDimension(roll_dim=0, min_roll=0,
                                    max_roll=train_nww.sensor_count - 1)
         ])
     elif options.shuffle_channels:
-        print("-->Shuffle channels transform<--")
+        logger.info("-->Shuffle channels transform<--")
         train_nww.transform = transforms.Compose([
             datasets.ShuffleDimension()
         ])
 
     if options.random_labels:
-        print("-->Randomizing target labels<--")
+        logger.info("-->Randomizing target labels<--")
         train_nww.target_transform = transforms.Compose([
             datasets.RandomIntLike(low=0, high=2)
         ])
@@ -182,7 +184,7 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
                                           sensor_columns=train_nww.selected_columns,
                                           **test_data_kws)
     else:
-        print("Warning - no data sets provided")
+        logger.info("Warning - no data sets provided")
 
     # dataset_map = dict(train=train_nww, cv=cv_nww, test=test_nww)
 
@@ -198,7 +200,7 @@ def train_and_test_model(model, dl_map, eval_dl_map, options, Trainer_CLS=base.T
                          **trainer_kws):
     reg_f = None
     if options.bw_reg_weight > 0:
-        print(f"!!!! Using BW regularizeer W={options.bw_reg_weight} !!!!")
+        logger.warning(f"!!!! Using BW regularizeer W={options.bw_reg_weight} !!!!")
         reg_f = lambda m: model.bandwidth_regularizer(m, w=options.bw_reg_weight)
 
     batch_cb = None
@@ -207,11 +209,12 @@ def train_and_test_model(model, dl_map, eval_dl_map, options, Trainer_CLS=base.T
         sn_params_tracked = True
         batch_cb = dict(band_params=model.get_band_params)
     elif options.track_sinc_params:
-        print("--track-sinc-params was set, but not using an SN model - ignoring!")
+        logger.warning("--track-sinc-params was set, but not using an SN model - ignoring!")
 
-    print(Trainer_CLS)
-    print(base.__file__)
-    trainer = Trainer_CLS(dict(model=model), opt_map=dict(),
+    logger.debug(Trainer_CLS)
+    logger.debug(base.__file__)
+    trainer = Trainer_CLS(model_map=dict(model=model),
+                          opt_map=dict(),
                           train_data_gen=dl_map['train'],
                           cv_data_gen=dl_map.get('cv'),
                           model_regularizer=reg_f,
@@ -220,11 +223,11 @@ def train_and_test_model(model, dl_map, eval_dl_map, options, Trainer_CLS=base.T
                           device=options.device,
                           **trainer_kws)
 
-    print("Training")
+    logger.info("Training")
     losses = trainer.train(options.n_epochs,
                            batch_callbacks=batch_cb,
                            batch_cb_delta=5)
-    print("Reloading best model state")
+    logger.info("Reloading best model state")
     model.load_state_dict(trainer.get_best_state())
 
     #####
@@ -259,10 +262,10 @@ def run(options):
     """
     dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options)
     model, model_kws = make_model(options, dataset_map['train'])
-    print("Building trainer")
+    logger.info("Building trainer")
     reg_f = None
     if options.bw_reg_weight > 0:
-        print(f"!!!! Using BW regularizeer W={options.bw_reg_weight} !!!!")
+        logger.info(f"!!!! Using BW regularizeer W={options.bw_reg_weight} !!!!")
         reg_f = lambda m: model.bandwidth_regularizer(m, w=options.bw_reg_weight)
 
     batch_cb = None
@@ -271,7 +274,7 @@ def run(options):
         sn_params_tracked = True
         batch_cb = dict(band_params=model.get_band_params)
     elif options.track_sinc_params:
-        print("--track-sinc-params was set, but not using an SN model - ignoring!")
+        logger.info("--track-sinc-params was set, but not using an SN model - ignoring!")
 
     trainer = base.Trainer(dict(model=model), opt_map=dict(),
                            train_data_gen=dl_map['train'],
@@ -281,7 +284,7 @@ def run(options):
                            early_stopping_patience=options.early_stopping_patience,
                            device=options.device)
 
-    print("Training")
+    logger.info("Training")
     losses = trainer.train(options.n_epochs,
                            batch_callbacks=batch_cb,
                            batch_cb_delta=5)
@@ -327,7 +330,7 @@ def run(options):
         p = options.save_model_path
         if os.path.isdir(p):
             p = os.path.join(p, uid + '.torch')
-        print("Saving model to " + p)
+        logger.info("Saving model to " + p)
         torch.save(model.cpu().state_dict(), p)
         res_dict['save_model_path'] = p
 
@@ -345,7 +348,7 @@ def run(options):
 
     if options.result_dir is not None:
         path = pjoin(options.result_dir, name)
-        print(path)
+        logger.info(path)
         res_dict['path'] = path
         with open(path, 'w') as f:
             json.dump(res_dict, f)

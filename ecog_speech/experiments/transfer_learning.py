@@ -4,10 +4,13 @@ from datetime import datetime
 from os.path import join as pjoin
 import json
 import torch
-from ecog_speech import datasets, utils
-from ecog_speech.models import base, sinc_ieeg
+from ecog_speech import utils
+from ecog_speech.experiments.standard import train_and_test_model
+from ecog_speech.models import base
 
 from ecog_speech.experiments.standard import make_model, make_datasets_and_loaders, default_option_kwargs
+
+logger = utils.get_logger(__name__)
 
 
 def run(options):
@@ -39,15 +42,15 @@ def run(options):
 
     #####
     # Load pre-training data and initialize a fresh model from it
-    print("Loading pre-training data")
+    logger.info("Loading pre-training data")
     pre_dataset_map, pre_dl_map, pre_eval_dl_map = make_datasets_and_loaders(options,
                                                                              train_sets_str=options.pre_train_sets,
                                                                              cv_sets_str=options.pre_cv_sets,
                                                                              test_sets_str=options.pre_test_sets)
 
-    print("Initializing new model")
+    logger.info("Initializing new model")
     model, model_kws = make_model(options, pre_dataset_map['train'])
-    print("Pre-training model")
+    logger.info("Pre-training model")
     pre_trainer, pre_outputs_map, pre_performance_map = train_and_test_model(model, pre_dl_map,
                                                                              pre_eval_dl_map, options)
     pre_results_d = make_sub_results('pretraining', pre_trainer, pre_dataset_map, pre_outputs_map, pre_performance_map)
@@ -60,19 +63,19 @@ def run(options):
                                                                      if pre_band_params is not None else (None, None))
 
     ### Fine-tuning
-    print("Loading fine-tuning data")
+    logger.info("Loading fine-tuning data")
     dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options,
                                                                  train_sensor_columns=selected_columns,
                                                                  train_sets_str=options.train_sets,
                                                                  cv_sets_str=options.cv_sets,
                                                                  test_sets_str=options.test_sets)
-    print("Fine-tuning model")
+    logger.info("Fine-tuning model")
     trainer, outputs_map, performance_map = train_and_test_model(model, dl_map, eval_dl_map, options,
                                                                  # Don't overwrite the weights that were pre-trained
                                                                  weights_init_f=None)
 
     results_d = make_sub_results('finetuning', trainer, dataset_map, outputs_map, performance_map)
-    print("complete")
+    logger.info("Fine-tuning complete")
 
     band_params = getattr(trainer, 'batch_cb_history', dict()).get('band_params', None)
     results_d['low_hz_frame'], results_d['high_hz_frame'] = (parse_band_params(band_params, model.fs)
@@ -101,13 +104,13 @@ def run(options):
         p = options.save_model_path
         if os.path.isdir(p):
             p = os.path.join(p, uid + '.torch')
-        print("Saving model to " + p)
+        logger.info("Saving model to " + p)
         torch.save(model.cpu().state_dict(), p)
         res_dict['save_model_path'] = p
 
     if options.result_dir is not None:
         path = pjoin(options.result_dir, file_name)
-        print(path)
+        logger.info(path)
         res_dict['path'] = path
         with open(path, 'w') as f:
             json.dump(res_dict, f)
