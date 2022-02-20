@@ -17,7 +17,7 @@ class DictTrf(BaseEstimator, TransformerMixin):
         in_keys = set(data_map.keys())
         updates = self.process(data_map)
         out_keys = set(updates.keys())
-        self.logger.info(f"Updated keys: {out_keys}" )
+        self.logger.debug(f"Updated keys: {out_keys}")
         data_map.update(updates)
         return data_map
 
@@ -40,10 +40,11 @@ class ParseTimeSeriesArrToFrame(DictTrf):
         arr_key = self.array_key if self.output_key is None else self.output_key
 
         try:
+            self.logger.debug(f"Accessing {self.fs_key}")
             _fs = data_map[self.fs_key]
         except KeyError as ke:
             msg = f"provided fs_key={self.fs_key} not in data_map, expected one of: {list(data_map.keys())}"
-            self.logger.warning()
+            self.logger.warning(msg)
             _fs = self.default_fs
 
         self.logger.debug(f"Input source frequency, fs object: {_fs}")
@@ -55,8 +56,6 @@ class ParseTimeSeriesArrToFrame(DictTrf):
         # Otherwise, just make sure it is integer
         fs = int(_fs)
 
-        self.logger.info(f"{self.array_key} FS = " + str(fs))
-
         arr = data_map[self.array_key]
 
         if self.reshape is not None:
@@ -67,7 +66,7 @@ class ParseTimeSeriesArrToFrame(DictTrf):
             arr_df = pd.Series(arr, index=ix, dtype=self.dtype, name=arr_key)
         else:
             arr_df = pd.DataFrame(arr, index=ix, dtype=self.dtype)
-        self.logger.debug(f"{self.array_key} shape: {arr_df.shape} [{arr_df.index[0], arr_df.index[-1]}]")
+        self.logger.info(f"{self.array_key}@{fs}, shape: {arr_df.shape}, [{arr_df.index[0], arr_df.index[-1]}]")
 
         return {self.fs_key: fs, arr_key: arr_df}
 
@@ -333,6 +332,18 @@ class StimFromStartStopWordTimes(DictTrf):
                     word_stim=word_stim, sentence_stim=sentence_stim)
 
 
+def object_as_key_or_itself(key_or_value, remap=None):
+    if isinstance(remap, dict):
+        value = remap[key_or_value]
+    elif remap is not None:
+        value = remap
+    elif remap is None:
+        value = key_or_value
+    else:
+        raise ValueError(f"Dont know how to handle remap of type: {type(remap )}")
+    return value
+
+
 @attr.s
 @with_logger
 class WindowSampleIndicesFromIndex(DictTrf):
@@ -363,15 +374,15 @@ class WindowSampleIndicesFromIndex(DictTrf):
                           for offs in target_indexes
                           if len(stim.loc[offs + index_shift:offs + win_size + index_shift]) >= expected_window_samples]
 
-        if isinstance(stim_value_remap, dict):
-            stim_key = stim_value_remap[stim_target_value]
-        elif stim_value_remap is not None:
-            stim_key = stim_value_remap
-        elif stim_value_remap is None:
-            stim_key = stim_target_value
-        else:
-            raise ValueError(f"Dont know how to handle stim_value_remap of type: {type(stim_value_remap)}")
-
+#        if isinstance(stim_value_remap, dict):
+#            stim_key = stim_value_remap[stim_target_value]
+#        elif stim_value_remap is not None:
+#            stim_key = stim_value_remap
+#        elif stim_value_remap is None:
+#            stim_key = stim_target_value
+#        else:
+#            raise ValueError(f"Dont know how to handle stim_value_remap of type: {type(stim_value_remap)}")
+        stim_key = object_as_key_or_itself(stim_target_value, stim_value_remap)
         sample_indices[stim_key] = sample_indices.get(stim_key, list()) + target_indices
 
         if existing_sample_indices_map is not None:
@@ -459,15 +470,16 @@ class WindowSampleIndicesFromStim(DictTrf):
                                 for offs in target_start_ixes[:max_target_region_size]
                                     if len(stim.loc[offs:offs + win_size]) >= expected_window_samples]
 
-            if isinstance(stim_value_remap, dict):
-                stim_key = stim_value_remap[stim_value]
-            elif stim_value_remap is not None:
-                stim_key = stim_value_remap
-            elif stim_value_remap is None:
-                stim_key = stim_value
-            else:
-                raise ValueError(f"Dont know how to handle stim_value_remap of type: {type(stim_value_remap)}")
+#            if isinstance(stim_value_remap, dict):
+#                stim_key = stim_value_remap[stim_value]
+#            elif stim_value_remap is not None:
+#                stim_key = stim_value_remap
+#            elif stim_value_remap is None:
+#                stim_key = stim_value
+#            else:
+#                raise ValueError(f"Dont know how to handle stim_value_remap of type: {type(stim_value_remap)}")
 
+            stim_key = object_as_key_or_itself(stim_value, stim_value_remap)
             sample_indices[stim_key] = sample_indices.get(stim_key, list()) + target_indices
 
         # Go through all samples - make noise if sample size is off (or should throw error?)
