@@ -5,10 +5,12 @@ setup(name='ECOGSpeech',
       author='Morgan Stuart & Srdjan Lesaja',
       packages=['ecog_speech'],
       requires=[
-            #'BCI2kReader',
-            'torchaudio', 'tqdm',
+            'torch',  # Probably make sure installed using torch website instructions for the platform
+            'torchaudio',
+            'torchaudio',
+            'tqdm',
             'numpy', 'pandas', 'scipy',
             'scikit-learn', 'mne',
             'attrs',
-            'python_speech_features', 'torchaudio'
+            'python_speech_features',
       ])
