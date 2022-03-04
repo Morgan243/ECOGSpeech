@@ -7,7 +7,6 @@ setup(name='ECOGSpeech',
       requires=[
             'torch',  # Probably make sure installed using torch website instructions for the platform
             'torchaudio',
-            'torchaudio',
             'tqdm',
             'numpy', 'pandas', 'scipy',
             'scikit-learn', 'mne',
