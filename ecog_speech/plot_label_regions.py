@@ -5,21 +5,69 @@ import pandas as pd
 import matplotlib
 import numpy as np
 
+def plot_ucsd_sentence_regions(data_map):
+    import matplotlib
+    from tqdm.auto import tqdm
+    ds_audio = data_map['audio'].resample('0.001S').mean()
+    word_df = data_map['word_start_stop_times']
 
-from scipy.io import loadmat
+    plt_sent_codes = list(sorted(word_df.stim_sentcode.unique()))
+    n_sent_codes = len(plt_sent_codes)
+    n_rows = int(np.ceil(n_sent_codes / 2))
+    fig, axs = matplotlib.pyplot.subplots(nrows=n_rows, ncols=2, figsize=(28, n_rows * 2.5))
+    axs = axs.reshape(-1)
 
-# - For Set of patients
-# - Plot all of their word labels
-# - Plot histogram of word code label n samples
-# - Plot sample of silent regions
-#     - Silence is not contigoous, so harder to show all windpws
+    for i, sent_code in (enumerate(tqdm(plt_sent_codes))):
+        ax = axs[i]
+        plt_word_df = word_df[word_df.stim_sentcode.eq(sent_code)]
 
-#pl = (feature_processing.SubsampleECOG()
-#     >> feature_processing.PowerThreshold(window_samples=48000 // 4)
-#     >> feature_processing.SampleIndicesFromStimV2(silent_window_scale=5))
+        region_tuples = [
+
+            (plt_word_df['listening_region_start_t'].min(), plt_word_df['listening_region_stop_t'].max(),
+             'listening_region', 0.9),
+            (plt_word_df['start_t'].min(), plt_word_df['stop_t'].max(), 'speaking_region', 0.85),
+            (plt_word_df['mouth_region_start_t'].min(), plt_word_df['mouth_stop_t'].max(), 'mouth_region', 0.8),
+            (plt_word_df['imagine_region_start_t'].min(), plt_word_df['imagine_stop_t'].max(), 'imagine_region', 0.75),
+
+            # (plt_word_df['listening_region_start_t'].min(), plt_word_df['imagine_stop_t'].max(), 'entire_region', 1),
+        ]
 
 
-datasets.NorthwesternWords.default_base_path = '/export/datasets/ASPEN/ecog/Data2Lore/SingleWord/'
+        viz.plot_multi_region_over_signal(signal_s=ds_audio, region_min_max_tuples=region_tuples,
+                                region_plot_kwargs=dict(ls='--', alpha=0.7, lw=4, title=f"sentcode={sent_code}"), ax=ax)
+    fig.tight_layout()
+    return fig, axs
+
+def plot_ucsd_word_regions(data_map):
+    import matplotlib
+    from tqdm.auto import tqdm
+    ds_audio = data_map['audio'].resample('0.001S').mean()
+    word_df = data_map['word_start_stop_times']
+    plt_sent_codes = list(sorted(word_df.stim_sentcode.unique()))
+    n_sent_codes = len(plt_sent_codes)
+    n_rows = int(np.ceil(n_sent_codes / 2))
+    fig, axs = matplotlib.pyplot.subplots(nrows=n_rows, ncols=2, figsize=(27, n_rows * 3))
+    axs = axs.reshape(-1)
+
+    for i, sent_code in (enumerate(tqdm(plt_sent_codes))):
+        ax = axs[i]
+        plt_word_df = word_df[word_df.stim_sentcode.eq(sent_code)]
+        speaking_regions_l = (plt_word_df[plt_word_df.word.str.upper() == plt_word_df.word]
+                              .pipe(lambda _df: _df[['start_t', 'stop_t', 'word']].assign(v=1)).values.tolist())
+        imagine_regions_l = (plt_word_df[plt_word_df.word.str.upper() == plt_word_df.word]
+                             .pipe(
+            lambda _df: _df.assign(word=_df.word + '_im')[['imagine_start_t', 'imagine_stop_t', 'word']].assign(
+                v=1)).values.tolist())
+
+        region_tuples = speaking_regions_l + imagine_regions_l
+        fig, ax, ax2 = viz.plot_multi_region_over_signal(signal_s=ds_audio, region_min_max_tuples=region_tuples,
+                                                   region_plot_kwargs=dict(ls='--', alpha=0.9, lw=4,
+                                                                           title=f"sentcode={sent_code}",
+                                                                           cmap='tab20'),
+                                                   ax=ax)
+        ax2.legend(ncol=2, fontsize=8, loc='center')
+
+    return fig, axs
 
 
 def plot_grid_of_label_regions(data_map):
@@ -38,14 +86,15 @@ def plot_grid_of_label_regions(data_map):
     word_codes_to_plt = set(data_map['sample_index_map'].keys()) - set([0])
 
     sample_ix = 0
+    ds_audio = data_map['audio'].resample('0.001S').mean()
     for i, word_code in tqdm(enumerate(word_codes_to_plt)):
         _ax = axs[i]
         wrd_ix = data_map['sample_index_map'][word_code][sample_ix]
 
-        fig, ax, ax2 = viz.plot_region_over_signal(data_map['audio'], wrd_ix.min(), wrd_ix.max(),
+        fig, ax, ax2 = viz.plot_region_over_signal(ds_audio, wrd_ix.min(), wrd_ix.max(),
                                                     region_plot_kwargs=dict(ls='--'),
                                                     padding_time=pd.Timedelta('1.5s'), ax=_ax)
-        fig, ax, _ = viz.plot_region_over_signal(data_map['audio'],
+        fig, ax, _ = viz.plot_region_over_signal(ds_audio,
                                                   data_map['sample_index_map'][word_code][0].min(),
                                                   data_map['sample_index_map'][word_code][-1].max(),
                                                   padding_time=pd.Timedelta('1.5s'),
@@ -77,9 +126,10 @@ def plot_grid_of_silent_regions(data_map):
     fig, axs = matplotlib.pyplot.subplots(nrows=n_rows, ncols=n_cols, figsize=(35, 3.9 * n_rows))
     axs = axs.reshape(-1)
     plt_scale = data_map['audio'].abs().quantile(.999)
+    ds_audio = data_map['audio'].resample('0.001S').mean()
     for i, (ix_i, ix) in enumerate(zip(i_to_plt, ixes_to_plt)):
         ax = axs[i]
-        viz.plot_region_over_signal(data_map['audio'], ix.min(), ix.max(),
+        viz.plot_region_over_signal(ds_audio, ix.min(), ix.max(),
                                      region_plot_kwargs=dict(ls='--'), ax=ax, )
         ax.set_ylim(-plt_scale, plt_scale)
         ax.set_title(f"Silent index {ix_i} of {len(data_map['sample_index_map'][0])}")
@@ -122,37 +172,11 @@ if __name__ == """__main__""":
     from sklearn.pipeline import FeatureUnion, Pipeline
     import pathlib
 
-#    sk_pl = Pipeline([
-#        ('subsample', feature_processing.SubsampleSignal()),
-#        ('Threshold', feature_processing.PowerThreshold(speaking_window_samples=48000 // 16,
-#                                                        silence_window_samples=int(48000 * 1.5),
-#                                                        speaking_quantile_threshold=0.9,
-#                                                            #silence_threshold=0.001,
-#                                                        #silGence_quantile_threshold=0.05,
-#                                                        silence_n_smallest=5000,
-#                                                           )),
-#        ('speaking_indices', feature_processing.WindowSampleIndicesFromStim('stim_pwrt',
-#                                                                            target_onset_shift=pd.Timedelta(-.5, 's'),
-#                                                                            # input are centers, and output is a window of .5 sec
-#                                                                            # so to center it, move the point (center) back .25 secods
-#                                                                            # so that extracted 0.5 sec window saddles the original center
-#                                                                            #target_offset_shift=pd.Timedelta(-0.25, 's')
-#                                                                            target_offset_shift=pd.Timedelta(-0.5, 's')
-#                                                                            )
-#         ),
-#
-#        ('silence_indices', feature_processing.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
-#                                                                            # Center the extracted 0.5 second window
-#                                                                            index_shift=pd.Timedelta(-0.25, 's'),
-#                                                                            stim_value_remap=0
-#                                                                          )),
-#        ('output', 'passthrough')
-#    ])
-
     #psubset = 'MC'
     #dataset_cls = datasets.NorthwesternWords
     psubset = 'UCSD'
     dataset_cls = datasets.HarvardSentences
+    pre_proc_pipeline = 'audio_gate_imagine'
 
     def run_one(pid, pt, ptuples):
         output_path = f'{psubset}-{pt[1]}-{pt[3]}_label_inspection_plots.pdf'
@@ -160,13 +184,20 @@ if __name__ == """__main__""":
             print("Skipping " + str(output_path))
             return
         print("LOADING NWW")
-        dset = dataset_cls(patient_tuples=[pt])#, pre_processing_pipeline=sk_pl.transform)
+        dset = dataset_cls(patient_tuples=[pt], pre_processing_pipeline=pre_proc_pipeline)
         print("Getting data map")
         data_map = dset.data_maps[pt]
         # Should only be onw
         # for i, (pt, data_map) in enumerate(dset.data_maps.items()):
         print("Plotting")
         fig_map = plot_label_inspection_figures(data_map)
+
+        if psubset == 'UCSD' and pre_proc_pipeline == 'audio_gate_imagine':
+            fig, _ = plot_ucsd_word_regions(data_map)
+            fig_map['UCSD_words'] = fig
+
+            fig, _ = plot_ucsd_sentence_regions(data_map)
+            fig_map['UCSD_sentence'] = fig
 
         from matplotlib.backends.backend_pdf import PdfPages
 
@@ -184,7 +215,7 @@ if __name__ == """__main__""":
 
 
     from multiprocessing import Pool
-    p = Pool(4)
+    p = Pool(2)
     for pid, ptuples in tqdm(dataset_cls.all_patient_maps[psubset].items()):
         for pt in ptuples:
             p.apply_async(run_one, kwds=dict(pid=pid, pt=pt, ptuples=ptuples))

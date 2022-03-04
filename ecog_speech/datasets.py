@@ -725,44 +725,79 @@ class HarvardSentences(BaseASPEN):
         Pipeline parameters sometimes depend on the configuration of the dataset class,
         so for now it is bound method (not classmethod or staticmethod).
         """
+        parse_arr_steps = [
+            ('parse_signal', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['signal'],
+                                                                self.mat_d_keys['signal_fs'],
+                                                                1200, output_key='signal')),
+            ('parse_audio', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['audio'],
+                                                               self.mat_d_keys['audio_fs'],
+                                                               48000, reshape=-1)),
+            ('parse_stim', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['stimcode'],
+                                                              self.mat_d_keys['signal_fs'],
+                                                              1200, reshape=-1, output_key='stim')),
+        ]
+
+        parse_input_steps = [
+            ('sensor_selection', pipeline.IdentifyGoodAndBadSensors(sensor_selection=self.sensor_columns)),
+            ('subsample', pipeline.SubsampleSignal()),
+            ('sent_from_start_stop', pipeline.SentCodeFromStartStopWordTimes()),
+
+        ]
+
+        parse_stim_steps = [
+            # Produces imagine_start/stop_t and mouth_start/stop_t
+            ('stim_from_start_stop', pipeline.StimFromStartStopTimes()),
+        ]
+
+        audio_gate_steps = [
+            ('Threshold', pipeline.PowerThreshold(speaking_window_samples=48000 // 16,
+                                                                          silence_window_samples=int(48000 * 1.5),
+                                                                          speaking_quantile_threshold=0.9,
+                                                                          #silence_threshold=0.001,
+                                                                          #silGence_quantile_threshold=0.05,
+                                                                          silence_n_smallest=5000, stim_key='word_stim')),
+            ('speaking_indices', pipeline.WindowSampleIndicesFromStim('stim_pwrt',
+                                                                      target_onset_shift=pd.Timedelta(-.5, 's'),
+                                                                      # input are centers, and output is a window of .5 sec
+                                                                      # so to center it, move the point (center) back .25 secods
+                                                                      # so that extracted 0.5 sec window saddles the original center
+                                                                      #target_offset_shift=pd.Timedelta(-0.25, 's')
+                                                                      target_offset_shift=pd.Timedelta(-0.5, 's')
+                                                                                )),
+             ('silence_indices', pipeline.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
+                                                                        # Center the extracted 0.5 second window
+                                                                        index_shift=pd.Timedelta(-0.25, 's'),
+                                                                        stim_value_remap=0
+                                                                                  ))]
 
         p_map = {
-            'audio_gate': Pipeline([
-                ('parse_signal', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['signal'],
-                                                                    self.mat_d_keys['signal_fs'],
-                                                                    1200, output_key='signal')),
-                ('parse_audio', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['audio'],
-                                                                   self.mat_d_keys['audio_fs'],
-                                                                   48000, reshape=-1)),
-                ('parse_stim', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['stimcode'],
-                                                                  self.mat_d_keys['signal_fs'],
-                                                                  1200, reshape=-1, output_key='stim')),
-                ('sensor_selection', pipeline.IdentifyGoodAndBadSensors(sensor_selection=self.sensor_columns)),
-                ('subsample', pipeline.SubsampleSignal()),
-                ('stim_from_start_stop', pipeline.StimFromStartStopWordTimes()),
-                ('Threshold', pipeline.PowerThreshold(speaking_window_samples=48000 // 16,
-                                                                    silence_window_samples=int(48000 * 1.5),
-                                                                    speaking_quantile_threshold=0.9,
-                                                                    #silence_threshold=0.001,
-                                                                    #silGence_quantile_threshold=0.05,
-                                                                    silence_n_smallest=5000, stim_key='word_stim')),
-                ('speaking_indices', pipeline.WindowSampleIndicesFromStim('stim_pwrt',
-                                                                                    target_onset_shift=pd.Timedelta(-.5, 's'),
-                                                                                    # input are centers, and output is a window of .5 sec
-                                                                                    # so to center it, move the point (center) back .25 secods
-                                                                                    # so that extracted 0.5 sec window saddles the original center
-                                                                                    #target_offset_shift=pd.Timedelta(-0.25, 's')
-                                                                                    target_offset_shift=pd.Timedelta(-0.5, 's')
-                                                                                    )
-                 ),
+            'audio_gate': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
+                                   + audio_gate_steps + [('output', 'passthrough')]).transform,
+            'audio_gate_imagine': Pipeline(parse_arr_steps + parse_input_steps + [
+                # Creates listening, imagine, mouth
+                ('multi_task_start_stop', pipeline.MultiTaskStartStop()),
+                # Creates the word_stim and sentence_stim from the start stop of imagine
+                ('stim_from_start_stop', pipeline.StimFromStartStopTimes(start_t_column='imagine_start_t',
+                                                                         stop_t_column='imagine_stop_t')),
+                # creat stim for listening (i.e. not speaking or active) that we'll use for silent
+                ('stim_from_listening', pipeline.StimFromStartStopTimes(start_t_column='listening_region_start_t',
+                                                                         stop_t_column='listening_region_stop_t',
+                                                                         word_stim_output_name='listening_word_stim',
+                                                                         sentence_stim_output_name='listening_sentence_stim')),
+                ('speaking_indices', pipeline.WindowSampleIndicesFromStim('word_stim',
+                                                                          target_onset_shift=pd.Timedelta(-.5, 's'),
+                                                                          target_offset_shift=pd.Timedelta(-0.5, 's'))),
+                ('silent_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',
+                                                                        target_onset_shift=pd.Timedelta(.5, 's'),
+                                                                        target_offset_shift=pd.Timedelta(-0.5, 's'),
+                                                                        stim_value_remap=0)),
+                #('silence_indices', pipeline.WindowSampleIndicesFromIndex('listening_word_stim',
+                #                                                          stim_pre_process_f=lambda _stim: _stim.gt(0).astype(int),
+                #                                                          stim_value_remap=0,)),
 
-                ('silence_indices', pipeline.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
-                                                                                    # Center the extracted 0.5 second window
-                                                                                    index_shift=pd.Timedelta(-0.25, 's'),
-                                                                                    stim_value_remap=0
-                                                                                  )),
                 ('output', 'passthrough')
-                    ]).transform,
+            ]).transform,
+            #'audio_gate': Pipeline(parse_arr_steps + parse_input_steps + audio_gate_steps + [('output', 'passthrough')]).transform,
 
             'minimal':
                 feature_processing.SubsampleECOG() >>

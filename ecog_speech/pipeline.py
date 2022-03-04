@@ -269,32 +269,86 @@ class PowerThreshold(DictTrf):
 
 @attr.s
 @with_logger
-class StimFromStartStopWordTimes(DictTrf):
+class SentCodeFromStartStopWordTimes(DictTrf):
     stim_speaking_value = attr.ib(51)
 
-    def process(self, data_map):
-        word_df = pd.DataFrame(data_map['start_stop_word_ms'],
+    @classmethod
+    def parse_start_stop_word_ms(cls, sswms):
+        word_df = pd.DataFrame(sswms,
                                columns=['start_t', 'stop_t', 'word'])
-
-        stim = data_map['stim']
-
-        speaking_stim_s = stim[stim.lt(self.stim_speaking_value) & stim.gt(0)]
-
         # convert to time in secodes
         word_df['start_t'] = word_df.start_t.astype(float).apply(lambda v: pd.Timedelta(v, 's'))
         word_df['stop_t'] = word_df.stop_t.astype(float).apply(lambda v: pd.Timedelta(v, 's'))
 
-        # Get the  index nearest to the words start time from the listening index
-        sent_code_ixes = word_df.start_t.apply(lambda v: speaking_stim_s.index.get_loc(v, method='nearest'))
-        # Get the nearest to the words start time for the stim values
-        start_ixes = word_df.start_t.apply(lambda v: stim.index.get_loc(v, method='nearest'))
+        return word_df
 
-        word_df['stim_start_t'] = stim.index[start_ixes]
+    def process(self, data_map):
+        word_df = self.parse_start_stop_word_ms(data_map['start_stop_word_ms'])
+        stim = data_map['stim']
 
-        word_df['stim_sentcode'] = speaking_stim_s.iloc[sent_code_ixes].values
-        word_df['stim_sentcode_t'] = stim.index[sent_code_ixes]
+        # soeaking is lowest stim code - find all word codes for when they are listening (lt(stim_speaking))
+        listening_stim_s = stim[stim.lt(self.stim_speaking_value) & stim.gt(0)]
+        #speaking_stim_s = stim[stim.eq(self.stim_speaking_value) & stim.gt(0)]
+        # Find the stim time (with only these values) that is nearest each words start time
+        def closest_index_i_after_t(s, t, v):
+            # Filter stim to times past t threshold time
+            after_t_s = s[s.index >= t]
+            # Within the filtered data, what i index has the value closest to v
+            closest_i_after_t_s = after_t_s.index.get_loc(v, method='nearest')
+            return closest_i_after_t_s
+            # Access the index value at i
+            #return after_t_s.index[closest_i_after_t_s]
+
+        # Get the listening sample nearest to the words start time from the listening index
+        #start_listening_ixes = word_df.apply(lambda r: closest_index#_i_after_t(listening_stim_s, r.stop_t, r.start_t), axis=1)
+        start_listening_ixes = word_df.start_t.apply(lambda v: listening_stim_s.index.get_loc(v, method='nearest'))
+        # Get the index nearest to the words start time for the stim values - should basically be the start_t value
+        start_stim_ixes = word_df.start_t.apply(lambda v: stim.index.get_loc(v, method='nearest'))
+
+        word_df['stim_start_t'] = stim.index[start_stim_ixes]
+
+        word_df['stim_sentcode'] = listening_stim_s.iloc[start_listening_ixes.values].values
+        word_df['stim_sentcode_t'] = listening_stim_s.iloc[start_listening_ixes.values].index
+        #word_df['stim_sentcode'] = listening_stim_s.iloc[start_listening_ixes.values].values
+        #word_df['stim_sentcode_t'] = listening_stim_s.iloc[start_listening_ixes.values].index
 
         word_df = word_df.set_index('stim_start_t').join(stim)
+
+        ###
+        # Check for repeated stim codes (..only seen in UCSD 28, sent code 45), this adds sent code 45.5 to their stim
+        grps = list()
+        for sent_code, sc_df in word_df.groupby('stim_sentcode'):
+            delta_t = sc_df.stim_sentcode_t.max() - sc_df.stim_sentcode_t.min()
+            o_cs_df = sc_df
+            if delta_t > pd.Timedelta(1, 'm'):
+                self.logger.warning(f"Sent code {sent_code} has a time rang more than a minute: {delta_t}")
+                # Limit to the onset markers and find the word start (speaking
+                # start) with the biggest jump in sent code time
+                split_point_t = sc_df[sc_df.word.eq('on')].stim_sentcode_t.diff().idxmax()
+                # Grab the first insatnce, dropping the last sample that is actually from the second instance
+                first_w_df = sc_df.loc[:split_point_t].iloc[:-1].copy()
+                # Get the last stim sent code for the first instance of the duplicate sent code
+                split_point_t = first_w_df.iloc[-1].stop_t
+
+                # The latter portion of the word df, after the split
+                last_w_df = sc_df.loc[split_point_t:].copy()
+                # Give it a word code that does't exist, but clear where it came from , so + 0.5
+                last_w_df['stim_sentcode'] = last_w_df['stim_sentcode'] + 0.5
+
+                # WARNING: Change the stim - replace instances past the split point with the new code
+                stim.loc[split_point_t:] = stim.loc[split_point_t:].replace(sent_code, sent_code + 0.5)
+
+                # put it all together
+                o_cs_df = pd.concat([
+                    first_w_df,
+                    last_w_df
+                ])
+
+            grps.append(o_cs_df)
+
+        word_df = pd.concat(grps).sort_index()
+
+        #self.logger.info(f"New stim_sentcode counts: {word_df.stim_sentcode.value_counts()}")
 
         # Extract sentence level stim
         sent_df = pd.concat([word_df.groupby('stim_sentcode').start_t.min(),
@@ -303,36 +357,194 @@ class StimFromStartStopWordTimes(DictTrf):
         sent_df['length'] = sent_df.diff(axis=1).stop_t.rename('length')
         # sent_df = sent_df.join(sent_df.diff(axis=1).stop_t.rename('length'))
 
+        #ix = stim.index
+        #sentence_stim = pd.Series(0, index=ix)
+        #word_stim = pd.Series(0, index=ix)
+
+        ## # #
+        #for i, (gname, gdf) in enumerate(word_df.groupby('stim_sentcode')):
+        #    start_t = gdf.start_t.min()
+        #    stop_t = gdf.stop_t.max()
+
+        #    start_i = sentence_stim.index.get_loc(start_t, method='nearest')
+        #    stop_i = sentence_stim.index.get_loc(stop_t, method='nearest')
+
+        #    # Set this sentence to some incrementing indicator
+        #    sentence_stim.iloc[start_i: stop_i] = sentence_stim.max() + 1
+
+        #    # Spoken is word is all caps string
+        #    is_word_m = gdf.word.str.upper() == gdf.word
+
+        #    # Set each words region in this sentence within the word_stim
+        #    for ii, (_gname, _gdf) in enumerate(gdf[is_word_m].groupby('word')):
+        #        _start_t = _gdf.start_t.min()
+        #        _stop_t = _gdf.stop_t.max()
+
+        #        _start_i = sentence_stim.index.get_loc(_start_t, method='nearest')
+        #        _stop_i = sentence_stim.index.get_loc(_stop_t, method='nearest')
+        #        word_stim.iloc[_start_i: _stop_i] = word_stim.max() + 1
+
+        return dict(word_start_stop_times=word_df,
+                    sent_start_stop_time=sent_df,
+                    stim=stim
+                    #word_stim=word_stim, sentence_stim=sentence_stim
+                    )
+
+# Create multi task start stop that extracts the start and stop times
+# Create general stim from start stop times
+# Separate out current implementation of stim from startstop stimes to be sentence start stop extract?
+@attr.s
+@with_logger
+class MultiTaskStartStop(DictTrf):
+    """
+     extract the same start stop times, only shifted to align in offset from the start of stims in the parameter value
+    map
+    """
+    stim_val_map = attr.ib(attr.Factory(lambda: {
+        52: 'imagine',
+        53: 'mouth',
+    }))
+
+    def process(self, data_map):
+        _word_df = data_map['word_start_stop_times'].copy()
+        stim = data_map['stim']
+
+        self.logger.info("Hard coded to: Less than 51 and greater than zero")
+        start_listening_region = (stim[stim.lt(51) & stim.gt(0)]
+                                  .pipe(
+            # TODO: maybe first off of groupby would work, but not sure it sorts index first...
+            lambda s: s.groupby(s).apply(lambda s: s.sort_index().head(1)).reset_index(0, drop=True))
+                                  .pipe(lambda s: pd.Series(s.index, index=s.values, name='listening_region_start_t'))
+                                  )
+
+        start_listening_region.index = start_listening_region.index.rename('stim_sentcode')
+        end_listening_region = (stim[stim.lt(51) & stim.gt(0)]
+                                .pipe(
+            # TODO: maybe first off of groupby would work, but not sure it sorts index first...
+            lambda s: s.groupby(s).apply(lambda s: s.sort_index().tail(1)).reset_index(0, drop=True))
+                                .pipe(lambda s: pd.Series(s.index, index=s.values, name='listening_region_stop_t'))
+                                )
+
+        end_listening_region.index = end_listening_region.index.rename('stim_sentcode')
+
+        word_m_df = _word_df.merge(pd.concat([start_listening_region, end_listening_region], axis=1),
+                                    left_on='stim_sentcode', right_index=True)
+
+        #listening_start_t = word_m_df.listening_region_start_t.min()
+        #listening_stop_t = word_m_df.listening_region_stop_t.max()
+        self.logger.info(f"Finding closest labeled region to these stims: {self.stim_val_map}")
+        nearest_stim_d = dict()
+        for stim_val, stim_name in self.stim_val_map.items():
+            # Get stim values for this stim_name
+            _stim = stim[stim.eq(stim_val)]
+
+            # Find the stim time (with only these values) that is nearest each words start time
+            def closest_index_i_after_t(s, t, v):
+                # Filter stim to times past t threshold time
+                after_t_s = s[s.index >= t]
+                # Within the filtered data, what i index has the value closest to v
+                closest_i_after_t_s = after_t_s.index.get_loc(v, method='nearest')
+                # Access the index value at i
+                return after_t_s.index[closest_i_after_t_s]
+
+            stim_ixes = word_m_df.apply(lambda r: closest_index_i_after_t(_stim, r.stop_t, r.start_t), axis=1)
+            #stim_ixes = word_m_df.start_t.apply(lambda v: _stim.index.get_loc(v, method='nearest'))
+            # stim_ixes = _word_df.start_t.apply(lambda v: _stim.index.get_loc(v, method='nearest'))
+
+            # stim_ixes = _word_df.apply(lambda r: _stim.loc[_stim.index >= r.start_t].index.get_loc(r.start_t, method='nearest'), axis=1)
+            nearest_stim_d[f'{stim_name}_region_start_t'] = stim_ixes
+            #nearest_stim_d[f'nekarest_{stim_name}_stim_code'] = _stim.iloc[stim_ixes].values
+            # nearest_stim_d[f'nearest_{stim_name}_stim_t'] = _stim.index[stim_ixes]
+            #nearest_stim_d[f'{stim_name}_region_start_t'] = stim.index[stim_ixes]
+
+        # The nearest timestamp of each key to the index (stim start of start stop word table)
+        nearest_df = pd.DataFrame(nearest_stim_d, index=_word_df.index)
+        nearest_df.sort_index()
+
+        _word_nearest_df = word_m_df.join(nearest_df)
+
+        _word_nearest_df['speaking_length_t'] = (_word_nearest_df.stop_t - _word_nearest_df.start_t)
+
+        # for sent_code, s_df in _word_nearest_df.groupby('stim_sentcode'):
+        def make_ref_offset_from_sent_code_groups(s_df):
+            # how far away from start of index/ref time
+            ref_diff_s = (s_df.index.to_series()
+                          .pipe(lambda s: s - s.min())
+                          .fillna(pd.Timedelta(0))
+                          .rename('ref_diff_from_min'))
+
+            # Add the difference to the 'nearest' columns - the start of those regions
+            s_start_df = s_df.loc[:, nearest_df.columns].apply(lambda s: s + ref_diff_s)
+            s_start_df.columns = s_start_df.columns.str.replace('region_start', 'start')
+
+            # Determine the stop by adding the length to the new start times
+            # - couldn't get this to broadcast, hence apply()
+            s_stop_df = s_start_df.apply(lambda s: s + s_df['speaking_length_t'])
+            s_stop_df.columns = s_start_df.columns.str.replace('start', 'stop')
+
+            return s_start_df.join([s_stop_df, ref_diff_s])
+
+        self.logger.info(f"Offsetting the nearest times to labeled data by the distance from start (within reference)")
+        mtask_word_df = _word_nearest_df.join(_word_nearest_df
+                                              .groupby('stim_sentcode')
+                                              .apply(make_ref_offset_from_sent_code_groups))
+
+        return dict(word_start_stop_times=mtask_word_df)
+
+
+@attr.s
+@with_logger
+class StimFromStartStopTimes(DictTrf):
+    start_t_column = attr.ib('start_t')
+    stop_t_column = attr.ib('stop_t')
+    sent_code_column = attr.ib('stim_sentcode')
+    word_code_column = attr.ib('word')
+    word_stim_output_name = attr.ib('word_stim')
+    sentence_stim_output_name = attr.ib('sentence_stim')
+
+    def process(self, data_map):
+        _word_df = data_map['word_start_stop_times'].copy()
+        stim = data_map['stim']
         ix = stim.index
         sentence_stim = pd.Series(0, index=ix)
         word_stim = pd.Series(0, index=ix)
 
         # # #
-        for i, (gname, gdf) in enumerate(word_df.groupby('stim_sentcode')):
-            start_t = gdf.start_t.min()
-            stop_t = gdf.stop_t.max()
+        for i, (gname, gdf) in enumerate(_word_df.groupby(self.sent_code_column)):
+            start_t = gdf[self.start_t_column].min()
+            stop_t = gdf[self.stop_t_column].max()
 
             start_i = sentence_stim.index.get_loc(start_t, method='nearest')
             stop_i = sentence_stim.index.get_loc(stop_t, method='nearest')
 
+            # Set this sentence to some incrementing indicator
             sentence_stim.iloc[start_i: stop_i] = sentence_stim.max() + 1
 
+            # Spoken is word is all caps string
             is_word_m = gdf.word.str.upper() == gdf.word
 
-            for ii, (_gname, _gdf) in enumerate(gdf[is_word_m].groupby('word')):
-                _start_t = _gdf.start_t.min()
-                _stop_t = _gdf.stop_t.max()
+            # Set each words region in this sentence within the word_stim
+            for ii, (_gname, _gdf) in enumerate(gdf[is_word_m].groupby(self.word_code_column)):
+                _start_t = _gdf[self.start_t_column].min()
+                _stop_t = _gdf[self.stop_t_column].max()
 
                 _start_i = sentence_stim.index.get_loc(_start_t, method='nearest')
                 _stop_i = sentence_stim.index.get_loc(_stop_t, method='nearest')
                 word_stim.iloc[_start_i: _stop_i] = word_stim.max() + 1
 
-        return dict(word_start_stop_times=word_df,
-                    sent_start_stop_time=sent_df,
-                    word_stim=word_stim, sentence_stim=sentence_stim)
+        return {self.word_stim_output_name: word_stim,
+                self.sentence_stim_output_name: sentence_stim}
+        #return dict(word_stim=word_stim, sentence_stim=sentence_stim)
+
 
 
 def object_as_key_or_itself(key_or_value, remap=None):
+    """
+    Returns a value from (in order):
+        - remap[key_or_value]
+        - remap
+        - key_or_value
+    """
     if isinstance(remap, dict):
         value = remap[key_or_value]
     elif remap is not None:
@@ -353,35 +565,30 @@ class WindowSampleIndicesFromIndex(DictTrf):
     stim_target_value = attr.ib(1)
     window_size = attr.ib(pd.Timedelta(0.5, 's'))
     stim_value_remap = attr.ib(None)
+    stim_pre_process_f = attr.ib(lambda _stim: _stim)
 
     def process(self, data_map):
         return self.make_sample_indices(data_map[self.stim_key], data_map[self.fs_key], win_size=self.window_size,
                                         index_shift=self.index_shift,
                                         stim_target_value=self.stim_target_value, stim_value_remap=self.stim_value_remap,
-                                        existing_sample_indices_map=data_map.get('sample_index_map'),)
+                                        existing_sample_indices_map=data_map.get('sample_index_map'),
+                                        stim_pre_process_f=self.stim_pre_process_f)
 
     @classmethod
     def make_sample_indices(cls, stim, fs, win_size,
                             index_shift, stim_target_value, stim_value_remap,
-                            existing_sample_indices_map):
+                            existing_sample_indices_map,
+                            stim_pre_process_f):
         index_shift = pd.Timedelta(0, 's') if index_shift is None else index_shift
         existing_sample_indices_map = dict() if existing_sample_indices_map is None else existing_sample_indices_map
         sample_indices = dict()
         expected_window_samples = int(fs * win_size.total_seconds())
 
-        target_indexes = (stim == stim_target_value).pipe(lambda s: s[s].index.tolist())
+        target_indexes = (stim.pipe(stim_pre_process_f) == stim_target_value).pipe(lambda s: s[s].index.tolist())
         target_indices = [stim.loc[offs + index_shift:offs + win_size + index_shift].iloc[:expected_window_samples].index
                           for offs in target_indexes
                           if len(stim.loc[offs + index_shift:offs + win_size + index_shift]) >= expected_window_samples]
 
-#        if isinstance(stim_value_remap, dict):
-#            stim_key = stim_value_remap[stim_target_value]
-#        elif stim_value_remap is not None:
-#            stim_key = stim_value_remap
-#        elif stim_value_remap is None:
-#            stim_key = stim_target_value
-#        else:
-#            raise ValueError(f"Dont know how to handle stim_value_remap of type: {type(stim_value_remap)}")
         stim_key = object_as_key_or_itself(stim_target_value, stim_value_remap)
         sample_indices[stim_key] = sample_indices.get(stim_key, list()) + target_indices
 
@@ -469,15 +676,6 @@ class WindowSampleIndicesFromStim(DictTrf):
             target_indices = [stim.loc[offs:offs + win_size].iloc[:expected_window_samples].index
                                 for offs in target_start_ixes[:max_target_region_size]
                                     if len(stim.loc[offs:offs + win_size]) >= expected_window_samples]
-
-#            if isinstance(stim_value_remap, dict):
-#                stim_key = stim_value_remap[stim_value]
-#            elif stim_value_remap is not None:
-#                stim_key = stim_value_remap
-#            elif stim_value_remap is None:
-#                stim_key = stim_value
-#            else:
-#                raise ValueError(f"Dont know how to handle stim_value_remap of type: {type(stim_value_remap)}")
 
             stim_key = object_as_key_or_itself(stim_value, stim_value_remap)
             sample_indices[stim_key] = sample_indices.get(stim_key, list()) + target_indices
