@@ -109,3 +109,48 @@ def plot_region_over_signal(signal_s, region_min, region_max,
     fig = ax.get_figure()
     fig.patch.set_facecolor('white')
     return fig, ax, ax2
+
+
+def plot_multi_region_over_signal(signal_s, region_min_max_tuples,  # region_min, region_max,
+                            padding_time=pd.Timedelta('1s'),
+                            plot_signal=True,
+                            ax=None, signal_plot_kwargs=None, region_plot_kwargs=None):
+    def_signal_plot_kwargs = dict(color='tab:green', alpha=0.5)
+    if isinstance(signal_plot_kwargs, dict):
+        def_signal_plot_kwargs.update(signal_plot_kwargs)
+    elif signal_plot_kwargs is not None:
+        raise ValueError()
+
+    signal_plot_kwargs = def_signal_plot_kwargs
+
+    region_plot_kwargs = dict() if region_plot_kwargs is None else region_plot_kwargs
+
+    region_min = min(t_ for t_, _t, _, _ in region_min_max_tuples)
+    region_max = max(_t for t_, _t, _, _ in region_min_max_tuples)
+
+    plt_min = region_min - padding_time
+
+    plt_max = region_max + padding_time
+
+    signal_s = signal_s.loc[plt_min: plt_max]
+    plt_ix = signal_s.index
+
+    ax2 = ax
+    if plot_signal:
+        ax = signal_s.loc[plt_min:plt_max].plot(ax=ax, **signal_plot_kwargs)
+        ax2 = ax.twinx()
+
+    region_lines_l = list()
+    for t_, _t, label, v in region_min_max_tuples:
+        region_line_s = pd.Series(0, index=plt_ix, name=label)
+        region_line_s.loc[t_: _t] = v
+        region_lines_l.append(region_line_s)
+
+    region_df = pd.concat(region_lines_l, axis=1)
+
+    ax2 = region_df.plot(ax=ax2, **region_plot_kwargs)
+
+    fig = ax.get_figure()
+    fig.patch.set_facecolor('white')
+
+    return fig, ax, ax2
