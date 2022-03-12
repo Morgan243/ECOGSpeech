@@ -390,7 +390,7 @@ class SentCodeFromStartStopWordTimes(DictTrf):
                     #word_stim=word_stim, sentence_stim=sentence_stim
                     )
 
-# Create multi task start stop that extracts the start and stop times
+# Create multi-task start stop that extracts the start and stop times
 # Create general stim from start stop times
 # Separate out current implementation of stim from startstop stimes to be sentence start stop extract?
 @attr.s
@@ -537,7 +537,6 @@ class StimFromStartStopTimes(DictTrf):
         #return dict(word_stim=word_stim, sentence_stim=sentence_stim)
 
 
-
 def object_as_key_or_itself(key_or_value, remap=None):
     """
     Returns a value from (in order):
@@ -622,8 +621,6 @@ class WindowSampleIndicesFromStim(DictTrf):
                                         target_onset_shift=self.target_onset_shift,
                                         target_offset_ref=self.target_offset_reference,
                                         target_offset_shift=self.target_offset_shift,
-                                        #silence_value=self.silence_stim_value, silence_samples=self.silence_samples,
-                                        #silent_window_scale=self.silent_window_scale,
                                         max_target_region_size=self.max_target_region_size,
                                         existing_sample_indices_map=data_map.get('sample_index_map'),
                                         stim_value_remap=self.stim_value_remap)
