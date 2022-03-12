@@ -15,7 +15,7 @@ from torch.utils import data as tdata
 from tqdm.auto import tqdm
 
 from ecog_speech import feature_processing, utils, pipeline
-from sklearn.pipeline import  Pipeline
+from sklearn.pipeline import Pipeline
 
 with_logger = utils.with_logger(prefix_name=__name__)
 
@@ -773,6 +773,7 @@ class HarvardSentences(BaseASPEN):
         p_map = {
             'audio_gate': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
                                    + audio_gate_steps + [('output', 'passthrough')]).transform,
+
             'audio_gate_imagine': Pipeline(parse_arr_steps + parse_input_steps + [
                 # Creates listening, imagine, mouth
                 ('multi_task_start_stop', pipeline.MultiTaskStartStop()),
@@ -784,7 +785,7 @@ class HarvardSentences(BaseASPEN):
                                                                          stop_t_column='listening_region_stop_t',
                                                                          word_stim_output_name='listening_word_stim',
                                                                          sentence_stim_output_name='listening_sentence_stim')),
-                ('speaking_indices', pipeline.WindowSampleIndicesFromStim('word_stim',
+                ('speaking_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',#'word_stim',
                                                                           target_onset_shift=pd.Timedelta(-.5, 's'),
                                                                           target_offset_shift=pd.Timedelta(-0.5, 's'))),
                 ('silent_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',
@@ -799,9 +800,9 @@ class HarvardSentences(BaseASPEN):
             ]).transform,
             #'audio_gate': Pipeline(parse_arr_steps + parse_input_steps + audio_gate_steps + [('output', 'passthrough')]).transform,
 
-            'minimal':
-                feature_processing.SubsampleECOG() >>
-                feature_processing.WordStopStartTimeMap() >> feature_processing.ChangSampleIndicesFromStim()
+            #'minimal':
+            #    feature_processing.SubsampleECOG() >>
+            #    feature_processing.WordStopStartTimeMap() >> feature_processing.ChangSampleIndicesFromStim()
         }
         p_map['default'] = p_map[default]
         return p_map
