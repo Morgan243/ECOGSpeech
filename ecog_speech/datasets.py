@@ -255,8 +255,8 @@ class BaseASPEN(BaseDataset):
     transform = attr.ib(None)
     target_transform = attr.ib(None)
 
-    power_threshold = attr.ib(0.007)
-    power_q = attr.ib(0.70)
+    #power_threshold = attr.ib(0.007)
+    #power_q = attr.ib(0.70)
     pre_processing_pipeline = attr.ib(None)
     # If using one source of data, with different `selected_word_indices`, then
     # passing the first NWW dataset to all subsequent ones built on the same source data
@@ -773,6 +773,9 @@ class HarvardSentences(BaseASPEN):
         p_map = {
             'audio_gate': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
                                    + audio_gate_steps + [('output', 'passthrough')]).transform,
+            'audio_gate_speaking_only': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
+                                                  # Slice out the generation of the silence stim data - only speaking
+                                                 + audio_gate_steps[:-1] + [('output', 'passthrough')]).transform,
 
             'audio_gate_imagine': Pipeline(parse_arr_steps + parse_input_steps + [
                 # Creates listening, imagine, mouth
@@ -792,17 +795,10 @@ class HarvardSentences(BaseASPEN):
                                                                         target_onset_shift=pd.Timedelta(.5, 's'),
                                                                         target_offset_shift=pd.Timedelta(-0.5, 's'),
                                                                         stim_value_remap=0)),
-                #('silence_indices', pipeline.WindowSampleIndicesFromIndex('listening_word_stim',
-                #                                                          stim_pre_process_f=lambda _stim: _stim.gt(0).astype(int),
-                #                                                          stim_value_remap=0,)),
 
                 ('output', 'passthrough')
             ]).transform,
-            #'audio_gate': Pipeline(parse_arr_steps + parse_input_steps + audio_gate_steps + [('output', 'passthrough')]).transform,
 
-            #'minimal':
-            #    feature_processing.SubsampleECOG() >>
-            #    feature_processing.WordStopStartTimeMap() >> feature_processing.ChangSampleIndicesFromStim()
         }
         p_map['default'] = p_map[default]
         return p_map
@@ -821,6 +817,7 @@ class HarvardSentences(BaseASPEN):
         fname = f"{location}{patient:02d}_Task_1.mat"
 
         return fname
+
 
 
 @attr.s

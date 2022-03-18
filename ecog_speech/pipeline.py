@@ -688,5 +688,6 @@ class WindowSampleIndicesFromStim(DictTrf):
         if existing_sample_indices_map is not None:
             existing_sample_indices_map.update(sample_indices)
             sample_indices = existing_sample_indices_map
+
         return dict(sample_index_map=sample_indices, n_samples_per_window=expected_window_samples)
 
