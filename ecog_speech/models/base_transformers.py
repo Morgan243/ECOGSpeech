@@ -277,7 +277,7 @@ class CoG2Vec(torch.nn.Module):
         )  # to NxBxTxC
         return negs, neg_idxs
 
-    def forward(self, X):
+    def forward(self, X, features_only=False, mask=True):
         # TODO: Wave2vec says normalize the raw waveform to zero mean and unit variance - maje sure this happening?
         # Extract features from signal
         X_f = self.feature_model(X)
@@ -302,8 +302,9 @@ class CoG2Vec(torch.nn.Module):
         # Go ahead and make a copy of the original data (Same move made in Wave2vec2.py @ line 1021)
         masked_X_f = torch.clone(umasked_X_f)
 
-        # overwrite masked indices with the learnable mask embedding
-        masked_X_f[mask_ixes] = self.mask_embedding
+        if mask:
+            # overwrite masked indices with the learnable mask embedding
+            masked_X_f[mask_ixes] = self.mask_embedding
 
         # Quantize the representation
         masked_X_f_c = self.context_model(masked_X_f)
@@ -312,16 +313,25 @@ class CoG2Vec(torch.nn.Module):
         # x = masked_X_f_c.permute(0, 2, 1)
         x = masked_X_f_c
 
+        y = _y.transpose(1, 2).contiguous()
 
         # #################################
         # Code block from fairseq wave2vec2
+        if features_only:
+            return {
+                "x": x,
+                #"padding_mask": padding_mask,
+                "features": umasked_X_f,
+                #"layer_results": layer_results,
+            }
+
         negatives_from_everywhere = False
         unmasked_features = umasked_X_f
         mask_indices = mask_ixes
+
         padding_count = 0
         # Swap the original masked data back to C, T - contiguous call is due to limitation with view() or reshape()
         # in torch tensors
-        y = _y.transpose(1, 2).contiguous()
         n_negatives = 100
         cross_sample_negatives = 0
         codebook_negatives = 0  # 100 # This doesn't work..
