@@ -163,6 +163,21 @@ class SubsampleSignal(DictTrf):
 
 @attr.s
 @with_logger
+class StandardNormSignal(DictTrf):
+    signal_key = attr.ib('signal')
+    output_key = attr.ib('signal')
+    #signal_rate_key = attr.ib('fs_signal')
+    rate = attr.ib(2)
+
+    def process(self, data_map):
+        df = data_map[self.signal_key]
+        mu = df.mean()
+        std = df.std()
+        return {self.output_key: (df - mu) / std}
+
+
+@attr.s
+@with_logger
 class PowerThreshold(DictTrf):
     stim_key = attr.ib('stim')
     audio_key = attr.ib('audio')
