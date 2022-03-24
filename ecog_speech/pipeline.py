@@ -415,10 +415,14 @@ class MultiTaskStartStop(DictTrf):
      extract the same start stop times, only shifted to align in offset from the start of stims in the parameter value
     map
     """
-    stim_val_map = attr.ib(attr.Factory(lambda: {
-        52: 'imagine',
-        53: 'mouth',
-    }))
+    stim_val_map = attr.ib()
+
+    @stim_val_map.default
+    def stim_val_map_factory(self):
+        return ({
+            52: 'imagine',
+            53: 'mouth',
+        })
 
     def process(self, data_map):
         _word_df = data_map['word_start_stop_times'].copy()

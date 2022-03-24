@@ -178,16 +178,16 @@ class CoG2Vec(torch.nn.Module):
             self.feature_model = torch.nn.Sequential(
                 # torch.nn.Conv1d((input_channels:=X_barr.shape[1]), input_channels, 10, stride=5),
                 torch.nn.BatchNorm1d(1),
-                torch.nn.Conv1d((input_channels := 1), (h_channels := 128), 7, stride=5),
+                torch.nn.Conv1d((input_channels := 1), (h_channels := 256), 7, stride=5),
                 #torch.nn.Dropout(p=dropout),
                 torch.nn.GELU(),
 
-                #torch.nn.BatchNorm1d(h_channels),
                 torch.nn.Conv1d(h_channels, h_channels, 5, stride=2),
+                torch.nn.BatchNorm1d(h_channels),
                 #torch.nn.Dropout(p=dropout),
                 torch.nn.GELU(),
 
-                torch.nn.Conv1d(h_channels, h_channels, 3, stride=1),
+                torch.nn.Conv1d(h_channels, (f_dim:=128), 3, stride=1),
                 #torch.nn.Dropout(p=dropout),
                 torch.nn.GELU(),
                 #torch.nn.Conv1d(h_channels, h_channels, 5, stride=3),
@@ -198,8 +198,6 @@ class CoG2Vec(torch.nn.Module):
         # Run test data through to get sizes automatically
         with torch.no_grad():
             self.t_feat_o = self.feature_model(self.t_x)
-
-
 
         # for unseen regions
         self.mask_embedding = torch.nn.Parameter(
@@ -220,37 +218,53 @@ class CoG2Vec(torch.nn.Module):
         _, self.C, self.T = self.t_feat_o.shape
 
         # TODO: Way to override positional part of transformer? Need to integrate xyz eventually
-        encoder_layer = torch.nn.TransformerEncoderLayer(d_model=h_channels, nhead=8, batch_first=True)
-        transformer_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=6)
-        self.context_model = transformer_encoder
+        self.context_model = context_model
+        if self.context_model is None:
+            encoder_layer = torch.nn.TransformerEncoderLayer(d_model=f_dim, nhead=8, batch_first=True)
+            transformer_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=6)
+            self.context_model = transformer_encoder
 
         # Use existing Gumbel Quant
         import fairseq
         self.quantizer = fairseq.modules.GumbelVectorQuantizer(
             # TODO: parameterize mor of these?
-            dim=h_channels, num_vars=300, temp=(1, 0.1, 0.9), groups=2, combine_groups=False, vq_dim=h_channels,
+            dim=f_dim, num_vars=300, temp=(1, 0.1, 0.9), groups=2, combine_groups=False, vq_dim=f_dim,
             time_first=True,
             # defaults in fairseq config
             weight_proj_factor=3, weight_proj_depth=1
         )
 
         # Currently unused, but in future may need one or more linear projections from one space to another
-        self.projection_model = torch.nn.Linear(self.t_feat_o.shape[-1], self.t_feat_o.shape[-1])
+        self.projection_model = projection_model
+
+        if self.projection_model is None:
+            self.projection_model = torch.nn.Linear(self.t_feat_o.shape[-1], self.t_feat_o.shape[-1])
 
     # Adapted From fairseq wave2vec2 (remove xla check
     def compute_preds(self, x, y, negatives, ):
+        # Negatives: n_negatives x B x T x C
+
+        # determine where negatives are that are also positives
+        # This is at the feature level, so identifying a specific negative,
+        # within a sample in the batch, at specific time tgat is actually a positive
         neg_is_pos = (y == negatives).all(-1)
+        # Add the first dimension to match with negatives addition first dim of n_negatives size
         y = y.unsqueeze(0)
+        # Combine these on the first dim - actual values now appear as a +1 to the negatives
+        # but always at the first (0th) dimension
         targets = torch.cat([y, negatives], dim=0)
 
+        # Measure context models output similarity the K+1 targets
         logits = torch.cosine_similarity(x.float(), targets.float(), dim=-1)
         logits = logits / self.logit_temp
         logits = logits.type_as(x)
 
         if neg_is_pos.any():
+            # index passed the 0th element (the true positive) and set these to negative inf
+            # A good model would identify these, but the BCE penalty would penalize those, so
+            # just wipe them out with a very low logit
             logits[1:][neg_is_pos] = float("-inf")
-            #logits[neg_is_pos] = float("-inf")
-
+            # original from fairseq
             #logits[1:] = index_put(logits[1:], neg_is_pos, float("-inf"))
 
         return logits
@@ -470,8 +484,10 @@ class CoG2Vec(torch.nn.Module):
                     padding_count=padding_count,
                 )
 
+        # Get outputs from the context model for masked regions - it's estimatino of the quantized output
         x = x[mask_indices].view(x.size(0), -1, x.size(-1))
 
+        #
         preds = self.compute_preds(x, y, negs)
 
         return dict(x=x, y=y, negs=negs, preds=preds,
@@ -518,11 +534,106 @@ class CoG2Vec(torch.nn.Module):
         #return mask_ixes, _X_f, trf_out, proj_x
 
 from ecog_speech.models.base import Trainer
-
+from tqdm.auto import tqdm
 class Cog2VecTrainer(Trainer):
     squeeze_first = True
     #model_output_logits_key = 'x'
     model_output_logits_key = 'preds'
+
+    def _score(self, epoch_i, dataloader, model_key='model'):
+        model = self.model_map[model_key]
+
+        self.best_cv = getattr(self, 'best_cv', np.inf)
+
+        preds_l, actuals_l, loss_l = list(), list(), list()
+        with torch.no_grad():
+            with tqdm(total=len(dataloader), desc="Eval") as pbar:
+                for i, _x in enumerate(dataloader):
+                    _X = _x['signal_arr'].to(self.device)
+                    _b_X = _X.select(1, sens_id := 10).unsqueeze(1)
+                    out_d = model(_b_X, mask=False, features_only=True)
+                    y = cog2vec.quantizer(out_d['features'])['x']
+                    scores = torch.cosine_similarity(out_d['x'], y, dim=-1)
+                    scores_l = 1 - scores.mean()
+                    loss_l.append(scores_l.detach().cpu().item())
+                    #preds = model(_x['ecog_arr'].to(self.device))
+                    #actuals = _x['text_arr'].to(self.device)
+                    #loss = self.criterion(preds, actuals)
+
+                    #loss_l.append(loss.detach().cpu().item())
+
+                    pbar.update(1)
+
+                mean_loss = np.mean(loss_l)
+                desc = "Mean Eval Loss: %.5f" % mean_loss
+                if self.model_regularizer is not None:
+                    reg_l = self.model_regularizer(model)
+                    desc += (" (+ %.6f reg loss = %.6f)" % (reg_l, mean_loss + reg_l))
+                else:
+                    reg_l = 0.
+                overall_loss = (mean_loss + reg_l)
+                if overall_loss < self.best_cv:
+
+                    self.best_model_state = base.copy_model_state(model)
+                    self.best_model_epoch = epoch_i
+                    self.best_cv = overall_loss
+                    desc += "[[NEW BEST]]"
+
+                pbar.set_description(desc)
+
+        self.model_map['model'].train()
+        return loss_l
+
+    def _eval(self, epoch_i, dataloader, model_key='model'):
+        model = self.model_map[model_key]
+        model.eval()
+        self.best_cv = getattr(self, 'best_cv', np.inf)
+
+        preds_l, actuals_l, loss_l = list(), list(), list()
+        with torch.no_grad():
+            with tqdm(total=len(dataloader), desc="Eval") as pbar:
+                for i, _x in enumerate(dataloader):
+                    _X = _x['signal_arr'].to(self.device)
+                    X = _X.select(1, np.random.randint(0, _X.shape[1])).unsqueeze(1)
+
+                    if self.squeeze_first:
+                        X = X.squeeze()
+
+                    m_d = model(X)
+
+                    logits = m_d[self.model_output_logits_key]
+
+                    logits = logits.transpose(0, 2)
+                    logits = logits.reshape(-1, logits.size(-1))
+                    target = torch.zeros_like(logits)
+
+                    loss = F.cross_entropy(
+                        logits, target[:, 0].long(), reduction='sum'  # weights, reduction=reduction
+                    )
+                    loss_l.append(loss.detach().cpu().item())
+
+                    pbar.update(1)
+
+                mean_loss = np.mean(loss_l)
+                desc = "Mean Eval Loss: %.5f" % mean_loss
+                if self.model_regularizer is not None:
+                    reg_l = self.model_regularizer(model)
+                    desc += (" (+ %.6f reg loss = %.6f)" % (reg_l, mean_loss + reg_l))
+                else:
+                    reg_l = 0.
+                overall_loss = (mean_loss + reg_l)
+                if overall_loss < self.best_cv:
+
+                    self.best_model_state = base.copy_model_state(model)
+                    self.best_model_epoch = epoch_i
+                    self.best_cv = overall_loss
+                    desc += "[[NEW BEST]]"
+
+                pbar.set_description(desc)
+
+        self.model_map['model'].train()
+        return loss_l
+
     def train_inner_step(self, epoch_i, data_batch):
         res_d = dict()
 
@@ -590,7 +701,7 @@ if __name__ == """__main__""":
 
     from ecog_speech import datasets
 
-    hvs_tuples = datasets.HarvardSentences.make_tuples_from_sets_str('UCSD-28')
+    hvs_tuples = datasets.HarvardSentences.make_tuples_from_sets_str('UCSD-22')
     hvs_tuples
     hvs = datasets.HarvardSentences(hvs_tuples)
 
