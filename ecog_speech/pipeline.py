@@ -583,14 +583,15 @@ class WindowSampleIndicesFromIndex(DictTrf):
     stim_target_value = attr.ib(1)
     window_size = attr.ib(pd.Timedelta(0.5, 's'))
     stim_value_remap = attr.ib(None)
-    stim_pre_process_f = attr.ib(lambda _stim: _stim)
+    stim_pre_process_f = attr.ib(None)
 
     def process(self, data_map):
         return self.make_sample_indices(data_map[self.stim_key], data_map[self.fs_key], win_size=self.window_size,
                                         index_shift=self.index_shift,
                                         stim_target_value=self.stim_target_value, stim_value_remap=self.stim_value_remap,
                                         existing_sample_indices_map=data_map.get('sample_index_map'),
-                                        stim_pre_process_f=self.stim_pre_process_f)
+                                        stim_pre_process_f=self.stim_pre_process_f if self.stim_pre_process_f is not None
+                                                            else lambda _stim: _stim)
 
     @classmethod
     def make_sample_indices(cls, stim, fs, win_size,
