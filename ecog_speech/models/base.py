@@ -639,7 +639,7 @@ class Trainer:
                             # Expecting numerics due to this code - take mean of the metric/loss
                             v_l = np.mean(epoch_batch_results[k])
                             # build up the prog bar description string
-                            prog_msgs.append(f"{k}: {np.round(v_l, 6)}")
+                            prog_msgs.append(f"{k[:5]}: {np.round(v_l, 6)}")
 
                         msg = " || ".join(prog_msgs)
                         batch_pbar.set_description(msg)
