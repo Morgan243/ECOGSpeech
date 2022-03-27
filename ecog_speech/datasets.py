@@ -739,7 +739,7 @@ class HarvardSentences(BaseASPEN):
 
         parse_input_steps = [
             ('sensor_selection', pipeline.IdentifyGoodAndBadSensors(sensor_selection=self.sensor_columns)),
-            #('rescale_signal', pipeline.StandardNormSignal()),
+            ('rescale_signal', pipeline.StandardNormSignal()),
             ('subsample', pipeline.SubsampleSignal()),
             ('sent_from_start_stop', pipeline.SentCodeFromStartStopWordTimes()),
 
