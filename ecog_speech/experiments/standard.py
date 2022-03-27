@@ -368,6 +368,8 @@ default_model_hyperparam_option_kwargs = [
     dict(dest='--pre-processing-pipeline', default='default', type=str),
 
     dict(dest='--learning-rate', default=0.001, type=float),
+    dict(dest='--lr-adjust-patience', default=None, type=float),
+    dict(dest='--lr-adjust-factor', default=0.1, type=float),
     dict(dest='--dense-width', default=None, type=int),
     dict(dest='--sn-n-bands', default=1, type=int),
     dict(dest='--sn-kernel-size', default=31, type=int),

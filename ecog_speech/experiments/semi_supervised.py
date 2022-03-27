@@ -20,9 +20,20 @@ def run(options):
     train_hvs = datasets.HarvardSentences(train_hvs_tuples, pre_processing_pipeline='audio_gate_speaking_only')
 
     train_dl = train_hvs.to_dataloader(num_workers=8, batch_size=options.batch_size)
+    trainer_kws = dict(lr_adjust_on_cv_loss=True)
+    if options.lr_adjust_patience is not None:
+        print("Configuring LR scheduler for model")
+        lr_schedule_kws = dict(patience=options.lr_adjust_patience, factor=options.lr_adjust_factor, verbose=True)
+        trainer_kws.update(dict(lr_adjust_on_plateau_kws=lr_schedule_kws,
+                                lr_adjust_on_cv_loss=True,
+                                model_name_to_lr_adjust='model'))
+
     trainer = base_transformers.Cog2VecTrainer(model_map=dict(model=model), opt_map=dict(),
                                                train_data_gen=train_dl, cv_data_gen=train_dl,
-                                               learning_rate=options.learning_rate, device=options.device)
+                                               learning_rate=options.learning_rate,
+                                               early_stopping_patience=options.early_stopping_patience,
+                                               device=options.device,
+                                               **trainer_kws)
     trainer.model_map['model'].quantizer.codebook_indices = trainer.model_map['model'].quantizer.codebook_indices.to(trainer.device)
 
     trainer.squeeze_first = False
@@ -74,9 +85,6 @@ tl_options = [
     dict(dest='--ppl-weight', default=10, type=float),
     dict(dest='--quant-num-vars', default=10, type=int),
     dict(dest='--quant-num-groups', default=2, type=int),
-    #dict(dest='--pre-train-sets', default=None, type=str),
-    #dict(dest='--pre-cv-sets', default=None, type=str),
-    #dict(dest='--pre-test-sets', default=None, type=str),
 ]
 
 tl_option_kwargs = default_option_kwargs + tl_options
