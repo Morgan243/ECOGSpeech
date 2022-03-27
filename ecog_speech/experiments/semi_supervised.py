@@ -11,15 +11,22 @@ def run(options):
     model_kws = dict(input_shape=(1, 256), feature_model=None, context_model=None, projection_model=None,
                         negatives_from_everywhere=True, feature_grad_mult=.1,
                         n_negatives=50, codebook_negatives=25, cross_sample_negatives=25,
-                        mask_length=4, quant_num_vars=options.quant_num_vars,
+                        mask_length=4, n_encoder_heads=options.n_encoder_heads, n_encoder_layers=options.n_encoder_layers,
+                     quant_num_vars=options.quant_num_vars,
                      quant_num_groups=options.quant_num_groups)
+
     model = base_transformers.CoG2Vec(**model_kws)
-    model(model.t_x)
+
+    # Shake out any forward pass errors now by running example data through model
+    with torch.no_grad():
+        model(model.t_x)
 
     from ecog_speech import datasets
 
     # TODO: Need way to override defaults in options
-    dataset_map, dl_map, eval_dl_map = standard.make_datasets_and_loaders(options, dataset_cls=datasets.HarvardSentences)
+    #options.pre_processing_pipeline = 'audio_gate_speaking_only'
+    dataset_map, dl_map, eval_dl_map = standard.make_datasets_and_loaders(options, dataset_cls=datasets.HarvardSentences,
+                                                                          pre_processing_pipeline='audio_gate_speaking_only')
 
     # Default lr reduce to False, only setup if at patience is set
     trainer_kws = dict(lr_adjust_on_cv_loss=False)
@@ -87,6 +94,9 @@ semisuper_options = [
     dict(dest='--ppl-weight', default=10, type=float),
     dict(dest='--quant-num-vars', default=10, type=int),
     dict(dest='--quant-num-groups', default=2, type=int),
+
+    dict(dest='--n-encoder-layers', default=12, type=int),
+    dict(dest='--n-encoder-heads', default=8, type=int),
 ]
 
 ss_option_kwargs = default_option_kwargs + semisuper_options

@@ -164,6 +164,7 @@ class CoG2Vec(torch.nn.Module):
                  negatives_from_everywhere=True, n_negatives=100,
                  cross_sample_negatives=0, codebook_negatives=0,
                  mask_length=2, mask_prob=0.2,
+                 n_encoder_heads=8, n_encoder_layers=12,
                  quant_num_vars=300, quant_num_groups=2,
                  squeeze_first=True):
         super().__init__()
@@ -244,10 +245,13 @@ class CoG2Vec(torch.nn.Module):
         self.positional_enc = PositionalEncoding(d_model=embed_dim)
 
         # TODO: Way to override positional part of transformer? Need to integrate xyz eventually
+        self.n_heads = n_encoder_heads
+        self.num_encoder_layers = n_encoder_layers
         self.context_model = context_model
         if self.context_model is None:
-            encoder_layer = torch.nn.TransformerEncoderLayer(d_model=f_dim, nhead=8, batch_first=True, activation="gelu")
-            transformer_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=8)
+            encoder_layer = torch.nn.TransformerEncoderLayer(d_model=f_dim, nhead=self.n_heads, batch_first=True,
+                                                             activation="gelu")
+            transformer_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=self.num_encoder_layers)
             self.context_model = transformer_encoder
 
         # Use existing Gumbel Quant
@@ -651,6 +655,7 @@ class Cog2VecTrainer(Trainer):
         optim.zero_grad()
 
         X_barr = data_batch['signal_arr'].to(self.device)
+        bsz = X_barr.shape[0]
         # Select a single sensor for now and remove the singleton dimension
         X = X_barr.select(1, np.random.randint(0, X_barr.shape[1])).unsqueeze(1)
 
@@ -688,12 +693,15 @@ class Cog2VecTrainer(Trainer):
             corr = _max.long().sum().item() - both.long().sum().item()
             count = float(_max.numel())
 
-        return dict(total_loss=total_loss.detach().cpu().item(),
-                    bce_logits=loss.detach().cpu().item(),
+        tl = total_loss.detach().cpu().item()
+        l = loss.detach().cpu().item()
+        return dict(total_loss=(tl - l) + (l/bsz),
+                    bce_logits=loss.detach().cpu().item() / bsz,
                     perplexity=ppl_l.detach().cpu().item(),
                     #c_perplexity=cpl_l.detach().cpu().item(),
                     feature=fpen_l.detach().cpu().item(),
-                    acc=(corr / count))
+                    acc=(corr / count),
+                    n = count)
 
     @classmethod
     def generate_outputs_from_model_inner_step(cls, model, data_batch, criterion=None, device=None,

@@ -86,6 +86,7 @@ def make_model(options=None, nww=None, model_name=None, model_kws=None, print_de
 def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv_data_kws=None, test_data_kws=None,
                               train_sets_str=None, cv_sets_str=None, test_sets_str=None,
                               train_sensor_columns='valid',
+                              pre_processing_pipeline=None,
                               num_dl_workers=8) -> tuple:
     """
     Helper method to create instances of dataset_cls as specified in the command-line options and
@@ -125,7 +126,8 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     logger.info("CV tuples: " + str(cv_p_tuples))
     logger.info("Test tuples: " + str(test_p_tuples))
 
-    base_kws = dict(pre_processing_pipeline=options.pre_processing_pipeline,
+    base_kws = dict(pre_processing_pipeline=options.pre_processing_pipeline if pre_processing_pipeline is None
+                                                    else pre_processing_pipeline,
                     data_subset=options.data_subset)
     if train_data_kws is None:
         train_data_kws = dict(patient_tuples=train_p_tuples, **base_kws)
@@ -168,7 +170,7 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     dataset_map['train'] = train_nww
 
     if cv_data_kws['patient_tuples'] is not None:
-        dataset_map['cv'] = dataset_cls(power_q=options.power_q,
+        dataset_map['cv'] = dataset_cls(#power_q=options.power_q,
                                         sensor_columns=train_nww.selected_columns,
                                         **cv_data_kws)
     else:
@@ -180,7 +182,7 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
                                 cv=cv_nww))
 
     if test_data_kws['patient_tuples'] is not None:
-        dataset_map['test'] = dataset_cls(power_q=options.power_q,
+        dataset_map['test'] = dataset_cls(#power_q=options.power_q,
                                           sensor_columns=train_nww.selected_columns,
                                           **test_data_kws)
     else:

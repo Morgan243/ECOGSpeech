@@ -640,6 +640,8 @@ class Trainer:
 
                         prog_msgs = list()
                         for k, v in update_d.items():
+                            if k == 'n': continue
+
                             # TODO: What about spruious results - can't quite infer epoch?
                             #  Maybe do list of dicts instead?
                             # if this result key hasn't been seen, init a list of values
@@ -650,6 +652,8 @@ class Trainer:
                                 epoch_batch_results[k].append(v)
                             # Expecting numerics due to this code - take mean of the metric/loss
                             v_l = np.mean(epoch_batch_results[k])
+                            # Just assume they are all the same size
+                            #v_l = np.sum(epoch_batch_results[k]) / (self.n_samples * update_d['n'])
                             # build up the prog bar description string
                             prog_msgs.append(f"{k[:5]}: {np.round(v_l, 6)}")
 
@@ -662,6 +666,8 @@ class Trainer:
 
                 self.epoch_batch_res_map[epoch] = epoch_batch_results
                 self.epoch_res_map[epoch] = {k: np.mean(v) for k, v in epoch_batch_results.items()}
+                # Just assume they are all the same size
+                #self.epoch_res_map[epoch] = {k: np.sum(v) / (self.n_samples * update_d['n']) for k, v in epoch_batch_results.items()}
 
                 self.epochs_trained += 1
                 self.epoch_cb_history.append({k: cb(self) for k, cb in epoch_callbacks.items()})
