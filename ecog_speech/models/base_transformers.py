@@ -695,29 +695,36 @@ class Cog2VecTrainer(Trainer):
                     feature=fpen_l.detach().cpu().item(),
                     acc=(corr / count))
 
+    @classmethod
+    def generate_outputs_from_model_inner_step(cls, model, data_batch, criterion=None, device=None,
+                                               squeeze_first=True, model_output_logits_key='preds'):
+        _X = data_batch['signal_arr'].to(device)
+        X = _X.select(1, np.random.randint(0, _X.shape[1])).unsqueeze(1)
+
+        if squeeze_first:
+            X = X.squeeze()
+
+        m_d = model(X)
+
+        logits = m_d[model_output_logits_key]
+
+        logits = logits.transpose(0, 2)
+        logits = logits.reshape(-1, logits.size(-1))
+        target = torch.zeros_like(logits)
+
+        loss = F.cross_entropy(
+            logits, target[:, 0].long(), reduction='sum'  # weights, reduction=reduction
+        )
+
+
 if __name__ == """__main__""":
-    from ecog_speech.models import base_transformers
-    import torch
+    # Demo the model and trainer for debug/testing - use an experiments interface directly for a full CLI
+    from ecog_speech.experiments import semi_supervised
+    from ecog_speech import utils
 
-    cog2vec = base_transformers.CoG2Vec((1, 256), feature_model=None, context_model=None, projection_model=None,
-                                    negatives_from_everywhere=True, feature_grad_mult=.1,
-                                    n_negatives=50, codebook_negatives=25, cross_sample_negatives=25,
-                                    mask_length=4, quant_num_vars=10)
-    cog2vec(cog2vec.t_x)
+    options = utils.build_default_options(semi_supervised.ss_option_kwargs,
+                                          train_sets='UCSD-22',
+                                          device='cpu',
+                                          n_epochs=30)
 
-    from ecog_speech import datasets
-
-    hvs_tuples = datasets.HarvardSentences.make_tuples_from_sets_str('UCSD-22')
-    hvs = datasets.HarvardSentences(hvs_tuples)
-
-    dl = hvs.to_dataloader(num_workers=8, batch_size=128)
-    trainer = base_transformers.Cog2VecTrainer(model_map=dict(model=cog2vec), opt_map=dict(),
-                                               train_data_gen=dl, cv_data_gen=dl,
-                                               learning_rate=0.0005, device='cuda')
-    # For some reason the codebook indices isn't always on the right device... so this seems to help force it over
-    trainer.model_map['model'].quantizer.codebook_indices = trainer.model_map['model'].quantizer.codebook_indices.to(trainer.device)
-
-    trainer.squeeze_first = False
-    trainer.ppl_weight = 10
-
-    res = trainer.train(100)
+    results = semi_supervised.run(options)

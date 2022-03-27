@@ -141,7 +141,7 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
 
     dataset_map = dict()
     logger.info("Using dataset class: %s" % str(dataset_cls))
-    train_nww = dataset_cls(power_q=options.power_q,
+    train_nww = dataset_cls(#power_q=options.power_q,
                             # sensor_columns='valid',
                             sensor_columns=train_sensor_columns,
                             **train_data_kws)
@@ -384,7 +384,7 @@ default_model_hyperparam_option_kwargs = [
     dict(dest='--roll-channels', default=False, action="store_true"),
     dict(dest='--shuffle-channels', default=False, action="store_true"),
     dict(dest='--cog-attn', default=False, action="store_true"),
-    dict(dest='--power-q', default=0.7, type=float),
+    #dict(dest='--power-q', default=0.7, type=float),
     dict(dest='--n-epochs', default=100, type=int),
     dict(dest='--early-stopping-patience', default=None, type=int),
     dict(dest='--batch-size', default=256, type=int),

@@ -796,6 +796,21 @@ class Trainer:
                                                 to_frames=False)
 
     @classmethod
+    def generate_outputs_from_model_inner_step(cls, model, data_batch, criterion=None, device=None):
+        _x_in = data_batch['ecog_arr']
+        _y = data_batch['text_arr']
+        if device is not None:
+            _x_in = _x_in.to(device)
+            _y = _y.to(device)
+
+        preds = model(_x_in)
+        ret = dict(preds=preds, actuals=_x_in['text_arr'])
+        if criterion is not None:
+            ret['criterion'] = criterion(preds, _y)
+
+        return ret
+
+    @classmethod
     def generate_outputs_from_model(cls, model, dl_map, criterion=None, device=None,
                                     to_frames=True, win_step=None, win_size=None) -> dict:
         """
@@ -824,21 +839,28 @@ class Trainer:
                 #    assert len(dset.data_maps) == 1
 
                 #data_map = next(iter(dset.data_maps.values()))
-
+                res_d = dict()
                 for _x in tqdm(dl, desc="Eval on [%s]" % str(dname)):
-                    _x_in = _x['ecog_arr']
-                    _y = _x['text_arr']
-                    if device:
-                        _x_in = _x_in.to(device)
-                        _y = _y.to(device)
+                    _inner_d = cls.generate_outputs_from_model_inner_step(model, _x)
 
-                    preds_l.append(model(_x_in))
-                    actuals_l.append(_x['text_arr'])
-                    if criterion is not None:
-                        criterion_l.append(criterion(preds_l[-1], _y))
+                    for k, v in _inner_d.items():
+                        curr_v = res_d.get(k, list())
+                        new_v = (curr_v + v) if isinstance(v, list) else (curr_v + [v])
+                        res_d[k] = new_v
 
-                output_map[dname] = dict(preds=torch.cat(preds_l).detach().cpu().numpy(),
-                                         actuals=torch.cat(actuals_l).detach().cpu().int().numpy())
+#                    _x_in = _x['ecog_arr']
+#                    _y = _x['text_arr']
+#                    if device:
+#                        _x_in = _x_in.to(device)
+#                        _y = _y.to(device)
+#
+#                    preds_l.append(model(_x_in))
+#                    actuals_l.append(_x['text_arr'])
+#                    if criterion is not None:
+#                        criterion_l.append(criterion(preds_l[-1], _y))
+                output_map[dname] = {k: torch.cat(v_l).detach().cpu().numpy() for k, v_l in res_d.items()}
+                #output_map[dname] = dict(preds=torch.cat(preds_l).detach().cpu().numpy(),
+                #                         actuals=torch.cat(actuals_l).detach().cpu().int().numpy())
                                          #loss=torch.cat(criterion_l).detach().cpu().numpy())
                 if to_frames:
                     t_ix = None
