@@ -708,13 +708,13 @@ if __name__ == """__main__""":
     from ecog_speech import datasets
 
     hvs_tuples = datasets.HarvardSentences.make_tuples_from_sets_str('UCSD-22')
-    hvs_tuples
     hvs = datasets.HarvardSentences(hvs_tuples)
 
     dl = hvs.to_dataloader(num_workers=8, batch_size=128)
     trainer = base_transformers.Cog2VecTrainer(model_map=dict(model=cog2vec), opt_map=dict(),
                                                train_data_gen=dl, cv_data_gen=dl,
                                                learning_rate=0.0005, device='cuda')
+    # For some reason the codebook indices isn't always on the right device... so this seems to help force it over
     trainer.model_map['model'].quantizer.codebook_indices = trainer.model_map['model'].quantizer.codebook_indices.to(trainer.device)
 
     trainer.squeeze_first = False

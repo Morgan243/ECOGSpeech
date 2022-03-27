@@ -551,6 +551,11 @@ class Trainer:
     batch_cb_history = attr.ib(attr.Factory(list), init=False)
     model_regularizer = attr.ib(None)
 
+    lr_adjust_on_cv_loss = attr.ib(False)
+    lr_adjust_on_plateau_kws = attr.ib(None)
+    #lr_adjust_metric = attr.ib('')
+    model_name_to_lr_adjust = attr.ib(None)
+
     default_optim_cls = torch.optim.Adam
 
     @classmethod
@@ -560,6 +565,7 @@ class Trainer:
 
     def __attrs_post_init__(self):
         self.model_map = {k: v.to(self.device) for k, v in self.model_map.items()}
+        self.scheduler_map = dict()
         #self.opt_map = dict()
         for k, m in self.model_map.items():
             if self.weights_init_f is not None:
@@ -574,6 +580,12 @@ class Trainer:
                 elif self.default_optim_cls == torch.optim.RMSprop:
                     self.opt_map[k] = self.default_optim_cls(m.parameters(),
                                                              lr=self.learning_rate)
+
+            # Turn on LR scheduler and (no specific model to schedule or this is a specific model to adjust)
+            if self.lr_adjust_on_plateau_kws and (self.model_name_to_lr_adjust is None
+                                                  or k in self.model_name_to_lr_adjust):
+                self.scheduler_map[k] = torch.optim.lr_scheduler.ReduceLROnPlateau(self.opt_map[k],
+                                                                                   **self.lr_adjust_on_plateau_kws)
 
     def get_best_state(self, model_key='model'):
         if getattr(self, 'best_model_state', None) is not None:
@@ -658,6 +670,10 @@ class Trainer:
                     cv_losses = self._eval(epoch, self.cv_data_gen)
                     cv_l_mean = np.mean(cv_losses)
                     self.epoch_res_map[epoch]['cv_loss'] = cv_l_mean
+
+                    for m_name, m_sched in self.scheduler_map.items():
+                        m_sched.step(cv_l_mean)
+
                     if self.early_stopping_patience is not None:
                         self.last_best_cv_l = getattr(self, 'last_best_cv_l', np.inf)
                         if (self.last_best_cv_l - cv_l_mean) > self.early_stopping_threshold:
