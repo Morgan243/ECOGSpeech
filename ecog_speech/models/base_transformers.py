@@ -161,13 +161,22 @@ class CoG2Vec(torch.nn.Module):
     logit_temp = 0.1
 
     def __init__(self, input_shape, feature_model, context_model, projection_model, dropout=0.1, feature_grad_mult=1,
-                 negatives_from_everywhere=True, n_negatives=100, squeeze_first=True):
+                 negatives_from_everywhere=True, n_negatives=100,
+                 cross_sample_negatives=0, codebook_negatives=0,
+                 mask_length=2, mask_prob=0.2,
+                 quant_num_vars=300, quant_num_groups=2,
+                 squeeze_first=True):
         super().__init__()
         self.input_shape = input_shape
         self.feature_model = feature_model
         self.feature_grad_mult = feature_grad_mult
         self.negatives_from_everywhere = negatives_from_everywhere
+
         self.n_negatives = n_negatives
+        self.cross_sample_negatives = cross_sample_negatives
+        self.codebook_negatives = codebook_negatives
+
+        self.mask_length, self.mask_prob = mask_length, mask_prob
 
         # TODO: Don't assign test data as attribute? But it's so useful
         self.t_x = torch.rand((16, *self.input_shape))
@@ -177,35 +186,37 @@ class CoG2Vec(torch.nn.Module):
         # Create a default feature exractor model if not provided
         from fairseq.models.wav2vec import ConvFeatureExtractionModel
         self.squeeze_first = squeeze_first
-        f_dim = 256
-        h_channels = 256
-        self.feature_model = ConvFeatureExtractionModel(
-            conv_layers=[(256, 7, 5)] + [(256, 5, 2)]*2 + [(f_dim, 3, 1)],
-            dropout=dropout,
-            mode='layer_norm',
-            #mode="default",#cfg.extractor_mode,
-            conv_bias=False#cfg.conv_bias,
-        )
+
         if self.feature_model is None:
+            f_dim = 256
+            #h_channels = 256
+            self.feature_model = ConvFeatureExtractionModel(
+                conv_layers=[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(f_dim, 3, 1)],
+                dropout=dropout,
+                mode='layer_norm',
+                # mode="default",#cfg.extractor_mode,
+                conv_bias=False  # cfg.conv_bias,
+            )
             #from fairseq
             # TODO: check on existing norm and GELU activation?
-            self.feature_model = torch.nn.Sequential(
-                # torch.nn.Conv1d((input_channels:=X_barr.shape[1]), input_channels, 10, stride=5),
-                #torch.nn.BatchNorm1d(1),
-                torch.nn.Conv1d((input_channels := 1), (h_channels := 256), 7, stride=5),
-                torch.nn.Dropout(p=dropout),
-                torch.nn.GELU(),
+#            self.feature_model = torch.nn.Sequential(
+#                # torch.nn.Conv1d((input_channels:=X_barr.shape[1]), input_channels, 10, stride=5),
+#                #torch.nn.BatchNorm1d(1),
+#                torch.nn.Conv1d((input_channels := 1), (h_channels := 256), 7, stride=5),
+#                torch.nn.Dropout(p=dropout),
+#                torch.nn.GELU(),
+#
+#                torch.nn.Conv1d(h_channels, h_channels, 5, stride=2),
+#                #torch.nn.BatchNorm1d(h_channels),
+#                #torch.nn.Dropout(p=dropout),
+#                torch.nn.GELU(),
+#
+#                torch.nn.Conv1d(h_channels, (f_dim:=128), 3, stride=1),
+#                #torch.nn.Dropout(p=dropout),
+#                torch.nn.GELU(),
+#            )
+#            self.feature_model.apply(base.weights_init)
 
-                torch.nn.Conv1d(h_channels, h_channels, 5, stride=2),
-                #torch.nn.BatchNorm1d(h_channels),
-                #torch.nn.Dropout(p=dropout),
-                torch.nn.GELU(),
-
-                torch.nn.Conv1d(h_channels, (f_dim:=128), 3, stride=1),
-                #torch.nn.Dropout(p=dropout),
-                torch.nn.GELU(),
-            )
-            self.feature_model.apply(base.weights_init)
 
         # Run test data through to get sizes automatically
         with torch.no_grad():
@@ -214,9 +225,12 @@ class CoG2Vec(torch.nn.Module):
         # Unused, but maybe useful for debugging and experiments
         _, self.C, self.T = self.t_feat_o.shape
 
+        self.feature_norm = torch.nn.LayerNorm(f_dim, eps=1e-5, elementwise_affine=True)
+
+        embed_dim = f_dim
         # for unseen regions
         self.mask_embedding = torch.nn.Parameter(
-            torch.FloatTensor(embed_dim := self.t_feat_o.shape[1]).uniform_()
+            torch.FloatTensor(embed_dim).uniform_()
         )
         # For start of sentence - is this needed?
         self.sos_embedding = torch.nn.Parameter(
@@ -233,24 +247,29 @@ class CoG2Vec(torch.nn.Module):
         self.context_model = context_model
         if self.context_model is None:
             encoder_layer = torch.nn.TransformerEncoderLayer(d_model=f_dim, nhead=8, batch_first=True, activation="gelu")
-            transformer_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=10)
+            transformer_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=8)
             self.context_model = transformer_encoder
 
         # Use existing Gumbel Quant
         import fairseq
         self.quantizer = fairseq.modules.GumbelVectorQuantizer(
             # TODO: parameterize mor of these?
-            dim=f_dim, num_vars=300, temp=(1, 0.1, 0.9), groups=2, combine_groups=False, vq_dim=f_dim,
+            dim=f_dim, num_vars=quant_num_vars, temp=(2, 0.5, 0.999995),#temp=(1, 0.1, 0.9),
+            groups=quant_num_groups, combine_groups=False, vq_dim=f_dim,
             time_first=True,
             # defaults in fairseq config
-            weight_proj_factor=3, weight_proj_depth=1
+            weight_proj_factor=2, weight_proj_depth=1
         )
 
         # Currently unused, but in future may need one or more linear projections from one space to another
-        self.projection_model = projection_model
+        self.projection_q_model = projection_model
 
-        if self.projection_model is None:
-            self.projection_model = torch.nn.Linear(f_dim, f_dim)
+        if self.projection_q_model is None:
+            self.projection_q_model = torch.nn.Linear(f_dim, f_dim)
+
+        self.projection_out_model = None
+        if self.projection_out_model is None:
+            self.projection_out_model = torch.nn.Linear(f_dim, f_dim)
 
     # Adapted From fairseq wave2vec2 (remove xla check
     def compute_preds(self, x, y, negatives, ):
@@ -307,6 +326,7 @@ class CoG2Vec(torch.nn.Module):
             assert high > 1, f"{bsz, tsz, fsz}"
 
             if n_negatives > 0:
+                # Possible time steps to use, {0, 1, 2, 3, ... num.}  for each negative
                 tszs = (
                     # Long Tensor range 0 to NUm - 1
                     buffered_arange(num)
@@ -319,15 +339,16 @@ class CoG2Vec(torch.nn.Module):
                         .flatten()
                 )
 
+                #
                 neg_idxs = torch.randint(
-                    # Only index into one of the masked values..?
+                    # Note that high here is exlusive - it's "one above the highest number to be drawn"
+                    # So this is one less than the max index, allowing the shift by one to happen later
                     low=0, high=high - 1,
                     # Each sample in batch needs a set of negatives...for each masked timestamp?
                     size=(bsz, n_negatives * num)
                 )
-                # Shift by one the random values that are larger than the t integer step variable...?
-                # Sort of selecting a random sample by thresholding with a uniform random
-                # - the random draw (neg_idxs) will likely be higher for smalle tsza - earlier values
+                # Add one in order to index over the true positive at the starting position, and shift all other
+                # times from that point. If only shifting the matching, then the point after will be selected twice
                 neg_idxs[neg_idxs >= tszs] += 1
 
             if cross_sample_negatives > 0:
@@ -362,7 +383,8 @@ class CoG2Vec(torch.nn.Module):
         )  # to NxBxTxC
         return negs, neg_idxs
 
-    def forward(self, X, features_only=False, mask=True):
+    def forward(self, X, features_only=False, mask=True,
+                ):
         # TODO: Wave2vec says normalize the raw waveform to zero mean and unit variance - maje sure this happening?
         # Extract features from signal
         # Wave to vec in fair seq either does forward without gradient or with grad multiply - prob grad mult for pre-train
@@ -377,11 +399,12 @@ class CoG2Vec(torch.nn.Module):
 
         # Swap C and T  for use with mask and later transformer sequence modeling
         unmasked_features = X_f.transpose(1, 2)
+        unmasked_features = self.feature_norm(unmasked_features)
 
         if mask:
             # Create the mask
-            mask_indices = _compute_mask_indices((B, T), padding_mask=None, mask_prob=0.2,
-                                                 mask_length=2, min_masks=1)
+            mask_indices = _compute_mask_indices((B, T), padding_mask=None, mask_prob=self.mask_prob,
+                                                 mask_length=self.mask_length, min_masks=1)
 
             # Create inverse of mask to select unmasked values
             #umask_ixes = ~mask_indices
@@ -427,9 +450,9 @@ class CoG2Vec(torch.nn.Module):
         padding_count = 0
         # Swap the original masked data back to C, T - contiguous call is due to limitation with view() or reshape()
         # in torch tensors
-        n_negatives = 100
-        cross_sample_negatives = 20
-        codebook_negatives = 20  # 100 # This doesn't work..
+        #n_negatives = 100
+        #cross_sample_negatives = 20
+        #codebook_negatives = 20  # 100 # This doesn't work..
 
         if self.quantizer:
             if self.negatives_from_everywhere:
@@ -441,13 +464,13 @@ class CoG2Vec(torch.nn.Module):
                 prob_ppl = q["prob_perplexity"]
                 curr_temp = q["temp"]
 
-                y = self.projection_model(y)
+                y = self.projection_q_model(y)
 
                 negs, _ = self.sample_negatives(
                     y,
                     mask_indices[0].sum(),
-                    padding_count=padding_count,
-                    n_negatives=n_negatives
+                    padding_count=padding_count, cross_sample_negatives=self.cross_sample_negatives,
+                    n_negatives=self.n_negatives
                 )
                 y = y[mask_indices].view(y.size(0), -1, y.size(-1))
 
@@ -459,22 +482,22 @@ class CoG2Vec(torch.nn.Module):
                 prob_ppl = q["prob_perplexity"]
                 curr_temp = q["temp"]
 
-                y = self.projection_model(y)
+                y = self.projection_q_model(y)
 
                 negs, _ = self.sample_negatives(
                     y,
                     y.size(1),
-                    n_negatives=n_negatives, cross_sample_negatives=cross_sample_negatives,
+                    n_negatives=self.n_negatives, cross_sample_negatives=self.cross_sample_negatives,
                     padding_count=padding_count,
                 )
 
-            if codebook_negatives > 0:
+            if self.codebook_negatives > 0:
                 #raise NotImplementedError
                 cb_negs = self.quantizer.sample_from_codebook(
-                    y.size(0) * y.size(1), codebook_negatives
+                    y.size(0) * y.size(1), self.codebook_negatives
                 )
                 cb_negs = cb_negs.view(
-                    codebook_negatives, y.size(0), y.size(1), -1
+                    self.codebook_negatives, y.size(0), y.size(1), -1
                 )  # order doesnt matter
                 # cb_negs = self.project_q(cb_negs)
                 negs = torch.cat([negs, cb_negs], dim=0)
@@ -503,6 +526,7 @@ class CoG2Vec(torch.nn.Module):
         x = x[mask_indices].view(x.size(0), -1, x.size(-1))
 
         #
+        x = self.projection_out_model(x)
         preds = self.compute_preds(x, y, negs)
 
         return dict(x=x, y=y, negs=negs, preds=preds,
@@ -519,6 +543,7 @@ class Cog2VecTrainer(Trainer):
     squeeze_first = True
     #model_output_logits_key = 'x'
     model_output_logits_key = 'preds'
+    ppl_weight = 100.
 
     def _score(self, epoch_i, dataloader, model_key='model'):
         model = self.model_map[model_key]
@@ -648,24 +673,36 @@ class Cog2VecTrainer(Trainer):
         #    logits, target.float(), reduction='sum' #weights, reduction=reduction
         #)
 
-        ppl_l = ((m_d["num_vars"] - m_d["prob_perplexity"]) / m_d["num_vars"]) * 0.1
-        fpen_l = m_d["features_pen"] * 10
-        total_loss = loss + ppl_l + fpen_l
+        ppl_l = ((m_d["num_vars"] - m_d["prob_perplexity"]) / m_d["num_vars"]) * self.ppl_weight #* 0.1
+        #cpl_l = ((m_d["num_vars"] - m_d["code_perplexity"]) / m_d["num_vars"]) * 10.#* 0.1
+        fpen_l = m_d["features_pen"] #* 10
+        total_loss = loss + ppl_l + fpen_l #+ cpl_l
         total_loss.backward()
         optim.step()
         model = model.eval()
+        with torch.no_grad():
+            _max = logits.argmax(-1) == 0
+            _min = logits.argmin(-1) == 0
+
+            both = _max & _min
+            corr = _max.long().sum().item() - both.long().sum().item()
+            count = float(_max.numel())
 
         return dict(total_loss=total_loss.detach().cpu().item(),
                     bce_logits=loss.detach().cpu().item(),
                     perplexity=ppl_l.detach().cpu().item(),
-                    feature=fpen_l.detach().cpu().item())
+                    #c_perplexity=cpl_l.detach().cpu().item(),
+                    feature=fpen_l.detach().cpu().item(),
+                    acc=(corr / count))
 
 if __name__ == """__main__""":
     from ecog_speech.models import base_transformers
     import torch
 
-    cog2vec = base_transformers.CoG2Vec((1, 256), feature_model=None, context_model=None,
-                                        projection_model=None)
+    cog2vec = base_transformers.CoG2Vec((1, 256), feature_model=None, context_model=None, projection_model=None,
+                                    negatives_from_everywhere=True, feature_grad_mult=.1,
+                                    n_negatives=50, codebook_negatives=25, cross_sample_negatives=25,
+                                    mask_length=4, quant_num_vars=10)
     cog2vec(cog2vec.t_x)
 
     from ecog_speech import datasets
@@ -677,7 +714,10 @@ if __name__ == """__main__""":
     dl = hvs.to_dataloader(num_workers=8, batch_size=128)
     trainer = base_transformers.Cog2VecTrainer(model_map=dict(model=cog2vec), opt_map=dict(),
                                                train_data_gen=dl, cv_data_gen=dl,
-                                               learning_rate=0.001)
-    trainer.squeeze_first = False
+                                               learning_rate=0.0005, device='cuda')
+    trainer.model_map['model'].quantizer.codebook_indices = trainer.model_map['model'].quantizer.codebook_indices.to(trainer.device)
 
-    res = trainer.train(30)
+    trainer.squeeze_first = False
+    trainer.ppl_weight = 10
+
+    res = trainer.train(100)
