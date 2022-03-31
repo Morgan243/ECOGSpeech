@@ -11,5 +11,6 @@ setup(name='ECOGSpeech',
             'numpy', 'pandas', 'scipy',
             'scikit-learn', 'mne',
             'attrs',
+            'simple-parsing',
             'python_speech_features',
       ])
