@@ -529,6 +529,9 @@ class Trainer:
     opt_map = attr.ib()
 
     train_data_gen = attr.ib()
+    input_key = attr.ib('ecog_arr')
+    target_key = attr.ib('text_arr')
+
     #optim_kwargs = attr.ib(dict(weight_decay=0.2, lr=0.001))
     learning_rate = attr.ib(0.001)
     beta1 = attr.ib(0.5)
@@ -726,8 +729,8 @@ class Trainer:
         with torch.no_grad():
             with tqdm(total=len(dataloader), desc="Eval") as pbar:
                 for i, _x in enumerate(dataloader):
-                    preds = model(_x['ecog_arr'].to(self.device))
-                    actuals = _x['text_arr'].to(self.device)
+                    preds = model(_x[self.input_key].to(self.device))
+                    actuals = _x[self.target_key].to(self.device)
                     loss = self.criterion(preds, actuals)
 
                     loss_l.append(loss.detach().cpu().item())
@@ -773,11 +776,11 @@ class Trainer:
         model.zero_grad()
         optim.zero_grad()
 
-        ecog_arr = data_batch['ecog_arr'].to(self.device)
-        actuals = data_batch['text_arr'].to(self.device)
-        m_output = model(ecog_arr)
+        input_arr = data_batch[self.input_key].to(self.device)
+        actual_arr = data_batch[self.target_key].to(self.device)
+        m_output = model(input_arr)
 
-        crit_loss = self.criterion(m_output, actuals)
+        crit_loss = self.criterion(m_output, actual_arr)
         res_d['crit_loss'] = crit_loss.detach().cpu().item()
 
         if self.model_regularizer is not None:
@@ -799,18 +802,20 @@ class Trainer:
         """
         model = self.model_map[model_key].eval()
         return self.generate_outputs_from_model(model, dl_map, criterion=self.criterion, device=self.device,
-                                                to_frames=False)
+                                                to_frames=False, input_key=self.input_key, target_key=self.target_key)
 
     @classmethod
-    def generate_outputs_from_model_inner_step(cls, model, data_batch, criterion=None, device=None):
-        _x_in = data_batch['ecog_arr']
-        _y = data_batch['text_arr']
+    def generate_outputs_from_model_inner_step(cls, model, data_batch, criterion=None,
+                                               input_key='ecog_arr', target_key='text_arr',
+                                               device=None):
+        _x_in = data_batch[input_key]
+        _y = data_batch[target_key]
         if device is not None:
             _x_in = _x_in.to(device)
             _y = _y.to(device)
 
         preds = model(_x_in)
-        ret = dict(preds=preds, actuals=_x_in['text_arr'])
+        ret = dict(preds=preds, actuals=_y)
         if criterion is not None:
             ret['criterion'] = criterion(preds, _y)
 
@@ -818,7 +823,8 @@ class Trainer:
 
     @classmethod
     def generate_outputs_from_model(cls, model, dl_map, criterion=None, device=None,
-                                    to_frames=True, win_step=None, win_size=None) -> dict:
+                                    to_frames=True, win_step=None, win_size=None,
+                                    input_key='ecog_arr', target_key='text_arr') -> dict:
         """
         Produce predictions and targets for a mapping of dataloaders. B/c the trainer
         must know how to pair predictions and targets to train, this is implemented here.
@@ -847,7 +853,8 @@ class Trainer:
                 #data_map = next(iter(dset.data_maps.values()))
                 res_d = dict()
                 for _x in tqdm(dl, desc="Eval on [%s]" % str(dname)):
-                    _inner_d = cls.generate_outputs_from_model_inner_step(model, _x)
+                    _inner_d = cls.generate_outputs_from_model_inner_step(model, _x, input_key=input_key,
+                                                                          target_key=target_key)
 
                     for k, v in _inner_d.items():
                         curr_v = res_d.get(k, list())
