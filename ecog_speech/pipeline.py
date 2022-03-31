@@ -235,8 +235,8 @@ class PowerThreshold(DictTrf):
                                #.max().reindex(stim_s.index, method='nearest').fillna(0))
 
         if silence_n_smallest is not None:
-            cls.logger.info(f"Using silence nsmallest on {type(silence_rolling_pwr)}")
             silence_n_smallest = int(silence_n_smallest)
+            cls.logger.info(f"Using silence {silence_n_smallest} smallest on {type(silence_rolling_pwr)}")
             n_smallest = silence_rolling_pwr.nsmallest(silence_n_smallest)
             n_smallest_ix = n_smallest.index
             #cls.logger.info(f"n smallest: {n_smallest_ix.()}")
@@ -316,9 +316,12 @@ class SentCodeFromStartStopWordTimes(DictTrf):
 
         # Get the listening sample nearest to the words start time from the listening index
         #start_listening_ixes = word_df.apply(lambda r: closest_index#_i_after_t(listening_stim_s, r.stop_t, r.start_t), axis=1)
-        start_listening_ixes = word_df.start_t.apply(lambda v: listening_stim_s.index.get_loc(v, method='nearest'))
+        # TODO: Can probably request all of these at once now with get_indexer
+        start_listening_ixes = word_df.start_t.apply(lambda v: listening_stim_s.index.get_indexer([v], method='nearest')[0])
+        #start_listening_ixes = word_df.start_t.apply(lambda v: listening_stim_s.index.get_loc(v, method='nearest'))
         # Get the index nearest to the words start time for the stim values - should basically be the start_t value
-        start_stim_ixes = word_df.start_t.apply(lambda v: stim.index.get_loc(v, method='nearest'))
+        start_stim_ixes = word_df.start_t.apply(lambda v: stim.index.get_indexer([v], method='nearest')[0])
+        #start_stim_ixes = word_df.start_t.apply(lambda v: stim.index.get_loc(v, method='nearest'))
 
         word_df['stim_start_t'] = stim.index[start_stim_ixes]
 
@@ -533,8 +536,10 @@ class StimFromStartStopTimes(DictTrf):
             start_t = gdf[self.start_t_column].min()
             stop_t = gdf[self.stop_t_column].max()
 
-            start_i = sentence_stim.index.get_loc(start_t, method='nearest')
-            stop_i = sentence_stim.index.get_loc(stop_t, method='nearest')
+            #  Use index.get_indexer([item], method=...)
+            start_i, stop_i = sentence_stim.index.get_indexer([start_t, stop_t], method='nearest')
+            #start_i = sentence_stim.index.get_loc(start_t, method='nearest')
+            #stop_i = sentence_stim.index.get_loc(stop_t, method='nearest')
 
             # Set this sentence to some incrementing indicator
             sentence_stim.iloc[start_i: stop_i] = sentence_stim.max() + 1
@@ -547,8 +552,9 @@ class StimFromStartStopTimes(DictTrf):
                 _start_t = _gdf[self.start_t_column].min()
                 _stop_t = _gdf[self.stop_t_column].max()
 
-                _start_i = sentence_stim.index.get_loc(_start_t, method='nearest')
-                _stop_i = sentence_stim.index.get_loc(_stop_t, method='nearest')
+                _start_i, _stop_i = sentence_stim.index.get_indexer([_start_t, _stop_t], method='nearest')
+                #_start_i = sentence_stim.index.get_loc(_start_t, method='nearest')
+                #_stop_i = sentence_stim.index.get_loc(_stop_t, method='nearest')
                 word_stim.iloc[_start_i: _stop_i] = word_stim.max() + 1
 
         return {self.word_stim_output_name: word_stim,
