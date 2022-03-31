@@ -115,6 +115,8 @@ class BaseDataset(tdata.Dataset):
             dataset_cls = NorthwesternWords
         elif dataset_name == 'chang-nww':
             dataset_cls = ChangNWW
+        elif dataset_name == 'hvs':
+            dataset_cls = HarvardSentences
         else:
             raise ValueError("Unknown dataset: %s" % dataset_name)
         return dataset_cls
