@@ -1,21 +1,27 @@
 import standard
 from ecog_speech.experiments.standard import make_model, make_datasets_and_loaders, default_option_kwargs
 from ecog_speech import utils
+from dataclasses import dataclass, field
+from ecog_speech.experiments import base as bxp
 
 logger = utils.get_logger('semi_supervised')
+
 
 def run(options):
     from ecog_speech.models import base_transformers
     import torch
 
     model_kws = dict(input_shape=(1, 256), feature_model=None, context_model=None, projection_model=None,
-                        negatives_from_everywhere=True, feature_grad_mult=.1,
-                        n_negatives=50, codebook_negatives=25, cross_sample_negatives=25,
-                        mask_length=4, n_encoder_heads=options.n_encoder_heads, n_encoder_layers=options.n_encoder_layers,
-                     quant_num_vars=options.quant_num_vars,
-                     quant_num_groups=options.quant_num_groups)
+                     dropout=options.dropout, negatives_from_everywhere=True, feature_grad_mult=.1,
+                     n_negatives=50, codebook_negatives=25, cross_sample_negatives=25,
+                     mask_length=4, n_encoder_heads=options.n_encoder_heads, n_encoder_layers=options.n_encoder_layers,
+                     quant_num_vars=options.quant_num_vars, quant_num_groups=options.quant_num_groups,
+                     feature_extractor_layers=options.feature_extractor_layers)
 
-    model = base_transformers.CoG2Vec(**model_kws)
+    if options.model_name == 'cog2vec':
+        model = base_transformers.CoG2Vec(**model_kws)
+    else:
+        raise ValueError(f"Don't understand model_name '{options.model_name}'")
 
     # Shake out any forward pass errors now by running example data through model
     with torch.no_grad():
@@ -90,24 +96,36 @@ def run(options):
         res_dict['save_model_path'] = p
 
 
-semisuper_options = [
-    dict(dest='--ppl-weight', default=10, type=float),
-    dict(dest='--quant-num-vars', default=10, type=int),
-    dict(dest='--quant-num-groups', default=2, type=int),
+@dataclass
+class SemiSupervisedOptions(bxp.DNNModelOptions):
+    # ###
+    model_name: str = field(default='cog2vec')      # Supported: {'cog2vec'}
+    dataset: str = field(default='hvs')
+    train_sets: str = field(default='UCSD-28')
+    pre_processing_pipeline: str = field(default="audio_gate_speaking_only")
+    # ###
 
-    dict(dest='--n-encoder-layers', default=12, type=int),
-    dict(dest='--n-encoder-heads', default=8, type=int),
-]
+    feature_extractor_layers: str = field(default='[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(256, 3, 1)]')
+    """String that evaluates to list of tuples describing 1-d convolution feature extractor 
+        [(n-channels, kernel size, step size)..]"""
 
-ss_option_kwargs = default_option_kwargs + semisuper_options
+    quant_num_vars: int = field(default=20)  # Number of variables in quantizer codebook
+    quant_num_groups: int = field(default=2)  # Number of groups in quantizer
+
+    ppl_weight: float = field(default=100)  # Weight of perplexity loss - use to encourage full use of codebook
+
+    n_encoder_layers: int = field(default=12)
+    n_encoder_heads: int = field(default=8)
 
 
-all_model_hyperparam_names = [d['dest'].replace('--', '').replace('-', '_')
-                              for d in semisuper_options
-                              if d['dest'] not in ('--train-sets', '--cv-sets', '--test-sets')]
+all_model_hyperparam_names = [k for k, v in SemiSupervisedOptions.__annotations__.items()
+                              if k not in ('train_sets', 'cv_sets', 'test_sets')]
 
 if __name__ == """__main__""":
-    parser = utils.build_argparse(ss_option_kwargs,
-                                  description="ASPEN+MHRG Semi-supervise learning experiments")
-    m_options = parser.parse_args()
+    from simple_parsing import ArgumentParser
+
+    parser = ArgumentParser()
+    parser.add_arguments(SemiSupervisedOptions, dest='semi_supervised')
+    args = parser.parse_args()
+    m_options: SemiSupervisedOptions = args.semi_supervised
     run(m_options)

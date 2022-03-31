@@ -186,7 +186,7 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
                                           sensor_columns=train_nww.selected_columns,
                                           **test_data_kws)
     else:
-        logger.info("Warning - no data sets provided")
+        logger.info(" - No test datasets provided - ")
 
     # dataset_map = dict(train=train_nww, cv=cv_nww, test=test_nww)
 
@@ -357,6 +357,33 @@ def run(options):
 
     return trainer, outputs_map
 
+
+from dataclasses import dataclass, field
+from ecog_speech.experiments import base as bxp
+class SupervisedOptions(
+
+                        bxp.DNNModelOptions):
+    # Override the parent class default value
+    model_name: str = field(default='base-sn')
+    dataset: str = field(default='nww')
+    train_sets: str = field(default='MC-19-0,MC-19-1')
+
+    # ####
+    random_labels: bool =field(default=False)
+
+    dense_width: int = field(default=None)
+    sn_n_bands: int = field(default=1)
+    sn_kernel_size: int = field(default=31)
+    sn_padding: int = field(default=15)
+    sn_band_spacing: str = field(default='linear')
+    n_cnn_filters: int = field(default=None)
+    dropout_2d: bool = field(default=False)
+    in_channel_dropout_rate: float = field(default=0.)
+    roll_channels: bool = field(default=False)
+    shuffle_channels: bool = field(default=False)
+    cog_attn: bool = field(default=False)
+    power_q: float = field(default=0.7)
+    bw_reg_weight: float = field(default=0.0)
 
 default_model_hyperparam_option_kwargs = [
     dict(dest='--model-name', default='base-sn', type=str),
