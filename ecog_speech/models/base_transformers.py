@@ -166,6 +166,9 @@ class CoG2Vec(torch.nn.Module):
                  mask_length=2, mask_prob=0.2,
                  n_encoder_heads=8, n_encoder_layers=12,
                  quant_num_vars=300, quant_num_groups=2,
+                 quant_weight_proj_factor=2, quant_weight_proj_depth=1,
+                 feature_extractor_layers='[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(256, 3, 1)]',
+                 feature_extractor_mode='layer_norm',
                  squeeze_first=True):
         super().__init__()
         self.input_shape = input_shape
@@ -189,12 +192,14 @@ class CoG2Vec(torch.nn.Module):
         self.squeeze_first = squeeze_first
 
         if self.feature_model is None:
-            f_dim = 256
+            conv_layers = (eval(feature_extractor_layers) if isinstance(feature_extractor_layers, str)
+                           else feature_extractor_layers)
             #h_channels = 256
             self.feature_model = ConvFeatureExtractionModel(
-                conv_layers=[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(f_dim, 3, 1)],
+                #conv_layers=[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(f_dim, 3, 1)],
+                conv_layers=conv_layers,
                 dropout=dropout,
-                mode='layer_norm',
+                mode=feature_extractor_mode,#'layer_norm',
                 # mode="default",#cfg.extractor_mode,
                 conv_bias=False  # cfg.conv_bias,
             )
@@ -225,10 +230,10 @@ class CoG2Vec(torch.nn.Module):
 
         # Unused, but maybe useful for debugging and experiments
         _, self.C, self.T = self.t_feat_o.shape
+        embed_dim = self.C
 
-        self.feature_norm = torch.nn.LayerNorm(f_dim, eps=1e-5, elementwise_affine=True)
+        self.feature_norm = torch.nn.LayerNorm(embed_dim, eps=1e-5, elementwise_affine=True)
 
-        embed_dim = f_dim
         # for unseen regions
         self.mask_embedding = torch.nn.Parameter(
             torch.FloatTensor(embed_dim).uniform_()
@@ -249,31 +254,32 @@ class CoG2Vec(torch.nn.Module):
         self.num_encoder_layers = n_encoder_layers
         self.context_model = context_model
         if self.context_model is None:
-            encoder_layer = torch.nn.TransformerEncoderLayer(d_model=f_dim, nhead=self.n_heads, batch_first=True,
+            encoder_layer = torch.nn.TransformerEncoderLayer(d_model=embed_dim, nhead=self.n_heads, batch_first=True,
                                                              activation="gelu")
             transformer_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=self.num_encoder_layers)
             self.context_model = transformer_encoder
 
+        self.quant_weight_proj_depth, self.quant_weight_proj_factor = quant_weight_proj_depth, quant_weight_proj_factor
         # Use existing Gumbel Quant
         import fairseq
         self.quantizer = fairseq.modules.GumbelVectorQuantizer(
             # TODO: parameterize mor of these?
-            dim=f_dim, num_vars=quant_num_vars, temp=(2, 0.5, 0.999995),#temp=(1, 0.1, 0.9),
-            groups=quant_num_groups, combine_groups=False, vq_dim=f_dim,
+            dim=embed_dim, num_vars=quant_num_vars, temp=(2, 0.5, 0.999995),#temp=(1, 0.1, 0.9),
+            groups=quant_num_groups, combine_groups=False, vq_dim=embed_dim,
             time_first=True,
             # defaults in fairseq config
-            weight_proj_factor=2, weight_proj_depth=1
+            weight_proj_factor=self.quant_weight_proj_factor, weight_proj_depth=self.quant_weight_proj_depth
         )
 
         # Currently unused, but in future may need one or more linear projections from one space to another
         self.projection_q_model = projection_model
 
         if self.projection_q_model is None:
-            self.projection_q_model = torch.nn.Linear(f_dim, f_dim)
+            self.projection_q_model = torch.nn.Linear(embed_dim, embed_dim)
 
         self.projection_out_model = None
         if self.projection_out_model is None:
-            self.projection_out_model = torch.nn.Linear(f_dim, f_dim)
+            self.projection_out_model = torch.nn.Linear(embed_dim, embed_dim)
 
     # Adapted From fairseq wave2vec2 (remove xla check
     def compute_preds(self, x, y, negatives, ):
@@ -541,6 +547,17 @@ class CoG2Vec(torch.nn.Module):
                     temp=curr_temp)
 
 
+class FineTuner(torch.nn.Module):
+    def __init__(self, pre_trained_model, output_model, pre_trained_model_output_key):
+        super().__init__()
+        self.pre_trained_model = pre_trained_model
+        self.output_model = output_model
+        self.pre_trained_model_output_key = pre_trained_model_output_key
+
+    def forward(self, x):
+        pt_out = self.pre_trained_model(x)
+        return self.output_model(pt_out[self.pre_trained_model_output_key])
+
 from ecog_speech.models.base import Trainer
 from tqdm.auto import tqdm
 class Cog2VecTrainer(Trainer):
@@ -620,7 +637,7 @@ class Cog2VecTrainer(Trainer):
                     loss = F.cross_entropy(
                         logits, target[:, 0].long(), reduction='sum'  # weights, reduction=reduction
                     )
-                    loss_l.append(loss.detach().cpu().item())
+                    loss_l.append(loss.detach().cpu().item() / X.shape[0])
 
                     pbar.update(1)
 
