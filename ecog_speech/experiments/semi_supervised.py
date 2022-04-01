@@ -58,6 +58,21 @@ def run(options):
 
     losses = trainer.train(options.n_epochs)
 
+    model.load_state_dict(trainer.get_best_state())
+
+    #####
+    # Produce predictions and score them
+    model.eval()
+    #outputs_map = trainer.generate_outputs(**eval_dl_map)
+    #clf_str_map = utils.make_classification_reports(outputs_map)
+
+    #train_perf_map = utils.performance(outputs_map['train']['actuals'],
+    #                                   outputs_map['train']['preds'] > 0.5)
+    #cv_perf_map = utils.performance(outputs_map['cv']['actuals'],
+    #                                outputs_map['cv']['preds'] > 0.5)
+    #test_perf_map = utils.performance(outputs_map['test']['actuals'],
+    #                                  outputs_map['test']['preds'] > 0.5)
+
     import uuid
     from datetime import datetime
     import time
@@ -99,23 +114,25 @@ def run(options):
 @dataclass
 class SemiSupervisedOptions(bxp.DNNModelOptions):
     # ###
-    model_name: str = field(default='cog2vec')      # Supported: {'cog2vec'}
-    dataset: str = field(default='hvs')
-    train_sets: str = field(default='UCSD-28')
-    pre_processing_pipeline: str = field(default="audio_gate_speaking_only")
+    model_name: str = 'cog2vec'      # Supported: {'cog2vec'}
+    dataset: str = 'hvs'
+    train_sets: str = 'UCSD-28'
+    pre_processing_pipeline: str = "audio_gate_speaking_only"
     # ###
 
-    feature_extractor_layers: str = field(default='[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(256, 3, 1)]')
+    feature_extractor_layers: str = '[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(256, 3, 1)]'
     """String that evaluates to list of tuples describing 1-d convolution feature extractor 
         [(n-channels, kernel size, step size)..]"""
 
-    quant_num_vars: int = field(default=20)  # Number of variables in quantizer codebook
-    quant_num_groups: int = field(default=2)  # Number of groups in quantizer
+    quant_num_vars: int = 20
+    """Number of variables in quantizer codebook"""
+    quant_num_groups: int = 2
+    """Number of groups in quantizer"""
+    ppl_weight: float = 100
+    """Weight of perplexity loss - use to encourage full use of codebook"""
 
-    ppl_weight: float = field(default=100)  # Weight of perplexity loss - use to encourage full use of codebook
-
-    n_encoder_layers: int = field(default=12)
-    n_encoder_heads: int = field(default=8)
+    n_encoder_layers: int = 12
+    n_encoder_heads: int = 8
 
 
 all_model_hyperparam_names = [k for k, v in SemiSupervisedOptions.__annotations__.items()
@@ -127,5 +144,5 @@ if __name__ == """__main__""":
     parser = ArgumentParser()
     parser.add_arguments(SemiSupervisedOptions, dest='semi_supervised')
     args = parser.parse_args()
-    m_options: SemiSupervisedOptions = args.semi_supervised
-    run(m_options)
+    main_options: SemiSupervisedOptions = args.semi_supervised
+    run(main_options)
