@@ -10,6 +10,7 @@ import numpy as np
 import scipy.io
 
 import torch
+import torchvision.transforms
 from torch.utils import data as tdata
 
 from tqdm.auto import tqdm
@@ -255,7 +256,9 @@ class BaseASPEN(BaseDataset):
 
     selected_word_indices = attr.ib(None)
     transform = attr.ib(None)
+    transform_l = attr.ib(attr.Factory(list))
     target_transform = attr.ib(None)
+    target_transform_l = attr.ib(attr.Factory(list))
 
     #power_threshold = attr.ib(0.007)
     #power_q = attr.ib(0.70)
@@ -311,11 +314,11 @@ class BaseASPEN(BaseDataset):
                                                             subset=self.data_subset)
                               for l_p_s_t_tuple in data_iter}
 
-            ## Important processing ##
+            #  Important processing  #
             # - Process each subject in data map through pipeline func
             self.sample_index_maps = dict()
             self.data_maps = dict()
-            #for k in self.data_maps.keys():
+
             for k, dmap in mat_data_maps.items():
                 res_dmap = self.pipeline_f(dmap)
                 self.sample_index_maps[k] = res_dmap['sample_index_map']
@@ -471,7 +474,7 @@ class BaseASPEN(BaseDataset):
             for _iix in tqdm(range(0, ecog_torch_arr.shape[0] - self.ecog_window_size, win_step),
                             desc='creating windows'):
                 _ix = slice(_iix, _iix + self.ecog_window_size)
-                feats = self.get_features(data_map, _ix, ecog_transform=ecog_transform, index_loc=True)
+                feats = self.get_features(data_map, _ix, transform=ecog_transform, index_loc=True)
                 # TODO: Just grabbing the max stim wode in the range - better or more useful way to do this?
                 targets = self.get_targets(data_map, None, label=data_map['stim'].iloc[_ix].max())
                 so = dict(**feats, **targets)
@@ -496,7 +499,7 @@ class BaseASPEN(BaseDataset):
         data_d = self.data_maps[data_k]
 
         so = self.get_features(data_d, self.flat_index_map[ix_k],
-                               ix_k[0], ecog_transform=self.transform)
+                               ix_k[0], transform=self.transform)
         so.update(self.get_targets(data_d, self.flat_index_map[ix_k],
                                    ix_k[0], target_transform=self.target_transform))
 
@@ -514,6 +517,16 @@ class BaseASPEN(BaseDataset):
         else:
             self.selected_flat_keys = self.flat_keys
 
+        return self
+
+    def append_transform(self, transform):
+        self.transform_l.append(transform)
+        self.transform = torchvision.transforms.Compose(self.transform_l)
+        return self
+
+    def append_target_transform(self, transform):
+        self.target_transform_l.append(transform)
+        self.target_transform = torchvision.transforms.Compose(self.target_transform_l)
         return self
 
     ######
@@ -614,16 +627,16 @@ class BaseASPEN(BaseDataset):
         return p_list
 
     @staticmethod
-    def get_features(data_map, ix, label=None, ecog_transform=None, index_loc=False, signal_key='signal'):
+    def get_features(data_map, ix, label=None, transform=None, index_loc=False, signal_key='signal'):
         signal_df = data_map[signal_key]
         kws = dict()
 
         kws['signal'] = signal_df.loc[ix] if not index_loc else signal_df.iloc[ix]
         # Transpose to keep time as last index for torch
         np_ecog_arr = kws['signal'].values.T
-        if ecog_transform is not None:
+        if transform is not None:
             # print("Apply transform to shape of " + str(np_ecog_arr.shape))
-            np_ecog_arr = ecog_transform(np_ecog_arr)
+            np_ecog_arr = transform(np_ecog_arr)
         kws['signal_arr'] = torch.from_numpy(np_ecog_arr).float()
         return kws
 
