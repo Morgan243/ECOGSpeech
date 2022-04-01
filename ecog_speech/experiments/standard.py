@@ -9,6 +9,7 @@ from ecog_speech.models import base, sinc_ieeg
 
 logger = utils.get_logger(__name__)
 
+
 def make_model(options=None, nww=None, model_name=None, model_kws=None, print_details=True):
     """
     Helper method - Given command-line options and a NorthwesterWords derived dataset, build the model
@@ -147,25 +148,28 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
                             # sensor_columns='valid',
                             sensor_columns=train_sensor_columns,
                             **train_data_kws)
-    if options.roll_channels and options.shuffle_channels:
-        raise ValueError("--roll-channels and --shuffle-channels are mutually exclusive")
-    elif options.roll_channels:
-        logger.info("-->Rolling channels transform<--")
-        train_nww.transform = transforms.Compose([
-            datasets.RollDimension(roll_dim=0, min_roll=0,
-                                   max_roll=train_nww.sensor_count - 1)
-        ])
-    elif options.shuffle_channels:
-        logger.info("-->Shuffle channels transform<--")
-        train_nww.transform = transforms.Compose([
-            datasets.ShuffleDimension()
-        ])
 
-    if options.random_labels:
+    roll_channels = getattr(options, 'roll_channels', False)
+    shuffle_channels = getattr(options, 'shuffle_channels', False)
+    if roll_channels and shuffle_channels:
+        raise ValueError("--roll-channels and --shuffle-channels are mutually exclusive")
+    elif roll_channels:
+        logger.info("-->Rolling channels transform<--")
+        train_nww.append_transform(
+                datasets.RollDimension(roll_dim=0, min_roll=0,
+                                       max_roll=train_nww.sensor_count - 1)
+        )
+    elif shuffle_channels:
+        logger.info("-->Shuffle channels transform<--")
+        train_nww.append_transform(
+            datasets.ShuffleDimension()
+        )
+
+    if getattr(options, 'random_labels', False):
         logger.info("-->Randomizing target labels<--")
-        train_nww.target_transform = transforms.Compose([
+        train_nww.append_target_transform(
             datasets.RandomIntLike(low=0, high=2)
-        ])
+        )
 
     dataset_map['train'] = train_nww
 
