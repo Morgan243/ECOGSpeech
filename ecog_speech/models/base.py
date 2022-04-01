@@ -79,6 +79,24 @@ class Reshape(torch.nn.Module):
         return x.reshape(x.shape[0], *self.shape)
 
 
+class Select(torch.nn.Module):
+    def __init__(self, dim=1, index='random', keep_dim=True):
+        super(Select, self).__init__()
+        self.dim = dim
+        self.index = index
+        self.keep_dim = keep_dim
+
+    def forward(self, x):
+        if isinstance(self.index, str) and self.index == 'random':
+            x = x.select(self.dim, np.random.randint(0, x.shape[1]))
+        else:
+            x = x.select(self.dim, self.index)
+
+        x = x.unsqueeze(1) if self.keep_dim else x
+
+        return x
+
+
 class CogAttn(torch.nn.Module):
     def __init__(self, trailing_dim, in_channels=64, pooling_size=50):
         print("Cog attn trailing dim (..., bands, time): " + str(trailing_dim))
