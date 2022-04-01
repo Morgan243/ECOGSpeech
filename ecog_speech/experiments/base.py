@@ -15,6 +15,7 @@ class BaseExperimentOptions(JsonSerializable):
 
     data_subset: str = 'Data'
 
+    save_model_path: Optional[str] = None
     device: Optional[str] = None
 
 @dataclass
