@@ -684,7 +684,9 @@ class Cog2VecTrainer(Trainer):
 
         return dict(bce_loss=loss, perplexity=ppl_l, feature_pen=fpen_l)
 
-    def score(self, model_output_d):
+    def score_training(self, model_output_d):
+        """training score metrics that don't require gradient, won't have .backward() called,
+        compliments loss for understanding performance"""
         logits = model_output_d[self.model_output_logits_key]
 
         logits = logits.transpose(0, 2)
@@ -699,6 +701,17 @@ class Cog2VecTrainer(Trainer):
             count = float(_max.numel())
 
         return dict(accuracy=(corr / count), n=count)
+
+    def score_eval(self, ):
+        pass
+        #X = X_barr.select(1, sens_id).unsqueeze(1)
+
+        #with torch.no_grad():
+        #    feat_d = m.forward(X, features_only=True, mask=False)
+        #    results_l.append(
+        #        dict(text_arr=batch_d['text_arr'],
+        #             # signal_arr=batch_d['signal_arr'].detach().cpu().numpy(),
+        #             **{n: arr.detach().cpu().numpy() for n, arr in feat_d.items()}))
 
     def train_inner_step(self, epoch_i, data_batch):
         res_d = dict()
@@ -729,7 +742,7 @@ class Cog2VecTrainer(Trainer):
 
         model = model.eval()
 
-        score_d = self.score(m_d)
+        score_d = self.score_training(m_d)
 
         tl = total_loss.detach().cpu().item()
 
