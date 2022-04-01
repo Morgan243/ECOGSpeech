@@ -611,6 +611,7 @@ class Cog2VecTrainer(Trainer):
         self.model_map['model'].train()
         return loss_l
 
+
     def _eval(self, epoch_i, dataloader, model_key='model'):
         model = self.model_map[model_key]
         model.eval()
@@ -661,6 +662,44 @@ class Cog2VecTrainer(Trainer):
         self.model_map['model'].train()
         return loss_l
 
+
+    def loss(self, model_output_d):
+        logits = model_output_d[self.model_output_logits_key]
+        num_vars = model_output_d['num_vars']
+        prob_ppl = model_output_d['prob_perplexity']
+
+        logits = logits.transpose(0, 2)
+        logits = logits.reshape(-1, logits.size(-1))
+        target = torch.zeros_like(logits)
+
+        loss = F.cross_entropy(
+            logits, target[:, 0].long(), reduction='sum' #weights, reduction=reduction
+        )
+        #loss = F.binary_cross_entropy_with_logits(
+        #    logits, target.float(), reduction='sum' #weights, reduction=reduction
+        #)
+
+        ppl_l = ((num_vars - prob_ppl) / num_vars) * self.ppl_weight #* 0.1
+        fpen_l = model_output_d["features_pen"] #* 10
+
+        return dict(bce_loss=loss, perplexity=ppl_l, feature_pen=fpen_l)
+
+    def score(self, model_output_d):
+        logits = model_output_d[self.model_output_logits_key]
+
+        logits = logits.transpose(0, 2)
+        logits = logits.reshape(-1, logits.size(-1))
+
+        with torch.no_grad():
+            _max = logits.argmax(-1) == 0
+            _min = logits.argmin(-1) == 0
+
+            both = _max & _min
+            corr = _max.long().sum().item() - both.long().sum().item()
+            count = float(_max.numel())
+
+        return dict(accuracy=(corr / count), n=count)
+
     def train_inner_step(self, epoch_i, data_batch):
         res_d = dict()
 
@@ -681,44 +720,31 @@ class Cog2VecTrainer(Trainer):
 
         m_d = model(X)
 
-        logits = m_d[self.model_output_logits_key]
+        loss_d = self.loss(m_d)
 
-        logits = logits.transpose(0, 2)
-        logits = logits.reshape(-1, logits.size(-1))
-        target = torch.zeros_like(logits)
-
-        loss = F.cross_entropy(
-            logits, target[:, 0].long(), reduction='sum' #weights, reduction=reduction
-        )
-
-        #loss = F.binary_cross_entropy_with_logits(
-        #    logits, target.float(), reduction='sum' #weights, reduction=reduction
-        #)
-
-        ppl_l = ((m_d["num_vars"] - m_d["prob_perplexity"]) / m_d["num_vars"]) * self.ppl_weight #* 0.1
-        #cpl_l = ((m_d["num_vars"] - m_d["code_perplexity"]) / m_d["num_vars"]) * 10.#* 0.1
-        fpen_l = m_d["features_pen"] #* 10
-        total_loss = loss + ppl_l + fpen_l #+ cpl_l
+        total_loss = sum((loss_d.values()))
         total_loss.backward()
-        optim.step()
-        model = model.eval()
-        with torch.no_grad():
-            _max = logits.argmax(-1) == 0
-            _min = logits.argmin(-1) == 0
 
-            both = _max & _min
-            corr = _max.long().sum().item() - both.long().sum().item()
-            count = float(_max.numel())
+        optim.step()
+
+        model = model.eval()
+
+        score_d = self.score(m_d)
 
         tl = total_loss.detach().cpu().item()
-        l = loss.detach().cpu().item()
-        return dict(total_loss=(tl - l) + (l/bsz),
-                    bce_logits=loss.detach().cpu().item() / bsz,
-                    perplexity=ppl_l.detach().cpu().item(),
-                    #c_perplexity=cpl_l.detach().cpu().item(),
-                    feature=fpen_l.detach().cpu().item(),
-                    acc=(corr / count),
-                    n = count)
+
+        return dict(
+                    # Unpack score floats or tensors
+                    **{s_k: s.detach().cpu().item() if isinstance(s, torch.Tensor) else s
+                       for s_k, s in score_d.items()},
+
+                    # Total loss right after scores
+                    total_loss=tl,
+
+                    # Unpack losses - should be all Tensors?
+                    **{l_k: l.detach().cpu().item() if isinstance(l, torch.Tensor) else l
+                       for l_k, l in loss_d.items()}
+                    )
 
     @classmethod
     def generate_outputs_from_model_inner_step(cls, model, data_batch, criterion=None, device=None,
