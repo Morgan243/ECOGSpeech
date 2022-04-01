@@ -29,6 +29,9 @@ class TrainingExperimentOptions(BaseExperimentOptions):
 
     early_stopping_patience: Optional[int] = None
 
+@dataclass
+class MultiSensorOptions:
+    flatten_sensors_to_samples: bool = False
 
 @dataclass
 class DNNModelOptions(TrainingExperimentOptions):

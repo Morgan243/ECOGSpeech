@@ -130,12 +130,16 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     base_kws = dict(pre_processing_pipeline=options.pre_processing_pipeline if pre_processing_pipeline is None
                                                     else pre_processing_pipeline,
                     data_subset=options.data_subset)
-    if train_data_kws is None:
-        train_data_kws = dict(patient_tuples=train_p_tuples, **base_kws)
-    if cv_data_kws is None:
-        cv_data_kws = dict(patient_tuples=cv_p_tuples, **base_kws)
-    if test_data_kws is None:
-        test_data_kws = dict(patient_tuples=test_p_tuples, **base_kws)
+    train_kws = dict(patient_tuples=train_p_tuples, **base_kws)
+    cv_kws = dict(patient_tuples=cv_p_tuples, **base_kws)
+    test_kws = dict(patient_tuples=test_p_tuples, **base_kws)
+
+    if train_data_kws is not None:
+        train_kws.update(train_data_kws)
+    if cv_data_kws is not None:
+        cv_kws.update(cv_data_kws)
+    if test_data_kws is not None:
+        test_kws.update(test_data_kws)
 
     dl_kws = dict(num_workers=num_dl_workers, batch_size=options.batch_size,
                   shuffle=False, random_sample=True)
@@ -147,7 +151,7 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     train_nww = dataset_cls(#power_q=options.power_q,
                             # sensor_columns='valid',
                             sensor_columns=train_sensor_columns,
-                            **train_data_kws)
+                            **train_kws)
 
     roll_channels = getattr(options, 'roll_channels', False)
     shuffle_channels = getattr(options, 'shuffle_channels', False)
@@ -173,10 +177,10 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
 
     dataset_map['train'] = train_nww
 
-    if cv_data_kws['patient_tuples'] is not None:
+    if cv_kws['patient_tuples'] is not None:
         dataset_map['cv'] = dataset_cls(#power_q=options.power_q,
                                         sensor_columns=train_nww.selected_columns,
-                                        **cv_data_kws)
+                                        **cv_kws)
     else:
         from sklearn.model_selection import train_test_split
         train_ixs, cv_ixes = train_test_split(range(len(train_nww)))
@@ -185,10 +189,10 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
         dataset_map.update(dict(train=train_nww,
                                 cv=cv_nww))
 
-    if test_data_kws['patient_tuples'] is not None:
+    if test_kws['patient_tuples'] is not None:
         dataset_map['test'] = dataset_cls(#power_q=options.power_q,
                                           sensor_columns=train_nww.selected_columns,
-                                          **test_data_kws)
+                                          **test_kws)
     else:
         logger.info(" - No test datasets provided - ")
 

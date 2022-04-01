@@ -260,6 +260,8 @@ class BaseASPEN(BaseDataset):
     target_transform = attr.ib(None)
     target_transform_l = attr.ib(attr.Factory(list))
 
+    flatten_sensors_to_samples = attr.ib(False)
+
     #power_threshold = attr.ib(0.007)
     #power_q = attr.ib(0.70)
     pre_processing_pipeline = attr.ib(None)
@@ -334,18 +336,6 @@ class BaseASPEN(BaseDataset):
 
                 self.data_maps[k] = res_dmap
 
-            # Map full description (word label, window index,...trial key elements..}
-            # to the actual pandas index
-            self.flat_index_map = {tuple([wrd_id, ix_i] + list(k_t)): ixes
-                                   for k_t, index_map in self.sample_index_maps.items()
-                                   for wrd_id, ix_list in index_map.items()
-                                   for ix_i, ixes in enumerate(ix_list)}
-
-            # Enumerate all the keys across flat_index_map into one large list for index-style,
-            # has a len() and can be indexed into nicely (via np.ndarray)
-            self.flat_keys = np.array([(k, k[2:])
-                                       for i, k in enumerate(self.flat_index_map.keys())],
-                                      dtype='object')
 
             ###
             # Sensor selection logic - based on the patients loaded - which sensors do we use?
@@ -379,7 +369,39 @@ class BaseASPEN(BaseDataset):
                                   % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
             else:
                 self.selected_columns = self.sensor_columns
+
             self.sensor_count = len(self.selected_columns)
+
+            if self.flatten_sensors_to_samples:
+                # Map full description (word label, window index, sensor,...trial key elements..}
+                # to the actual pandas index
+                self.flat_index_map = {tuple([wrd_id, ix_i, s] + list(k_t)): ixes
+                                       for k_t, index_map in tqdm(self.sample_index_maps.items(),
+                                                                  desc="Creating sample indices")
+                                       for wrd_id, ix_list in index_map.items()
+                                       for ix_i, ixes in enumerate(ix_list)
+                                       for s in self.selected_columns}
+
+                # Enumerate all the keys across flat_index_map into one large list for index-style,
+                # has a len() and can be indexed into nicely (via np.ndarray)
+                self.flat_keys = np.array([(k, k[3:])
+                                           for i, k in enumerate(self.flat_index_map.keys())],
+                                          dtype='object')
+            else:
+                # Map full description (word label, window index,...trial key elements..}
+                # to the actual pandas index
+                self.flat_index_map = {tuple([wrd_id, ix_i] + list(k_t)): ixes
+                                       for k_t, index_map in tqdm(self.sample_index_maps.items(),
+                                                                  desc="Creating sample indices")
+                                       for wrd_id, ix_list in index_map.items()
+                                       for ix_i, ixes in enumerate(ix_list)}
+
+                # Enumerate all the keys across flat_index_map into one large list for index-style,
+                # has a len() and can be indexed into nicely (via np.ndarray)
+                self.flat_keys = np.array([(k, k[2:])
+                                           for i, k in enumerate(self.flat_index_map.keys())],
+                                          dtype='object')
+
 
             # Finish processing the data mapping loaded from the mat data files
             #self.data_maps = {l_p_s_t_tuple: self.parse_mat_arr_dict(mat_d, self.selected_columns)
@@ -459,7 +481,7 @@ class BaseASPEN(BaseDataset):
 
         return p_map
 
-    def to_eval_replay_dataloader(self, patient_k=None, win_step=1, batch_size=1024, num_workers=4,
+    def to_eval_replay_dataloader(self, patient_k=None, data_k='ecog', stim_k='stim', win_step=1, batch_size=1024, num_workers=4,
                                   ecog_transform=None):
         if patient_k is None:
             patient_k = list(self.data_maps.keys())
@@ -469,7 +491,7 @@ class BaseASPEN(BaseDataset):
         dl_map = dict()
         for k in patient_k:
             data_map = self.data_maps[k]
-            ecog_torch_arr = torch.from_numpy(data_map['ecog'].values).float()
+            ecog_torch_arr = torch.from_numpy(data_map[data_k].values).float()
             outputs = list()
             for _iix in tqdm(range(0, ecog_torch_arr.shape[0] - self.ecog_window_size, win_step),
                             desc='creating windows'):
@@ -493,15 +515,15 @@ class BaseASPEN(BaseDataset):
         return len(self.selected_flat_keys)
 
     def __getitem__(self, item):
-        # ix_k includes the class and window id
+        # ix_k includes the class and window id, and possibly sensor id if flattened
         # data_k specifies subject dataset in data_map (less granular than ix_k)
         ix_k, data_k = self.selected_flat_keys[item]
         data_d = self.data_maps[data_k]
 
         so = self.get_features(data_d, self.flat_index_map[ix_k],
-                               ix_k[0], transform=self.transform)
+                               ix_k, transform=self.transform)
         so.update(self.get_targets(data_d, self.flat_index_map[ix_k],
-                                   ix_k[0], target_transform=self.target_transform))
+                                   ix_k, target_transform=self.target_transform))
 
         # Return anything that is a Torch Tensor - the torch dataloader will handle
         # compiling multiple outputs for batch
@@ -634,14 +656,21 @@ class BaseASPEN(BaseDataset):
         kws['signal'] = signal_df.loc[ix] if not index_loc else signal_df.iloc[ix]
         # Transpose to keep time as last index for torch
         np_ecog_arr = kws['signal'].values.T
+
+        if len(label) > 2 and 0 < label[-1] < np_ecog_arr.shape[0]:
+            np_ecog_arr = np_ecog_arr[label[-1]][None, :]
+
         if transform is not None:
             # print("Apply transform to shape of " + str(np_ecog_arr.shape))
             np_ecog_arr = transform(np_ecog_arr)
+
         kws['signal_arr'] = torch.from_numpy(np_ecog_arr).float()
         return kws
 
     @staticmethod
     def get_targets(data_map, ix, label, target_transform=None):
+        label = label[0]
+
         kws = dict(text='<silence>' if label <= 0 else '<speech>',
                    text_arr=torch.Tensor([0] if label <= 0 else [1]))
         if target_transform is not None:
