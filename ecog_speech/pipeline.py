@@ -82,9 +82,9 @@ class IdentifyGoodAndBadSensors(DictTrf):
     def process(self, data_map):
         k = self.electrode_qual_key
         if k not in data_map:
-            msg = f"Electrodes with key {self.electrode_qual_key} not found among {list(data_map.keys())}"
+            msg = f"Electrodes with key '{self.electrode_qual_key}' not found among {list(data_map.keys())}"
             if self.on_missing == 'ignore':
-                self.logger.warning(msg)
+                self.logger.warning(msg + ' - but on_missing="ignore", so moving on')
                 return dict(good_sensor_columns=None, bad_sensor_columns=None)
             else:
                 raise KeyError("ERROR: " + msg)

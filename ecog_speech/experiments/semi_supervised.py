@@ -4,10 +4,12 @@ from ecog_speech import utils
 from dataclasses import dataclass, field
 from ecog_speech.experiments import base as bxp
 
+
 logger = utils.get_logger('semi_supervised')
 
 
 def run(options):
+    from ecog_speech.models import base
     from ecog_speech.models import base_transformers
     import torch
 
@@ -31,10 +33,15 @@ def run(options):
 
     # TODO: Need way to override defaults in options
     #options.pre_processing_pipeline = 'audio_gate_speaking_only'
-    data_kws = {k: dict(flatten_sensors_to_samples=options.flatten_sensors_to_samples)
+    add_trfs = [datasets.SelectFromDim(dim=0, index='random', keep_dim=True)] if options.random_sensors_to_samples else None
+    data_kws = {k: dict(flatten_sensors_to_samples=options.flatten_sensors_to_samples,
+                        #additional_train_transforms=add_trfs, additional_eval_transforms=add_trfs
+                )
                  for k in ['train_data_kws', 'cv_data_kws', 'test_data_kws']}
     dataset_map, dl_map, eval_dl_map = standard.make_datasets_and_loaders(options, dataset_cls=datasets.HarvardSentences,
                                                                           pre_processing_pipeline='audio_gate_speaking_only',
+                                                                          additional_transforms=add_trfs,
+                                                                          num_dl_workers=options.n_dl_workers,
                                                                           **data_kws)
 
     # Default lr reduce to False, only setup if at patience is set
@@ -148,4 +155,5 @@ if __name__ == """__main__""":
     parser.add_arguments(SemiSupervisedOptions, dest='semi_supervised')
     args = parser.parse_args()
     main_options: SemiSupervisedOptions = args.semi_supervised
+    main_options.random_sensors_to_samples = True
     run(main_options)

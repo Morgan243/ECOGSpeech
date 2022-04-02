@@ -22,6 +22,8 @@ class BaseExperimentOptions(JsonSerializable):
 class TrainingExperimentOptions(BaseExperimentOptions):
     n_epochs: int = 100
     batch_size: int = 256
+    batches_per_epoch: Optional[int] = None
+    """If set, only does this many batches in an epoch - otherwise, will do enough batches to equal dataset size"""
 
     learning_rate: float = 0.001
     lr_adjust_patience: Optional[float] = None
@@ -32,9 +34,13 @@ class TrainingExperimentOptions(BaseExperimentOptions):
 @dataclass
 class MultiSensorOptions:
     flatten_sensors_to_samples: bool = False
+    random_sensors_to_samples: bool = False
 
 @dataclass
 class DNNModelOptions(TrainingExperimentOptions):
     activation_class: str = 'PReLU'
     dropout: float = 0.
     batchnorm: bool = False
+
+    n_dl_workers: int = 4
+    n_dl_eval_workers: int = 6

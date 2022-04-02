@@ -88,6 +88,8 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
                               train_sets_str=None, cv_sets_str=None, test_sets_str=None,
                               train_sensor_columns='valid',
                               pre_processing_pipeline=None,
+                              additional_transforms=None,
+                              #additional_train_transforms=None, additional_eval_transforms=None,
                               num_dl_workers=8) -> tuple:
     """
     Helper method to create instances of dataset_cls as specified in the command-line options and
@@ -142,8 +144,10 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
         test_kws.update(test_data_kws)
 
     dl_kws = dict(num_workers=num_dl_workers, batch_size=options.batch_size,
+                  batches_per_epoch=options.batches_per_epoch,
                   shuffle=False, random_sample=True)
     eval_dl_kws = dict(num_workers=num_dl_workers, batch_size=512,
+                       batches_per_epoch=options.batches_per_epoch,
                        shuffle=False, random_sample=False)
 
     dataset_map = dict()
@@ -198,10 +202,15 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
 
     # dataset_map = dict(train=train_nww, cv=cv_nww, test=test_nww)
 
+    if isinstance(additional_transforms, list):
+        dataset_map = {k: v.append_transform(additional_transforms)
+                          for k, v in dataset_map.items()}
+
     dataloader_map = {k: v.to_dataloader(**dl_kws)
                       for k, v in dataset_map.items()}
     eval_dataloader_map = {k: v.to_dataloader(**eval_dl_kws)
                            for k, v in dataset_map.items()}
+
 
     return dataset_map, dataloader_map, eval_dataloader_map
 

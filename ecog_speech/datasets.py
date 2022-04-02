@@ -69,6 +69,27 @@ class ShuffleDimension:
         sample = np.transpose(sample, [self.shuffle_dim, 0])
         return sample
 
+class SelectFromDim:
+    """Expects numpy arrays - use in Compose - models.base.Select can be used in Torch """
+    def __init__(self, dim=0, index='random', keep_dim=True):
+        super(SelectFromDim, self).__init__()
+        self.dim = dim
+        self.index = index
+        self.keep_dim = keep_dim
+
+    def __call__(self, x):
+        ix = self.index
+        if isinstance(self.index, str) and self.index == 'random':
+            ix = np.random.randint(0, x.shape[self.dim])
+
+        x = np.take(x, indices=ix, axis=self.dim)
+
+        if self.keep_dim:
+            x = np.expand_dims(x, self.dim)
+
+        return x
+
+
 @attr.s
 class RandomIntLike:
     """
@@ -90,7 +111,8 @@ class BaseDataset(tdata.Dataset):
         dset = self
         if random_sample:
             if batches_per_epoch is None:
-                batches_per_epoch = len(dset) // batch_size
+                #batches_per_epoch = len(dset) // batch_size
+                batches_per_epoch = int(np.ceil(len(dset) / batch_size))
 
             dataloader = tdata.DataLoader(dset, batch_size=batch_size,
                                           sampler=tdata.RandomSampler(dset,
@@ -375,12 +397,13 @@ class BaseASPEN(BaseDataset):
             if self.flatten_sensors_to_samples:
                 # Map full description (word label, window index, sensor,...trial key elements..}
                 # to the actual pandas index
-                self.flat_index_map = {tuple([wrd_id, ix_i, s] + list(k_t)): ixes
+                self.logger.info("Flattening sensors to samples")
+                self.flat_index_map = {tuple([wrd_id, ix_i, s_i] + list(k_t)): ixes
                                        for k_t, index_map in tqdm(self.sample_index_maps.items(),
                                                                   desc="Creating sample indices")
                                        for wrd_id, ix_list in index_map.items()
                                        for ix_i, ixes in enumerate(ix_list)
-                                       for s in self.selected_columns}
+                                       for s_i, s in enumerate(self.selected_columns)}
 
                 # Enumerate all the keys across flat_index_map into one large list for index-style,
                 # has a len() and can be indexed into nicely (via np.ndarray)
@@ -402,6 +425,7 @@ class BaseASPEN(BaseDataset):
                                            for i, k in enumerate(self.flat_index_map.keys())],
                                           dtype='object')
 
+            self.logger.info(f"Length of flat index map: {len(self.flat_index_map)}")
 
             # Finish processing the data mapping loaded from the mat data files
             #self.data_maps = {l_p_s_t_tuple: self.parse_mat_arr_dict(mat_d, self.selected_columns)
@@ -521,7 +545,8 @@ class BaseASPEN(BaseDataset):
         data_d = self.data_maps[data_k]
 
         so = self.get_features(data_d, self.flat_index_map[ix_k],
-                               ix_k, transform=self.transform)
+                               ix_k, transform=self.transform,
+                               channel_select=ix_k[2] if self.flatten_sensors_to_samples else None)
         so.update(self.get_targets(data_d, self.flat_index_map[ix_k],
                                    ix_k, target_transform=self.target_transform))
 
@@ -542,7 +567,8 @@ class BaseASPEN(BaseDataset):
         return self
 
     def append_transform(self, transform):
-        self.transform_l.append(transform)
+        transform = [transform] if not isinstance(transform, list) else transform
+        self.transform_l += transform
         self.transform = torchvision.transforms.Compose(self.transform_l)
         return self
 
@@ -648,8 +674,10 @@ class BaseASPEN(BaseDataset):
 
         return p_list
 
+
     @staticmethod
-    def get_features(data_map, ix, label=None, transform=None, index_loc=False, signal_key='signal'):
+    def get_features(data_map, ix, label=None, transform=None, index_loc=False, signal_key='signal',
+                     channel_select=None):
         signal_df = data_map[signal_key]
         kws = dict()
 
@@ -657,8 +685,13 @@ class BaseASPEN(BaseDataset):
         # Transpose to keep time as last index for torch
         np_ecog_arr = kws['signal'].values.T
 
-        if len(label) > 2 and 0 < label[-1] < np_ecog_arr.shape[0]:
-            np_ecog_arr = np_ecog_arr[label[-1]][None, :]
+        #if self.flatten_sensors_to_samples:
+        if channel_select is not None:
+            np_ecog_arr = np_ecog_arr[channel_select][None, :]
+
+        # Wow, very hacky - nice job
+        #if len(label) > 5 and 0 < label[2] < np_ecog_arr.shape[0]:
+        #    np_ecog_arr = np_ecog_arr[label[2]][None, :]
 
         if transform is not None:
             # print("Apply transform to shape of " + str(np_ecog_arr.shape))

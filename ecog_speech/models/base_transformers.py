@@ -562,7 +562,6 @@ from ecog_speech.models.base import Trainer
 from tqdm.auto import tqdm
 class Cog2VecTrainer(Trainer):
     squeeze_first = True
-    #model_output_logits_key = 'x'
     model_output_logits_key = 'preds'
     ppl_weight = 100.
 
@@ -726,7 +725,8 @@ class Cog2VecTrainer(Trainer):
         X_barr = data_batch['signal_arr'].to(self.device)
         bsz = X_barr.shape[0]
         # Select a single sensor for now and remove the singleton dimension
-        X = X_barr.select(1, np.random.randint(0, X_barr.shape[1])).unsqueeze(1)
+        #X = X_barr.select(1, np.random.randint(0, X_barr.shape[1])).unsqueeze(1)
+        X = X_barr#.select(1, np.random.randint(0, X_barr.shape[1])).unsqueeze(1)
 
         if self.squeeze_first:
             X = X.squeeze()
