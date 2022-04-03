@@ -146,9 +146,10 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     dl_kws = dict(num_workers=num_dl_workers, batch_size=options.batch_size,
                   batches_per_epoch=options.batches_per_epoch,
                   shuffle=False, random_sample=True)
+    print(f"DL Keyword arguments: {dl_kws}")
     eval_dl_kws = dict(num_workers=num_dl_workers, batch_size=512,
                        batches_per_epoch=options.batches_per_epoch,
-                       shuffle=False, random_sample=False)
+                       shuffle=False, random_sample=False if options.batches_per_epoch is None else True)
 
     dataset_map = dict()
     logger.info("Using dataset class: %s" % str(dataset_cls))
@@ -188,7 +189,7 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     else:
         from sklearn.model_selection import train_test_split
         train_ixs, cv_ixes = train_test_split(range(len(train_nww)))
-        cv_nww = dataset_cls(data_from=train_nww).select(cv_ixes)
+        cv_nww = dataset_cls(data_from=train_nww, **cv_kws).select(cv_ixes)
         train_nww.select(train_ixs)
         dataset_map.update(dict(train=train_nww,
                                 cv=cv_nww))

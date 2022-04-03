@@ -694,9 +694,11 @@ class Trainer:
                 self.epoch_cb_history.append({k: cb(self) for k, cb in epoch_callbacks.items()})
                 # Produce eval results if a cv dataloader was given
                 if self.cv_data_gen:
-                    cv_losses = self._eval(epoch, self.cv_data_gen)
-                    cv_l_mean = np.mean(cv_losses)
+                    cv_losses_d = self._eval(epoch, self.cv_data_gen)
+                    #cv_l_mean = np.mean(cv_losses)
+                    cv_l_mean = cv_losses_d['primary_loss']
                     self.epoch_res_map[epoch]['cv_loss'] = cv_l_mean
+                    self.epoch_res_map[epoch]['cv_loss_d'] = cv_losses_d
 
                     for m_name, m_sched in self.scheduler_map.items():
                         m_sched.step(cv_l_mean)
@@ -757,12 +759,13 @@ class Trainer:
 
                 mean_loss = np.mean(loss_l)
                 desc = "Mean Eval Loss: %.5f" % mean_loss
+                reg_l = 0.
                 if self.model_regularizer is not None:
                     reg_l = self.model_regularizer(model)
                     desc += (" (+ %.6f reg loss = %.6f)" % (reg_l, mean_loss + reg_l))
-                else:
-                    reg_l = 0.
+
                 overall_loss = (mean_loss + reg_l)
+
                 if overall_loss < self.best_cv:
 
                     self.best_model_state = copy_model_state(model)
@@ -773,7 +776,7 @@ class Trainer:
                 pbar.set_description(desc)
 
         self.model_map['model'].train()
-        return loss_l
+        return dict(primary_loss=overall_loss, cv_losses=loss_l)
 
         #return dict(preds=torch.cat(preds_l).detach().cpu().numpy(),
         #            actuals=torch.cat(actuals_l).detach().cpu().int().numpy())
@@ -786,9 +789,7 @@ class Trainer:
         res_d = dict()
 
         model = self.model_map['model']
-        #gen_model = self.model_map['gen']
         optim = self.opt_map['model']
-        #gen_optim = self.opt_map['gen']
         model = model.train()
 
         model.zero_grad()
@@ -839,8 +840,8 @@ class Trainer:
 
         return ret
 
-    @classmethod
-    def generate_outputs_from_model(cls, model, dl_map, criterion=None, device=None,
+
+    def generate_outputs_from_model(self, model, dl_map, criterion=None, device=None,
                                     to_frames=True, win_step=None, win_size=None,
                                     input_key='ecog_arr', target_key='text_arr') -> dict:
         """
@@ -871,24 +872,14 @@ class Trainer:
                 #data_map = next(iter(dset.data_maps.values()))
                 res_d = dict()
                 for _x in tqdm(dl, desc="Eval on [%s]" % str(dname)):
-                    _inner_d = cls.generate_outputs_from_model_inner_step(model, _x, input_key=input_key,
-                                                                          target_key=target_key)
+                    _inner_d = self.generate_outputs_from_model_inner_step(model, _x, input_key=input_key,
+                                                                          target_key=target_key, device=device)
 
                     for k, v in _inner_d.items():
                         curr_v = res_d.get(k, list())
                         new_v = (curr_v + v) if isinstance(v, list) else (curr_v + [v])
                         res_d[k] = new_v
 
-#                    _x_in = _x['ecog_arr']
-#                    _y = _x['text_arr']
-#                    if device:
-#                        _x_in = _x_in.to(device)
-#                        _y = _y.to(device)
-#
-#                    preds_l.append(model(_x_in))
-#                    actuals_l.append(_x['text_arr'])
-#                    if criterion is not None:
-#                        criterion_l.append(criterion(preds_l[-1], _y))
                 output_map[dname] = {k: torch.cat(v_l).detach().cpu().numpy() for k, v_l in res_d.items()}
                 #output_map[dname] = dict(preds=torch.cat(preds_l).detach().cpu().numpy(),
                 #                         actuals=torch.cat(actuals_l).detach().cpu().int().numpy())

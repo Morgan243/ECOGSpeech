@@ -2,8 +2,10 @@ import standard
 from ecog_speech.experiments.standard import make_model, make_datasets_and_loaders, default_option_kwargs
 from ecog_speech import utils
 from dataclasses import dataclass, field
+import json
+from os.path import join as pjoin
 from ecog_speech.experiments import base as bxp
-
+from ecog_speech import datasets
 
 logger = utils.get_logger('semi_supervised')
 
@@ -29,7 +31,6 @@ def run(options):
     with torch.no_grad():
         model(model.t_x)
 
-    from ecog_speech import datasets
 
     # TODO: Need way to override defaults in options
     #options.pre_processing_pipeline = 'audio_gate_speaking_only'
@@ -74,6 +75,7 @@ def run(options):
     # Produce predictions and score them
     model.eval()
     #outputs_map = trainer.generate_outputs(**eval_dl_map)
+    eval_res_map = {k: trainer.eval_on(_dl).to_dict(orient='list') for k, _dl in eval_dl_map.items()}
     #clf_str_map = utils.make_classification_reports(outputs_map)
 
     #train_perf_map = utils.performance(outputs_map['train']['actuals'],
@@ -102,6 +104,7 @@ def run(options):
         num_trainable_params=utils.number_of_model_params(model),
         num_params=utils.number_of_model_params(model, trainable_only=False),
         model_kws=model_kws,
+        **eval_res_map,
         #clf_reports=clf_str_map,
         #**{'train_' + k: v for k, v in train_perf_map.items()},
         #**{'cv_' + k: v for k, v in cv_perf_map.items()},
@@ -120,6 +123,15 @@ def run(options):
         torch.save(model.cpu().state_dict(), p)
         res_dict['save_model_path'] = p
 
+    if options.result_dir is not None:
+        path = pjoin(options.result_dir, name)
+        logger.info(path)
+        res_dict['path'] = path
+        with open(path, 'w') as f:
+            json.dump(res_dict, f)
+
+    #return trainer, outputs_map
+    return trainer, eval_res_map
 
 @dataclass
 class SemiSupervisedOptions(bxp.DNNModelOptions, bxp.MultiSensorOptions):
@@ -155,5 +167,7 @@ if __name__ == """__main__""":
     parser.add_arguments(SemiSupervisedOptions, dest='semi_supervised')
     args = parser.parse_args()
     main_options: SemiSupervisedOptions = args.semi_supervised
-    main_options.random_sensors_to_samples = True
+    #main_options.random_sensors_to_samples = True
+    #main_options.batches_per_epoch = 10
+    #main_options.n_epochs = 1
     run(main_options)

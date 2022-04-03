@@ -1,5 +1,6 @@
 from typing import Optional, Tuple, List
 
+import pandas as pd
 from ecog_speech.models import base
 import numpy as np
 import torch
@@ -559,9 +560,13 @@ class FineTuner(torch.nn.Module):
         return self.output_model(pt_out[self.pre_trained_model_output_key])
 
 from ecog_speech.models.base import Trainer
+import attr
 from tqdm.auto import tqdm
+@attr.s
 class Cog2VecTrainer(Trainer):
+    input_key = attr.ib('signal_arr')
     squeeze_first = True
+    #model_output_logits_key = 'x'
     model_output_logits_key = 'preds'
     ppl_weight = 100.
 
@@ -611,58 +616,70 @@ class Cog2VecTrainer(Trainer):
         return loss_l
 
 
-    def _eval(self, epoch_i, dataloader, model_key='model'):
-        model = self.model_map[model_key]
+    def eval_on(self, dataloader, cb=None):
+        model = self.model_map['model']
         model.eval()
-        self.best_cv = getattr(self, 'best_cv', np.inf)
-
-        preds_l, actuals_l, loss_l = list(), list(), list()
+        eval_results_d_l = list()
         with torch.no_grad():
             with tqdm(total=len(dataloader), desc="Eval") as pbar:
                 for i, _x in enumerate(dataloader):
-                    _X = _x['signal_arr'].to(self.device)
-                    X = _X.select(1, np.random.randint(0, _X.shape[1])).unsqueeze(1)
+                    X = _x['signal_arr'].to(self.device)
 
                     if self.squeeze_first:
                         X = X.squeeze()
 
                     m_d = model(X)
 
-                    logits = m_d[self.model_output_logits_key]
+                    loss_d = self.loss(m_d, as_tensor=False)
+                    score_d = self.score_training(m_d, as_tensor=False)
 
-                    logits = logits.transpose(0, 2)
-                    logits = logits.reshape(-1, logits.size(-1))
-                    target = torch.zeros_like(logits)
-
-                    loss = F.cross_entropy(
-                        logits, target[:, 0].long(), reduction='sum'  # weights, reduction=reduction
-                    )
-                    loss_l.append(loss.detach().cpu().item() / X.shape[0])
+                    eval_d = dict(**score_d, **loss_d)
+                    eval_results_d_l.append(eval_d)
 
                     pbar.update(1)
 
-                mean_loss = np.mean(loss_l)
-                desc = "Mean Eval Loss: %.5f" % mean_loss
-                if self.model_regularizer is not None:
-                    reg_l = self.model_regularizer(model)
-                    desc += (" (+ %.6f reg loss = %.6f)" % (reg_l, mean_loss + reg_l))
-                else:
-                    reg_l = 0.
-                overall_loss = (mean_loss + reg_l)
-                if overall_loss < self.best_cv:
+                eval_res_df = pd.DataFrame(eval_results_d_l)#.mean().to_dict()
+                if cb is not None:
+                    cb(eval_res_df, pbar)
 
-                    self.best_model_state = base.copy_model_state(model)
-                    self.best_model_epoch = epoch_i
-                    self.best_cv = overall_loss
-                    desc += "[[NEW BEST]]"
+            return eval_res_df
 
-                pbar.set_description(desc)
+    def _eval(self, epoch_i, dataloader, model_key='model', primary_eval_key='bce_loss'):
+        model = self.model_map[model_key]
+        model.eval()
+        self.best_cv = getattr(self, 'best_cv', np.inf)
+
+        def cb(_eval_res_df, pbar):
+            _eval_res_d = _eval_res_df.mean().to_dict()
+
+            desc = ", ".join(f"{k}={np.round(r, 4)}" for k, r in _eval_res_d.items())
+            mean_loss = _eval_res_d[primary_eval_key]
+
+            if self.model_regularizer is not None:
+                reg_l = self.model_regularizer(model)
+                desc += (" (+ %.6f reg loss = %.6f)" % (reg_l, mean_loss + reg_l))
+            else:
+                reg_l = 0.
+            overall_loss = (mean_loss + reg_l)
+            if overall_loss < self.best_cv:
+
+                self.best_model_state = base.copy_model_state(model)
+                self.best_model_epoch = epoch_i
+                self.best_cv = overall_loss
+                desc += "[[NEW BEST]]"
+
+            pbar.set_description(desc)
+
+        eval_res_df = self.eval_on(dataloader, cb=cb)
+        eval_res_d = eval_res_df.mean().to_dict()
+        eval_res_d['primary_loss'] = eval_res_d[primary_eval_key]
 
         self.model_map['model'].train()
-        return loss_l
+
+        return eval_res_d
 
 
-    def loss(self, model_output_d):
+    def loss(self, model_output_d, as_tensor=True):
         logits = model_output_d[self.model_output_logits_key]
         num_vars = model_output_d['num_vars']
         prob_ppl = model_output_d['prob_perplexity']
@@ -681,9 +698,12 @@ class Cog2VecTrainer(Trainer):
         ppl_l = ((num_vars - prob_ppl) / num_vars) * self.ppl_weight #* 0.1
         fpen_l = model_output_d["features_pen"] #* 10
 
-        return dict(bce_loss=loss, perplexity=ppl_l, feature_pen=fpen_l)
+        o = dict(bce_loss=loss, perplexity=ppl_l, feature_pen=fpen_l)
+        if not as_tensor:
+            o = {k: v.detach().cpu().item() for k, v in o.items()}
+        return o
 
-    def score_training(self, model_output_d):
+    def score_training(self, model_output_d, as_tensor=False):
         """training score metrics that don't require gradient, won't have .backward() called,
         compliments loss for understanding performance"""
         logits = model_output_d[self.model_output_logits_key]
@@ -699,18 +719,10 @@ class Cog2VecTrainer(Trainer):
             corr = _max.long().sum().item() - both.long().sum().item()
             count = float(_max.numel())
 
-        return dict(accuracy=(corr / count), n=count)
-
-    def score_eval(self, ):
-        pass
-        #X = X_barr.select(1, sens_id).unsqueeze(1)
-
-        #with torch.no_grad():
-        #    feat_d = m.forward(X, features_only=True, mask=False)
-        #    results_l.append(
-        #        dict(text_arr=batch_d['text_arr'],
-        #             # signal_arr=batch_d['signal_arr'].detach().cpu().numpy(),
-        #             **{n: arr.detach().cpu().numpy() for n, arr in feat_d.items()}))
+        acc = (corr / count)
+        acc = torch.Tensor([acc]) if as_tensor else acc
+        count = torch.Tensor([count]) if as_tensor else count
+        return dict(accuracy=acc, n=count)
 
     def train_inner_step(self, epoch_i, data_batch):
         res_d = dict()
@@ -759,26 +771,24 @@ class Cog2VecTrainer(Trainer):
                        for l_k, l in loss_d.items()}
                     )
 
-    @classmethod
-    def generate_outputs_from_model_inner_step(cls, model, data_batch, criterion=None, device=None,
-                                               squeeze_first=True, model_output_logits_key='preds'):
-        _X = data_batch['signal_arr'].to(device)
-        X = _X.select(1, np.random.randint(0, _X.shape[1])).unsqueeze(1)
+    def generate_outputs_from_model_inner_step(self, model, data_batch, criterion=None,
+                                               input_key='signal_arr', target_key='text_arr', device=None,
+                                               ):
+        X = data_batch[input_key].to(device)
 
-        if squeeze_first:
+        if self.squeeze_first:
             X = X.squeeze()
 
-        m_d = model(X)
+        with torch.no_grad():
+            model.eval()
+            model.to(device)
+            m_d = model(X)
 
-        logits = m_d[model_output_logits_key]
+        loss_d = self.loss(m_d)
+        score_d = self.score_training(m_d, as_tensor=True)
+        eval_d = dict(**score_d, **loss_d)
 
-        logits = logits.transpose(0, 2)
-        logits = logits.reshape(-1, logits.size(-1))
-        target = torch.zeros_like(logits)
-
-        loss = F.cross_entropy(
-            logits, target[:, 0].long(), reduction='sum'  # weights, reduction=reduction
-        )
+        return eval_d
 
 
 if __name__ == """__main__""":

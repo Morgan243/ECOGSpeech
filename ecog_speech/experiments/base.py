@@ -15,6 +15,7 @@ class BaseExperimentOptions(JsonSerializable):
 
     data_subset: str = 'Data'
 
+    result_dir: Optional[str] = None
     save_model_path: Optional[str] = None
     device: Optional[str] = None
 
@@ -34,6 +35,7 @@ class TrainingExperimentOptions(BaseExperimentOptions):
 @dataclass
 class MultiSensorOptions:
     flatten_sensors_to_samples: bool = False
+    """Sensors will bre broken up into sensors - inputs beceome (1, N-timesteps) samples (before batching)"""
     random_sensors_to_samples: bool = False
 
 @dataclass
