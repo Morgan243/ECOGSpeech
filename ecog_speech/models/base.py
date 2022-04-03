@@ -404,6 +404,19 @@ class BaseMultiSincNN(torch.nn.Module):
     def forward(self, x):
         return self.m(x)
 
+    def format_results(self, batch_cb_history=None, band_params_history=None):
+        batch_cb_history = dict() if batch_cb_history is None else batch_cb_history
+        band_params_history = batch_cb_history.get('band_params', band_params_history)
+
+        ret = dict()
+        if band_params_history is not None:
+            low_hz, high_hz, center_hz = self.parse_band_parameter_training_hist(band_params_history,
+                                                                                 fs=self.fs,
+                                                                                 to_json=True,
+                                                                                 per_channel_filter_to_json=self.per_channel_filter)
+            ret.update(dict(low_hz=low_hz, high_hz=high_hz, center_hz=center_hz))
+        return ret
+
     def get_band_params(self, trainer=None, get_band_kws=None):
         get_band_kws = dict() if get_band_kws is None else get_band_kws
         parameters = list()
@@ -420,7 +433,8 @@ class BaseMultiSincNN(torch.nn.Module):
             return parameters
 
     @staticmethod
-    def parse_band_parameter_training_hist(batch_results, fs=1200, min_low_hz=1, min_band_hz=3):
+    def parse_band_parameter_training_hist(batch_results, fs=1200, min_low_hz=1, min_band_hz=3,
+                                           to_json=False, per_channel_filter_to_json=False):
         channel_param_bandhz_map = dict()
         channel_param_lowhz_map = dict()
 
@@ -441,7 +455,20 @@ class BaseMultiSincNN(torch.nn.Module):
 
         centerhz_df_map = {ch_i: (lowhz_df_map[ch_i] + highhz_df_map[ch_i]) / 2
                            for ch_i in lowhz_df_map.keys()}
-        return lowhz_df_map, highhz_df_map, centerhz_df_map
+        if to_json:
+            if per_channel_filter_to_json:
+                _low_hz = {k: lowhz_df.to_json() for k, lowhz_df in lowhz_df_map.items()}
+                _high_hz = {k: highhz_df.to_json() for k, highhz_df in highhz_df_map.items()}
+                _center_hz = {k: centerhz_df.to_json() for k, centerhz_df in centerhz_df_map.items()}
+            else:
+                _low_hz = lowhz_df_map[0].to_json()
+                _high_hz = highhz_df_map[0].to_json()
+                _center_hz = centerhz_df_map[0].to_json()
+            ret = _low_hz, _high_hz, _center_hz
+        else:
+            ret = lowhz_df_map, highhz_df_map, centerhz_df_map
+
+        return ret
 
     @staticmethod
     def plot_sincnet_batch_results(lowhz_df_map, highhz_df_map, centerhz_df_map):

@@ -7,13 +7,30 @@ import torch
 from ecog_speech import utils
 from ecog_speech.experiments.standard import train_and_test_model
 from ecog_speech.models import base
+from typing import List, Optional
 
 from ecog_speech.experiments.standard import make_model, make_datasets_and_loaders, default_option_kwargs
+from ecog_speech.experiments import base as bxp
+from dataclasses import dataclass
+import json
 
 logger = utils.get_logger(__name__)
 
+@dataclass
+class TransferLearningOptions(bxp.DNNModelOptions, bxp.MultiSensorOptions):
+    model_name: Optional[str] = None
+    dataset: Optional[str] = None
+    train_sets: Optional[str] = None
 
-def run(options):
+    pretrained_result_input_path: Optional[str] = None
+    pretrained_result_model_base_path: Optional[str] = None
+
+    pre_train_sets: Optional[str] = None
+    pre_cv_sets: Optional[str] = None
+    pre_test_sets: Optional[str] = None
+
+
+def run_sincnet(options: TransferLearningOptions):
     ##################
     def make_sub_results(stage, _trainer, _dataset_map, _outputs_map, _performance_map):
         return dict(stage=stage,
@@ -25,20 +42,6 @@ def run(options):
                     **{f"{part_name}_{metric_name}": metric_value
                        for part_name, perf_d in _performance_map.items()
                        for metric_name, metric_value in perf_d.items()})
-
-    ##################
-
-    def parse_band_params(_band_params, fs):
-        lowhz_df_map, highhz_df_map, centerhz_df_map = base.BaseMultiSincNN.parse_band_parameter_training_hist(
-            _band_params,
-            fs=fs)
-        if model.per_channel_filter:
-            _low_hz = {k: lowhz_df.to_json() for k, lowhz_df in lowhz_df_map.items()}
-            _high_hz = {k: highhz_df.to_json() for k, highhz_df in highhz_df_map.items()}
-        else:
-            _low_hz = lowhz_df_map[0].to_json()
-            _high_hz = highhz_df_map[0].to_json()
-        return _low_hz, _high_hz
 
     #####
     # Load pre-training data and initialize a fresh model from it
@@ -58,9 +61,13 @@ def run(options):
     # Future TODO - may want to consider other aspects or something more generic?
     selected_columns = pre_dataset_map['train'].selected_columns
 
-    pre_band_params = getattr(pre_trainer, 'batch_cb_history', dict()).get('band_params', None)
-    pre_results_d['low_hz_frame'], pre_results_d['high_hz_frame'] = (parse_band_params(pre_band_params, model.fs)
-                                                                     if pre_band_params is not None else (None, None))
+    batch_cb_history = getattr(pre_trainer, 'batch_cb_history', None)#.get('band_params', None)
+    #pre_band_params = getattr(pre_trainer, 'batch_cb_history', dict()).get('band_params', None)
+    if batch_cb_history is not None:
+        models_batch_results = model.format_results(batch_cb_history)
+        pre_results_d.update(models_batch_results)
+    #pre_results_d['low_hz_frame'], pre_results_d['high_hz_frame'] = (parse_band_params(pre_band_params, model.fs)
+    #                                                                 if pre_band_params is not None else (None, None))
 
     ### Fine-tuning
     logger.info("Loading fine-tuning data")
@@ -78,8 +85,12 @@ def run(options):
     logger.info("Fine-tuning complete")
 
     band_params = getattr(trainer, 'batch_cb_history', dict()).get('band_params', None)
-    results_d['low_hz_frame'], results_d['high_hz_frame'] = (parse_band_params(band_params, model.fs)
-                                                             if band_params is not None else (None, None))
+    if band_params is not None:
+        models_batch_results = model.format_results(band_params)
+        results_d.update(models_batch_results)
+
+    #results_d['low_hz_frame'], results_d['high_hz_frame'] = (parse_band_params(band_params, model.fs)
+    #                                                         if band_params is not None else (None, None))
 
     uid = str(uuid.uuid4())
     results_d['uid'] = pre_results_d['uid'] = uid
@@ -116,20 +127,45 @@ def run(options):
             json.dump(res_dict, f)
 
 
-tl_options = [
-    dict(dest='--pre-train-sets', default=None, type=str),
-    dict(dest='--pre-cv-sets', default=None, type=str),
-    dict(dest='--pre-test-sets', default=None, type=str),
-]
-tl_option_kwargs = default_option_kwargs + tl_options
+def run(options: TransferLearningOptions):
+    # Pretrained model already prepared, parse from its results output
+    if options.pretrained_result_input_path is not None:
+        from ecog_speech.result_parsing import load_model_from_results
+
+        result_path = options.pretrained_result_input_path
+        model_base_path = options.pretrained_result_model_base_path
+
+        print(f"Loading pretrained model from results in {result_path} (base path = {model_base_path})")
+        with open(result_path, 'r') as f:
+            result_json = json.load(f)
+
+        pretrained_model = load_model_from_results(result_json, base_model_path=model_base_path)
+    # Need to pre-train the model now
+    else:
+        raise NotImplementedError()
+        # Need to pretrain
+        pass
+
+    fine_tune_model = pretrained_model.create_fine_tuning_model()
+
+    from ecog_speech.experiments.semi_supervised import make_datasets_and_loaders
+    dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options)
+
+    #ft_dl = hvs_all.to_dataloader(num_workers=4, batch_size=128, random_sample=True)
+    ft_train_dl = dl_map['train']
+    ft_trainer = base.Trainer(model_map=dict(model=fine_tune_model), opt_map=dict(), train_data_gen=ft_train_dl,
+                              input_key='signal_arr', device='cpu')
+    ft_results = ft_trainer.train(options.n_epochs)
 
 
-all_model_hyperparam_names = [d['dest'].replace('--', '').replace('-', '_')
-                              for d in tl_options
-                              if d['dest'] not in ('--train-sets', '--cv-sets', '--test-sets')]
+all_model_hyperparam_names = TransferLearningOptions.get_all_model_hyperparam_names()
+
 
 if __name__ == """__main__""":
-    parser = utils.build_argparse(tl_option_kwargs,
-                                  description="ASPEN+MHRG Transfer Learning experiments")
-    m_options = parser.parse_args()
-    run(m_options)
+    from simple_parsing import ArgumentParser
+
+    parser = ArgumentParser(description="ASPEN+MHRG Transfer Learning experiments")
+    parser.add_arguments(TransferLearningOptions, dest='transfer_learning')
+    args = parser.parse_args()
+    main_options: TransferLearningOptions = args.transfer_learning
+    run(main_options)

@@ -1,3 +1,4 @@
+import copy
 from typing import Optional, Tuple, List
 
 import pandas as pd
@@ -546,6 +547,25 @@ class CoG2Vec(torch.nn.Module):
                     features_pen=features_pen, num_vars=num_vars,
                     code_perplexity=code_ppl, prob_perplexity=prob_ppl,
                     temp=curr_temp)
+
+    def create_fine_tuning_model(self, options=None, classifier_head=None):
+        from ecog_speech.models import base
+
+        # Very simple linear classifier head by default
+        if classifier_head is None:
+            classifier_head = torch.nn.Sequential(*[
+                base.Reshape((self.C * self.T,)),
+                torch.nn.Linear(self.C * self.T, 1),
+                torch.nn.Sigmoid()
+            ])
+
+        m = copy.deepcopy(self)
+        m.feature_model.requires_grad_(False)
+        m.quantizer.codebook_indices = None
+
+        ft_model = FineTuner(pre_trained_model=m, output_model=classifier_head,
+                             pre_trained_model_output_key='x')
+        return ft_model
 
 
 class FineTuner(torch.nn.Module):

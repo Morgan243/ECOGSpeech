@@ -19,6 +19,12 @@ class BaseExperimentOptions(JsonSerializable):
     save_model_path: Optional[str] = None
     device: Optional[str] = None
 
+    @classmethod
+    def get_all_model_hyperparam_names(cls):
+        return [k for k, v in cls.__annotations__.items()
+                 if k not in ('train_sets', 'cv_sets', 'test_sets')]
+
+
 @dataclass
 class TrainingExperimentOptions(BaseExperimentOptions):
     n_epochs: int = 100
@@ -46,3 +52,8 @@ class DNNModelOptions(TrainingExperimentOptions):
 
     n_dl_workers: int = 4
     n_dl_eval_workers: int = 6
+
+@dataclass
+class FromResultOptions:
+    result_input_path: Optional[str] = None
+    result_model_base_path: Optional[str] = None
