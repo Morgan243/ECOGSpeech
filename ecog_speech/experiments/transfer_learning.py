@@ -10,6 +10,7 @@ from ecog_speech.models import base
 from typing import List, Optional
 
 from ecog_speech.experiments.standard import make_model, make_datasets_and_loaders, default_option_kwargs
+from ecog_speech.experiments import standard, semi_supervised
 from ecog_speech.experiments import base as bxp
 from dataclasses import dataclass
 import json
@@ -147,15 +148,24 @@ def run(options: TransferLearningOptions):
         pass
 
     fine_tune_model = pretrained_model.create_fine_tuning_model()
+    dataset_map, dl_map, eval_dl_map = semi_supervised.make_datasets_and_loaders(options)
 
-    from ecog_speech.experiments.semi_supervised import make_datasets_and_loaders
-    dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options)
-
-    #ft_dl = hvs_all.to_dataloader(num_workers=4, batch_size=128, random_sample=True)
-    ft_train_dl = dl_map['train']
-    ft_trainer = base.Trainer(model_map=dict(model=fine_tune_model), opt_map=dict(), train_data_gen=ft_train_dl,
-                              input_key='signal_arr', device='cpu')
+    ft_trainer = base.Trainer(model_map=dict(model=fine_tune_model), opt_map=dict(),
+                              train_data_gen=dl_map['train'],
+                              cv_data_gen=dl_map.get('cv'),
+                              input_key='signal_arr',
+                              learning_rate=options.learning_rate,
+                              early_stopping_patience=options.early_stopping_patience,
+                              device=options.device,
+                              )
     ft_results = ft_trainer.train(options.n_epochs)
+
+    fine_tune_model.eval()
+    outputs_map = ft_trainer.generate_outputs(**eval_dl_map)
+    #eval_res_map = {k: ft_trainer.eval_on(_dl).to_dict(orient='list') for k, _dl in eval_dl_map.items()}
+    clf_str_map = utils.make_classification_reports(outputs_map)
+    performance_map = {part_name: utils.performance(outputs_d['actuals'], outputs_d['preds'] > 0.5)
+                       for part_name, outputs_d in outputs_map.items()}
 
 
 all_model_hyperparam_names = TransferLearningOptions.get_all_model_hyperparam_names()
@@ -168,4 +178,11 @@ if __name__ == """__main__""":
     parser.add_arguments(TransferLearningOptions, dest='transfer_learning')
     args = parser.parse_args()
     main_options: TransferLearningOptions = args.transfer_learning
+    #main_options.pretrained_result_input_path = '../../results/cog2vec/1649000864_7a68aaf5-e41f-4f4e-bb56-0b0ca0a2a4fb_TL.json'
+    #main_options.pretrained_result_model_base_path = '../../results/cog2vec/models/'
+    #main_options.dataset = 'hvs'
+    #main_options.train_sets = 'UCSD-22'
+    #main_options.flatten_sensors_to_samples = True
+    #main_options.pre_processing_pipeline = 'audio_gate'
+
     run(main_options)

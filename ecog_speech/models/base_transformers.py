@@ -553,9 +553,13 @@ class CoG2Vec(torch.nn.Module):
 
         # Very simple linear classifier head by default
         if classifier_head is None:
+            h_size = 256
             classifier_head = torch.nn.Sequential(*[
                 base.Reshape((self.C * self.T,)),
-                torch.nn.Linear(self.C * self.T, 1),
+                torch.nn.Linear(self.C * self.T, h_size),
+                torch.nn.BatchNorm1d(h_size),
+                torch.nn.LeakyReLU(),
+                torch.nn.Linear(h_size, 1),
                 torch.nn.Sigmoid()
             ])
 
@@ -564,19 +568,24 @@ class CoG2Vec(torch.nn.Module):
         m.quantizer.codebook_indices = None
 
         ft_model = FineTuner(pre_trained_model=m, output_model=classifier_head,
+                             pre_trained_model_forward_kws=dict(features_only=True, mask=False),
                              pre_trained_model_output_key='x')
         return ft_model
 
 
 class FineTuner(torch.nn.Module):
-    def __init__(self, pre_trained_model, output_model, pre_trained_model_output_key):
+    def __init__(self, pre_trained_model, output_model, pre_trained_model_forward_kws,
+                 pre_trained_model_output_key):
         super().__init__()
         self.pre_trained_model = pre_trained_model
         self.output_model = output_model
         self.pre_trained_model_output_key = pre_trained_model_output_key
+        self.pre_trained_model_forward_kws = pre_trained_model_forward_kws
 
     def forward(self, x):
-        pt_out = self.pre_trained_model(x)
+        pt_out = self.pre_trained_model(x,
+                                        **(dict() if self.pre_trained_model_forward_kws is None
+                                           else self.pre_trained_model_forward_kws))
         return self.output_model(pt_out[self.pre_trained_model_output_key])
 
 from ecog_speech.models.base import Trainer

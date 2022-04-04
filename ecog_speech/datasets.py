@@ -833,7 +833,7 @@ class HarvardSentences(BaseASPEN):
                                                                           speaking_quantile_threshold=0.9,
                                                                           #silence_threshold=0.001,
                                                                           #silGence_quantile_threshold=0.05,
-                                                                          silence_n_smallest=5000, stim_key='word_stim')),
+                                                                          silence_n_smallest=10000, stim_key='word_stim')),
             ('speaking_indices', pipeline.WindowSampleIndicesFromStim('stim_pwrt',
                                                                       target_onset_shift=pd.Timedelta(-.5, 's'),
                                                                       # input are centers, and output is a window of .5 sec
