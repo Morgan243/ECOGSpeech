@@ -55,7 +55,10 @@ def wrangle_and_plot_pred_inspect(model, nww: datasets.NorthwesternWords, wrd_ix
     left_pad_t, right_pad_t = pd.Timedelta('1500ms'), pd.Timedelta('200ms')
 
     pos_start, pos_end = pos_win_ixes[0].min(), pos_win_ixes[-1].max()
-    neg_start, neg_end = neg_win_ixes[0].min(), neg_win_ixes[-1].max()
+    if len(neg_win_ixes) > 0:
+        neg_start, neg_end = neg_win_ixes[0].min(), neg_win_ixes[-1].max()
+    else:
+        neg_start, neg_end = pos_start, pos_end
 
     plt_slice = slice(pos_start - left_pad_t, neg_end + right_pad_t)
     ###-----
@@ -209,8 +212,12 @@ def wrangle_and_plot_pred_inspect(model, nww: datasets.NorthwesternWords, wrd_ix
     ax.fill_betweenx([0, max_y], neg_start.total_seconds(), neg_end.total_seconds(),
                      color='tab:orange', alpha=0.3, label='Labeled Non-Speaking Region')
 
-    ax.vlines(neg_win_ixes[0].max().total_seconds(), 0, max_y, color='tab:orange', lw=5, ls='--',
-              label='End of First Non-Speaking Window')
+    if len(neg_win_ixes):
+        ax.vlines(neg_win_ixes[0].max().total_seconds(), 0, max_y, color='tab:orange', lw=5, ls='--',
+                  label='End of First Non-Speaking Window')
+    else:
+        ax.annotate("No negative indices extracted\n from this word code", xy=(0.4, 0.5), fontsize=12,
+                    xycoords='axes fraction')
 
     ax.set_ylim(0, 1.2)
     ax.set_yticks([0, .25, .5, .75, 1])
@@ -239,9 +246,10 @@ def plot_model_preds(preds_s, data_map, sample_index_map):
         s.loc[wrd_ix[0].min():wrd_ix[-1].max()] = 1
         plt_dfs.append(s)
 
-        s = pd.Series(0, index=data_map['stim'].index, name=-wrd_id)
-        s.loc[sil_ix[0].min():sil_ix[-1].max()] = 1
-        neg_plt_dfs.append(s)
+        if sil_ix is not None and len(sil_ix) > 0:
+            s = pd.Series(0, index=data_map['stim'].index, name=-wrd_id)
+            s.loc[sil_ix[0].min():sil_ix[-1].max()] = 1
+            neg_plt_dfs.append(s)
 
     plt_label_df = pd.concat(plt_dfs, axis=1)
 
@@ -657,6 +665,9 @@ def run_one(options, result_file):
 
     if options.eval_sets is not None:
         model_filename = os.path.split(results['save_model_path'])[-1]
+        model_filename = model_filename.replace('\\', '/')
+        #print(base_model_path)
+        #print(model_filename)
         model_path = os.path.join(base_model_path, model_filename)
         print("Loading model located at: " + str(model_path))
 
@@ -677,6 +688,7 @@ def run_one(options, result_file):
 
         model.load_state_dict(model_state)
         model.to(options.device)
+        model.eval()
 
         #preds_map = dset.eval_model(model, options.eval_win_step_size,
         #                            device=options.device)
@@ -707,9 +719,22 @@ def run_one(options, result_file):
             win_size = results['model_kws']['window_size']
             win_step = options.eval_win_step_size
             t_preds_ix = data_map['ecog'].iloc[range(win_size, data_map['ecog'].shape[0], win_step)].index
-            preds_map = base.Trainer.generate_outputs_from_model(model, dl_map, device=options.device,
+
+            # Produce predictions on ground truth labels
+            preds_map = base.Trainer.generate_outputs_from_model(model, dict(eval=dset.to_dataloader(256, 4,
+                                                                                                     shuffle=False,
+                                                                                                     random_sample=False)),
+                                                                 device=options.device,
                                                                  to_frames=True)
-            fig, ax = plot_model_preds(preds_s=preds_map[ptuple].set_index(t_preds_ix)['preds'],
+            print(preds_map)
+            pmap = next(iter(preds_map.values()))
+            perf_map = utils.performance(pmap['actuals'],
+                                         pmap['preds'] > 0.5)
+            print(perf_map)
+
+            all_preds_map = base.Trainer.generate_outputs_from_model(model, dl_map, device=options.device,
+                                                                     to_frames=True)
+            fig, ax = plot_model_preds(preds_s=all_preds_map[ptuple].set_index(t_preds_ix)['preds'],
                                        data_map=data_map, sample_index_map=dset.sample_index_maps[ptuple])
             print("Saving to " + str(fig_filename))
             fig.savefig(fig_filename)
