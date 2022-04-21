@@ -654,10 +654,11 @@ class Trainer:
 
     @staticmethod
     def copy_model_state(m):
-        from collections import OrderedDict
-        s = OrderedDict([(k, v.cpu().detach().clone())
-                          for k, v in m.state_dict().items()])
-        return s
+        return copy_model_state(m)
+        #from collections import OrderedDict
+        #s = OrderedDict([(k, v.cpu().detach().clone())
+        #                  for k, v in m.state_dict().items()])
+        #return s
 
     def train(self, n_epochs,
               epoch_callbacks=None,
@@ -815,7 +816,7 @@ class Trainer:
         """
         res_d = dict()
 
-        model = self.model_map['model']
+        model = self.model_map['model'].to(self.device)
         optim = self.opt_map['model']
         model = model.train()
 
@@ -907,7 +908,9 @@ class Trainer:
                         new_v = (curr_v + v) if isinstance(v, list) else (curr_v + [v])
                         res_d[k] = new_v
 
-                output_map[dname] = {k: torch.cat(v_l).detach().cpu().numpy() for k, v_l in res_d.items()}
+                output_map[dname] = {k: torch.cat(v_l).detach().cpu().numpy() #if len(v_l[0].shape) > 0
+                                     #else torch.tensor(v_l).detach().cpu().numpy()
+                                     for k, v_l in res_d.items()}
                 #output_map[dname] = dict(preds=torch.cat(preds_l).detach().cpu().numpy(),
                 #                         actuals=torch.cat(actuals_l).detach().cpu().int().numpy())
                                          #loss=torch.cat(criterion_l).detach().cpu().numpy())

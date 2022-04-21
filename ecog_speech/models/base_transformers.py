@@ -2,6 +2,8 @@ import copy
 from typing import Optional, Tuple, List
 
 import pandas as pd
+
+from ecog_speech import datasets
 from ecog_speech.models import base
 import numpy as np
 import torch
@@ -158,6 +160,8 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:x.size(0)]
         return self.dropout(x)
 
+
+
 from fairseq.modules import GradMultiply
 class CoG2Vec(torch.nn.Module):
     logit_temp = 0.1
@@ -169,8 +173,9 @@ class CoG2Vec(torch.nn.Module):
                  n_encoder_heads=8, n_encoder_layers=12,
                  quant_num_vars=300, quant_num_groups=2,
                  quant_weight_proj_factor=2, quant_weight_proj_depth=1,
-                 feature_extractor_layers='[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(256, 3, 1)]',
+                 feature_extractor_layers='[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(128, 3, 1)]',
                  feature_extractor_mode='layer_norm',
+                 ras_pos_encoding=True,
                  squeeze_first=True):
         super().__init__()
         self.input_shape = input_shape
@@ -186,6 +191,7 @@ class CoG2Vec(torch.nn.Module):
 
         # TODO: Don't assign test data as attribute? But it's so useful
         self.t_x = torch.rand((16, *self.input_shape))
+        self.t_ras = torch.rand((16, 1, 3))
 
         # ####
         # Feature extractor: typically CNN that downsamples/aggregates input for the context and quantize stages
@@ -228,6 +234,8 @@ class CoG2Vec(torch.nn.Module):
 
         # Run test data through to get sizes automatically
         with torch.no_grad():
+            self.t_in = dict(signal_arr=self.t_x.squeeze() if self.squeeze_first else self.t_x,
+                             sensor_ras_coord_arr=self.t_ras.squeeze() if self.squeeze_first else self.t_ras)
             self.t_feat_o = self.feature_model(self.t_x.squeeze() if self.squeeze_first else self.t_x)
 
         # Unused, but maybe useful for debugging and experiments
@@ -249,7 +257,19 @@ class CoG2Vec(torch.nn.Module):
             torch.FloatTensor(embed_dim).uniform_()
         )
 
-        self.positional_enc = PositionalEncoding(d_model=embed_dim)
+        self.ras_pos_encoding = ras_pos_encoding
+        if self.ras_pos_encoding:
+            #_, _F, _T = self.t_feat_o.shape
+            self.ras_positional_enc = torch.nn.Sequential(
+                torch.nn.Linear(3, 32),
+                torch.nn.LeakyReLU(),
+                torch.nn.Linear(32, self.C * self.T),
+                torch.nn.LeakyReLU()
+            )
+            self.positional_enc = None
+        else:
+            self.positional_enc = PositionalEncoding(d_model=embed_dim)
+            self.ras_pos_encoding = None
 
         # TODO: Way to override positional part of transformer? Need to integrate xyz eventually
         self.n_heads = n_encoder_heads
@@ -395,8 +415,12 @@ class CoG2Vec(torch.nn.Module):
         )  # to NxBxTxC
         return negs, neg_idxs
 
-    def forward(self, X, features_only=False, mask=True,
-                ):
+    def forward(self, X, features_only=False, mask=True):
+        input_d = dict()
+        if isinstance(X, dict):
+            input_d = X
+            X = input_d['signal_arr']
+
         # TODO: Wave2vec says normalize the raw waveform to zero mean and unit variance - maje sure this happening?
         # Extract features from signal
         # Wave to vec in fair seq either does forward without gradient or with grad multiply - prob grad mult for pre-train
@@ -436,8 +460,16 @@ class CoG2Vec(torch.nn.Module):
             y = unmasked_features
 
         # Optionally positionally encode
-        if self.positional_enc is not None:
-            in_to_context = self.positional_enc(in_to_context)
+        if self.positional_enc is not None or self.ras_positional_enc is not None:
+            if self.ras_pos_encoding:
+                if 'sensor_ras_coord_arr' not in input_d:
+                    raise KeyError("'sensor_ras_coord_arr not in batch data - ras data must be included to use it as pos")
+                ras_arr = input_d['sensor_ras_coord_arr']
+                _, cT, cC = in_to_context.shape
+                #in_to_context = (in_to_context.reshape(B, cC*cT) + self.ras_positional_enc(ras_arr)).reshape(B, cT, cC)
+                in_to_context = (in_to_context + self.ras_positional_enc(ras_arr).reshape(in_to_context.shape))
+            else:
+                in_to_context = self.positional_enc(in_to_context)
 
         x = self.context_model(in_to_context)
 
@@ -548,29 +580,146 @@ class CoG2Vec(torch.nn.Module):
                     code_perplexity=code_ppl, prob_perplexity=prob_ppl,
                     temp=curr_temp)
 
-    def create_fine_tuning_model(self, options=None, classifier_head=None):
+    def create_fine_tuning_model(self, ft_method='1d_linear',
+                                 dataset: datasets.BaseDataset = None,
+                                 classifier_head: torch.nn.Module = None):
         from ecog_speech.models import base
 
-        # Very simple linear classifier head by default
-        if classifier_head is None:
-            h_size = 256
-            classifier_head = torch.nn.Sequential(*[
-                base.Reshape((self.C * self.T,)),
-                torch.nn.Linear(self.C * self.T, h_size),
-                torch.nn.BatchNorm1d(h_size),
-                torch.nn.LeakyReLU(),
-                torch.nn.Linear(h_size, 1),
-                torch.nn.Sigmoid()
-            ])
 
-        m = copy.deepcopy(self)
-        m.feature_model.requires_grad_(False)
-        m.quantizer.codebook_indices = None
+        if ft_method == '1d_linear':
+            # Very simple linear classifier head by default
+            if classifier_head is None:
+                h_size = 1024
+                classifier_head = torch.nn.Sequential(*[
+                    base.Reshape((self.C * self.T,)),
+                    torch.nn.Linear(self.C * self.T, h_size),
+                    #torch.nn.BatchNorm1d(h_size),
+                    torch.nn.LeakyReLU(),
+                    torch.nn.Linear(h_size, h_size),
+                    torch.nn.LeakyReLU(),
+                    torch.nn.Linear(h_size, 1),
+                    #torch.nn.Sigmoid()
+                ])
 
-        ft_model = FineTuner(pre_trained_model=m, output_model=classifier_head,
-                             pre_trained_model_forward_kws=dict(features_only=True, mask=False),
-                             pre_trained_model_output_key='x')
+                #nn.init.xavier_uniform_(classifier_head.weight)
+
+            m = copy.deepcopy(self)
+            m.feature_model.requires_grad_(False)
+            m.quantizer.codebook_indices = None
+            m.context_model.requires_grad_(False)
+
+            ft_model = FineTuner(pre_trained_model=m, output_model=classifier_head,
+                                 pre_trained_model_forward_kws=dict(features_only=True, mask=False),
+                                 pre_trained_model_output_key='x')
+        elif ft_method == '2d_transformers':
+            if dataset is None:
+                raise ValueError(f"A dataset is required for '2d_transformers' method in order to see num sensors")
+            from ecog_speech.models import base_transformers
+
+            # mc2v_m = base_transformers.MultiChannelFromSingleChannel((len(ft_dataset_map['train'].selected_columns), 256),
+            #                                                pretrained_model, )
+
+            ft_model = base_transformers.MultiChannelCog2Vec((len(dataset.selected_columns), 256),
+                                                             self)
+        else:
+            raise ValueError(f"Unknown ft_method '{ft_method}'")
+
         return ft_model
+
+
+class MultiChannelFromSingleChannel(torch.nn.Module):
+    def __init__(self, input_shape, model_1d, model_dim=1, forward_kws=None, concat_axis=2,
+                 model_output_key='x'):
+        super().__init__()
+        self.input_shape = input_shape
+        self.model_1d = model_1d
+        self.model_dim = model_dim
+        self.forward_kws = dict(features_only=True, mask=False) if forward_kws is None else forward_kws
+        self.concat_axis = concat_axis
+
+        self.model_output_key = model_output_key
+
+        self.T, self.S, self.C = self.model_1d.T, self.input_shape[0], self.model_1d.C
+
+    def forward(self, input_d: dict):
+        ras_arr = input_d['sensor_ras_coord_arr']
+        x_arr = input_d['signal_arr']
+
+        outputs_l = list()
+        for i in range(x_arr.shape[self.model_dim]):
+            _input_d = dict(sensor_ras_coord_arr=ras_arr.select(self.model_dim, i).unsqueeze(1),
+                            signal_arr=x_arr.select(self.model_dim, i).unsqueeze(1))
+            with torch.no_grad():
+                outputs_l.append(self.model_1d(_input_d, **self.forward_kws)[self.model_output_key])
+
+        output_arr = torch.cat([_x.unsqueeze(self.concat_axis) for _x in outputs_l], self.concat_axis)
+
+        return dict(output=output_arr)
+
+
+class MultiChannelCog2Vec(torch.nn.Module):
+    def __init__(self, input_shape, c2v_m: CoG2Vec):
+        super().__init__()
+        self.input_shape = input_shape
+        self.c2v_m = c2v_m
+
+        self.mc_from_1d = MultiChannelFromSingleChannel(self.input_shape, self.c2v_m)
+
+        self.S = self.input_shape[0]
+        self.T, self.C = self.c2v_m.T, self.c2v_m.C
+        self.h_dim = self.S * self.C
+        self.lin_dim = self.h_dim * self.T
+
+        #B, T, S, C = output_arr.shape
+
+        #output_arr_t = output_arr.reshape(B, T, -1)
+
+        encoder_layer = torch.nn.TransformerEncoderLayer(d_model=self.h_dim,
+                                                         nhead=2, batch_first=True,
+                                                         activation="gelu")
+
+        self.transformer_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=2)
+
+        h_size = 32
+        self.classifier_head = torch.nn.Sequential(*[
+            # base.Reshape((self.C * self.T,)),
+            torch.nn.Linear(self.lin_dim, h_size),
+            # torch.nn.BatchNorm1d(h_size),
+            torch.nn.LeakyReLU(),
+            #torch.nn.Linear(h_size, h_size),
+            #torch.nn.LeakyReLU(),
+            torch.nn.Linear(h_size, 1),
+            # torch.nn.Sigmoid()
+        ])
+
+    def forward(self, input_d: dict):
+        feat_d = self.mc_from_1d(input_d)
+        feat_arr = feat_d['output']
+
+        B = feat_arr.shape[0]
+
+        trf_arr = feat_arr.reshape(B, self.T, self.h_dim)
+
+        trf_out_arr = self.transformer_encoder(trf_arr)
+        lin_in_arr = trf_out_arr.reshape(B, self.lin_dim)
+
+        return self.classifier_head(lin_in_arr)
+
+class MultiChannelFineTuner(torch.nn.Module):
+    """Takes a (usually pre trained) model that operates on single channels, and applies it to
+    inputs with multiple channels"""
+
+    def __init__(self, pre_trained_1d_model, output_model, pre_trained_model_forward_kws,
+                 pre_trained_model_output_key, concat_axis=1):
+        super().__init__()
+        self.pre_trained_model = pre_trained_1d_model
+        self.output_model = output_model
+        self.pre_trained_model_output_key = pre_trained_model_output_key
+        self.pre_trained_model_forward_kws = pre_trained_model_forward_kws
+
+    def forward(self, input_d, features_only=False, mask=True):
+        X = input_d['signal_arr']
+        pass
 
 
 class FineTuner(torch.nn.Module):
@@ -652,12 +801,14 @@ class Cog2VecTrainer(Trainer):
         with torch.no_grad():
             with tqdm(total=len(dataloader), desc="Eval") as pbar:
                 for i, _x in enumerate(dataloader):
-                    X = _x['signal_arr'].to(self.device)
+                    #X = _x['signal_arr'].to(self.device)
 
-                    if self.squeeze_first:
-                        X = X.squeeze()
+                    #if self.squeeze_first:
+                    #    X = X.squeeze()
 
-                    m_d = model(X)
+                    m_d = model(
+                        {k:arr.to(self.device) for k, arr in _x.items()}
+                    )
 
                     loss_d = self.loss(m_d, as_tensor=False)
                     score_d = self.score_training(m_d, as_tensor=False)
@@ -763,16 +914,18 @@ class Cog2VecTrainer(Trainer):
         model.zero_grad()
         optim.zero_grad()
 
-        X_barr = data_batch['signal_arr'].to(self.device)
-        bsz = X_barr.shape[0]
+        #X_barr = data_batch['signal_arr'].to(self.device)
+        #pos_barr = data_batch['sensor_ras_coord_arr'].to(self.device)
+        #bsz = X_barr.shape[0]
         # Select a single sensor for now and remove the singleton dimension
         #X = X_barr.select(1, np.random.randint(0, X_barr.shape[1])).unsqueeze(1)
-        X = X_barr#.select(1, np.random.randint(0, X_barr.shape[1])).unsqueeze(1)
+        #X = X_barr#.select(1, np.random.randint(0, X_barr.shape[1])).unsqueeze(1)
 
-        if self.squeeze_first:
-            X = X.squeeze()
+        #if self.squeeze_first:
+        #    X = X.squeeze()
 
-        m_d = model(X)
+        #m_d = model(X)
+        m_d = model({k: arr.to(self.device) for k, arr in data_batch.items()})
 
         loss_d = self.loss(m_d)
 

@@ -283,6 +283,9 @@ class BaseASPEN(BaseDataset):
     target_transform_l = attr.ib(attr.Factory(list))
 
     flatten_sensors_to_samples = attr.ib(False)
+    extra_output_keys = attr.ib(None)
+    post_processing_func = attr.ib(None)
+    post_processing_kws = attr.ib(attr.Factory(dict))
 
     #power_threshold = attr.ib(0.007)
     #power_q = attr.ib(0.70)
@@ -344,13 +347,18 @@ class BaseASPEN(BaseDataset):
             self.data_maps = dict()
 
             for k, dmap in mat_data_maps.items():
+                # Run the pipeline, mutating/modifying the data map for this patient trial
                 res_dmap = self.pipeline_f(dmap)
                 self.sample_index_maps[k] = res_dmap['sample_index_map']
+                # THe first data map sets the sampling frequency fs
                 self.fs_signal = getattr(self, 'fs_signal', res_dmap[self.mat_d_keys['signal_fs']])
+
                 #self.ecog_window_size = getattr(self, 'ecog_window_size',
                 #                                int(self.fs_signal * self.sample_ixer.window_size.total_seconds()))
                 #self.ecog_window_size = int(self.fs_signal * self.sample_ixer.window_size.total_seconds())
-                self.n_samples_per_window = res_dmap['n_samples_per_window']
+
+                #self.n_samples_per_window = res_dmap['n_samples_per_window']
+                self.n_samples_per_window = getattr(self, 'n_samples_per_window', res_dmap['n_samples_per_window'])
                 self.logger.info(f"N samples per window: {self.n_samples_per_window}")
 
                 if self.fs_signal != res_dmap[self.mat_d_keys['signal_fs']]:
@@ -544,16 +552,54 @@ class BaseASPEN(BaseDataset):
         ix_k, data_k = self.selected_flat_keys[item]
         data_d = self.data_maps[data_k]
 
-        so = self.get_features(data_d, self.flat_index_map[ix_k],
+        selected_channels = None
+        if self.flatten_sensors_to_samples:
+            selected_channels = [ix_k[2]]
+
+        so = dict()
+
+        so.update(
+            self.get_features(data_d, self.flat_index_map[ix_k],
                                ix_k, transform=self.transform,
-                               channel_select=ix_k[2] if self.flatten_sensors_to_samples else None)
-        so.update(self.get_targets(data_d, self.flat_index_map[ix_k],
-                                   ix_k, target_transform=self.target_transform))
+                               channel_select=selected_channels,
+                               extra_output_keys=self.extra_output_keys)
+        )
+
+        so.update(
+            self.get_targets(data_d, self.flat_index_map[ix_k], ix_k, target_transform=self.target_transform)
+        )
+
+        if self.post_processing_func is not None:
+            so_updates = self.post_processing_func(so, **self.post_processing_kws)
+            so.update(so_updates)
 
         # Return anything that is a Torch Tensor - the torch dataloader will handle
         # compiling multiple outputs for batch
         return {k: v for k, v in so.items()
                 if isinstance(v, torch.Tensor)}
+
+    def split_select_at_time(self, split_time: float):
+        #split_time = 0.75
+        from tqdm.auto import tqdm
+
+        selected_keys_arr = self.flat_keys[self.selected_word_indices]
+        index_start_stop = [(self.flat_index_map[a[0]].min(), self.flat_index_map[a[0]].max())
+                            for a in tqdm(selected_keys_arr)]
+        split_time = max(a for a, b, in index_start_stop) * split_time if isinstance(split_time, float) else split_time
+        left_side_indices, right_side_indices = list(), list()
+        for a, b in index_start_stop:
+            if a < split_time:
+                left_side_indices.append(a)
+            else:
+                right_side_indices.append(b)
+
+        left_side_indices = np.array(left_side_indices)
+        right_side_indices = np.array(right_side_indices)
+
+        left_dataset = self.__class__(data_from=self, selected_word_indices=left_side_indices)
+        right_dataset = self.__class__(data_from=self, selected_word_indices=right_side_indices)
+
+        return left_dataset, right_dataset
 
     def select(self, sample_indices):
         # select out specific samples from the flat_keys array if selection passed
@@ -677,27 +723,38 @@ class BaseASPEN(BaseDataset):
 
     @staticmethod
     def get_features(data_map, ix, label=None, transform=None, index_loc=False, signal_key='signal',
-                     channel_select=None):
+                     channel_select=None, extra_output_keys=None):
+        # pull out signal and begin building dictionary of arrays to reutrn
         signal_df = data_map[signal_key]
-        kws = dict()
 
+        kws = dict()
         kws['signal'] = signal_df.loc[ix] if not index_loc else signal_df.iloc[ix]
+
         # Transpose to keep time as last index for torch
         np_ecog_arr = kws['signal'].values.T
 
         #if self.flatten_sensors_to_samples:
+        # Always pass a list/array for channels, even if only 1, to maintain the dimension
         if channel_select is not None:
-            np_ecog_arr = np_ecog_arr[channel_select][None, :]
-
-        # Wow, very hacky - nice job
-        #if len(label) > 5 and 0 < label[2] < np_ecog_arr.shape[0]:
-        #    np_ecog_arr = np_ecog_arr[label[2]][None, :]
+            np_ecog_arr = np_ecog_arr[channel_select]#[None, :]
 
         if transform is not None:
             # print("Apply transform to shape of " + str(np_ecog_arr.shape))
             np_ecog_arr = transform(np_ecog_arr)
 
         kws['signal_arr'] = torch.from_numpy(np_ecog_arr).float()
+
+        #extra_output_keys = ['sensor_ras_coord_arr']
+        if isinstance(extra_output_keys, list):
+            kws.update({k: torch.from_numpy(data_map[k]).float() if isinstance(data_map[k], np.ndarray) else data_map[k]
+                        for k in extra_output_keys})
+
+            if 'sensor_ras_coord_arr' in kws and channel_select is not None:
+#                print(channel_select)
+#                if not isinstance(channel_select[0], int):
+#                    print("WHAT")
+                kws['sensor_ras_coord_arr'] = kws['sensor_ras_coord_arr'][channel_select].unsqueeze(0)
+
         return kws
 
     @staticmethod
@@ -812,6 +869,7 @@ class HarvardSentences(BaseASPEN):
             ('parse_stim', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['stimcode'],
                                                               self.mat_d_keys['signal_fs'],
                                                               1200, reshape=-1, output_key='stim')),
+            ('parse_sensor_ras', pipeline.ParseSensorRAS())
         ]
 
         parse_input_steps = [
@@ -840,7 +898,8 @@ class HarvardSentences(BaseASPEN):
                                                                       # so to center it, move the point (center) back .25 secods
                                                                       # so that extracted 0.5 sec window saddles the original center
                                                                       #target_offset_shift=pd.Timedelta(-0.25, 's')
-                                                                      target_offset_shift=pd.Timedelta(-0.5, 's')
+                                                                      target_offset_shift=pd.Timedelta(-0.5, 's'),
+                                                                      max_target_region_size=300
                                                                                 )),
              ('silence_indices', pipeline.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
                                                                         # Center the extracted 0.5 second window

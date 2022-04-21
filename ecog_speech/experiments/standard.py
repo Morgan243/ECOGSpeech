@@ -67,7 +67,7 @@ def make_model(options=None, nww=None, model_name=None, model_kws=None, print_de
                              cog_attn=options.cog_attn,
                              band_spacing=options.sn_band_spacing,
                              **base_kws)
-        model_cls = sinc_ieeg.get_model_cls_from_options_str(options.model_name)
+        model_cls = sinc_ieeg.get_model_cls_from_options_str(model_name)
         model = model_cls(**model_kws)
     elif model_name == 'base-cnn':
         if model_kws is None:
@@ -84,7 +84,8 @@ def make_model(options=None, nww=None, model_name=None, model_kws=None, print_de
     return model, model_kws
 
 
-def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv_data_kws=None, test_data_kws=None,
+def make_datasets_and_loaders(options, dataset_cls=None, base_data_kws=None,
+                              train_data_kws=None, cv_data_kws=None, test_data_kws=None,
                               train_sets_str=None, cv_sets_str=None, test_sets_str=None,
                               train_sensor_columns='valid',
                               pre_processing_pipeline=None,
@@ -115,7 +116,8 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
         three-tuple of (1) map to original dataset (2) map to the constructed dataloaders and
         (3) Similar to two, but not shuffled and larger batch size (for evaluation)
     """
-    from torchvision import transforms
+    #from torchvision import transforms
+    base_data_kws = dict() if base_data_kws is None else base_data_kws
     if dataset_cls is None:
         dataset_cls = datasets.BaseDataset.get_dataset_by_name(options.dataset)
 
@@ -132,6 +134,7 @@ def make_datasets_and_loaders(options, dataset_cls=None, train_data_kws=None, cv
     base_kws = dict(pre_processing_pipeline=options.pre_processing_pipeline if pre_processing_pipeline is None
                                                     else pre_processing_pipeline,
                     data_subset=options.data_subset)
+    base_kws.update(base_data_kws)
     train_kws = dict(patient_tuples=train_p_tuples, **base_kws)
     cv_kws = dict(patient_tuples=cv_p_tuples, **base_kws)
     test_kws = dict(patient_tuples=test_p_tuples, **base_kws)

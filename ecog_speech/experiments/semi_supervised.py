@@ -22,6 +22,7 @@ def make_datasets_and_loaders(options, **kwargs):
                                                                           pre_processing_pipeline=options.pre_processing_pipeline, #'audio_gate_speaking_only',
                                                                           additional_transforms=add_trfs,
                                                                           num_dl_workers=options.n_dl_workers,
+                                                                          base_data_kws=dict(extra_output_keys=["sensor_ras_coord_arr"]),
                                                                           **data_kws, **kwargs)
 
     return dataset_map, dl_map, eval_dl_map
@@ -46,11 +47,13 @@ def run(options):
 
     # Shake out any forward pass errors now by running example data through model
     with torch.no_grad():
-        model(model.t_x)
+        #model(model.t_x)
+        model(model.t_in)
 
     # TODO: Need way to override defaults in options
     #options.pre_processing_pipeline = 'audio_gate_speaking_only'
     dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options)
+
 
     # Default lr reduce to False, only setup if at patience is set
     trainer_kws = dict(lr_adjust_on_cv_loss=False)
@@ -73,6 +76,7 @@ def run(options):
 
     trainer.squeeze_first = False
     trainer.ppl_weight = options.ppl_weight
+
 
     losses = trainer.train(options.n_epochs)
 

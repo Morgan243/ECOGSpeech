@@ -8,6 +8,10 @@ from ecog_speech import utils
 from ecog_speech.experiments.standard import train_and_test_model
 from ecog_speech.models import base
 from typing import List, Optional
+from tqdm.auto import tqdm
+import numpy as np
+
+import attr
 
 from ecog_speech.experiments.standard import make_model, make_datasets_and_loaders, default_option_kwargs
 from ecog_speech.experiments import standard, semi_supervised
@@ -17,10 +21,11 @@ import json
 
 logger = utils.get_logger(__name__)
 
+
 @dataclass
 class TransferLearningOptions(bxp.DNNModelOptions, bxp.MultiSensorOptions):
     model_name: Optional[str] = None
-    dataset: Optional[str] = None
+    dataset: Optional[str] = 'hvs'
     train_sets: Optional[str] = None
 
     pretrained_result_input_path: Optional[str] = None
@@ -29,6 +34,30 @@ class TransferLearningOptions(bxp.DNNModelOptions, bxp.MultiSensorOptions):
     pre_train_sets: Optional[str] = None
     pre_cv_sets: Optional[str] = None
     pre_test_sets: Optional[str] = None
+
+    # 1d_linear, 2d_transformers
+    fine_tuning_method: str = '1d_linear'
+
+
+def make_pretrained_model(options=None, nww=None, model_name=None, model_kws=None, print_details=True):
+    if options.pretrained_result_input_path is not None:
+        from ecog_speech.result_parsing import load_model_from_results
+
+        result_path = options.pretrained_result_input_path
+        model_base_path = options.pretrained_result_model_base_path
+
+        print(f"Loading pretrained model from results in {result_path} (base path = {model_base_path})")
+        with open(result_path, 'r') as f:
+            result_json = json.load(f)
+
+        pretrained_model = load_model_from_results(result_json, base_model_path=model_base_path)
+    # Need to pre-train the model now
+    else:
+        raise NotImplementedError()
+        # Need to pretrain
+        pass
+
+    return pretrained_model
 
 
 def run_sincnet(options: TransferLearningOptions):
@@ -128,37 +157,156 @@ def run_sincnet(options: TransferLearningOptions):
             json.dump(res_dict, f)
 
 
+
+@attr.s
+class TLTrainer(base.Trainer):
+    input_key = attr.ib('signal_arr')
+    squeeze_first = True
+
+    def loss(self, model_output_d, input_d, as_tensor=True):
+        crit_loss = self.criterion(model_output_d, input_d[self.target_key])
+        return crit_loss
+
+    def _eval(self, epoch_i, dataloader, model_key='model'):
+        """
+        trainer's internal method for evaluating losses,
+        snapshotting best models and printing results to screen
+        """
+        model = self.model_map[model_key].eval()
+        self.best_cv = getattr(self, 'best_cv', np.inf)
+
+        preds_l, actuals_l, loss_l = list(), list(), list()
+        with torch.no_grad():
+            with tqdm(total=len(dataloader), desc="Eval") as pbar:
+                for i, _x in enumerate(dataloader):
+                    input_d = {k: v.to(self.device) for k, v in _x.items()}
+                    #input_arr = input_d[self.input_key]
+                    #actual_arr = input_d[self.target_key]
+                    preds = model(input_d)
+
+                    actuals = input_d[self.target_key]
+
+                    loss = self.criterion(preds, actuals)
+
+                    loss_l.append(loss.detach().cpu().item())
+
+                    pbar.update(1)
+
+                mean_loss = np.mean(loss_l)
+                desc = "Mean Eval Loss: %.5f" % mean_loss
+                reg_l = 0.
+                if self.model_regularizer is not None:
+                    reg_l = self.model_regularizer(model)
+                    desc += (" (+ %.6f reg loss = %.6f)" % (reg_l, mean_loss + reg_l))
+
+                overall_loss = (mean_loss + reg_l)
+
+                if overall_loss < self.best_cv:
+
+                    self.best_model_state = self.copy_model_state(model)
+                    self.best_model_epoch = epoch_i
+                    self.best_cv = overall_loss
+                    desc += "[[NEW BEST]]"
+
+                pbar.set_description(desc)
+
+        self.model_map['model'].train()
+        return dict(primary_loss=overall_loss, cv_losses=loss_l)
+
+    def train_inner_step(self, epoch_i, data_batch):
+        """
+        Core training method - gradient descent - provided the epoch number and a batch of data and
+        must return a dictionary of losses.
+        """
+        res_d = dict()
+
+        model = self.model_map['model'].to(self.device)
+        optim = self.opt_map['model']
+        model = model.train()
+
+        model.zero_grad()
+        optim.zero_grad()
+
+        input_d = {k: v.to(self.device) for k, v in data_batch.items()}
+        input_arr = input_d[self.input_key]
+        actual_arr = input_d[self.target_key]
+        #m_output = model(input_arr)
+        m_output = model(input_d)
+
+        crit_loss = self.criterion(m_output, actual_arr)
+        res_d['crit_loss'] = crit_loss.detach().cpu().item()
+
+        if self.model_regularizer is not None:
+            reg_l = self.model_regularizer(model)
+            res_d['bwreg'] = reg_l.detach().cpu().item()
+        else:
+            reg_l = 0
+
+        loss = crit_loss + reg_l
+        res_d['total_loss'] = loss.detach().cpu().item()
+        loss.backward()
+        optim.step()
+        model = model.eval()
+        return res_d
+
+
+    def generate_outputs_from_model_inner_step(self, model, data_batch, criterion=None,
+                                               input_key='signal_arr', target_key='text_arr', device=None,
+                                               ):
+        #X = data_batch[input_key].to(device)
+
+        #if self.squeeze_first:
+        #    X = X.squeeze()
+
+        with torch.no_grad():
+            model.eval()
+            model.to(device)
+            input_d = {k: v.to(self.device) for k, v in data_batch.items()}
+            preds = model(input_d)
+
+            #loss_v = self.loss(preds, input_d)
+        #score_d = self.score_training(m_d, as_tensor=True)
+        eval_d = dict(preds=preds, actuals=input_d[self.target_key], #loss=torch.tensor(loss_v)
+                      )#dict(**score_d, **loss_d)
+
+        return eval_d
+
+
 def run(options: TransferLearningOptions):
     # Pretrained model already prepared, parse from its results output
-    if options.pretrained_result_input_path is not None:
-        from ecog_speech.result_parsing import load_model_from_results
+    pretrained_model = make_pretrained_model(options)
 
-        result_path = options.pretrained_result_input_path
-        model_base_path = options.pretrained_result_model_base_path
-
-        print(f"Loading pretrained model from results in {result_path} (base path = {model_base_path})")
-        with open(result_path, 'r') as f:
-            result_json = json.load(f)
-
-        pretrained_model = load_model_from_results(result_json, base_model_path=model_base_path)
-    # Need to pre-train the model now
-    else:
-        raise NotImplementedError()
-        # Need to pretrain
-        pass
-
-    fine_tune_model = pretrained_model.create_fine_tuning_model()
     dataset_map, dl_map, eval_dl_map = semi_supervised.make_datasets_and_loaders(options)
 
-    ft_trainer = base.Trainer(model_map=dict(model=fine_tune_model), opt_map=dict(),
+    fine_tune_model = pretrained_model.create_fine_tuning_model(options.fine_tuning_method,
+                                                                dataset=dataset_map['train'])
+
+    #target = torch.ones([10, 64], dtype=torch.float32)  # 64 classes, batch size = 10
+    #output = torch.full([10, 64], 1.5)  # A prediction (logit)
+    #pos_weight = torch.ones([64])*0.1  # All weights are equal to 1
+    pos_weight = torch.FloatTensor([0.5]).to(options.device)
+    criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    #criterion(output, target)  # -log(sigmoid(1.5))
+
+    #trainer_cls = base.Trainer
+    trainer_cls = TLTrainer
+    ft_trainer = trainer_cls(model_map=dict(model=fine_tune_model), opt_map=dict(),
                               train_data_gen=dl_map['train'],
-                              cv_data_gen=dl_map.get('cv'),
+                              cv_data_gen=eval_dl_map.get('cv'),
                               input_key='signal_arr',
                               learning_rate=options.learning_rate,
                               early_stopping_patience=options.early_stopping_patience,
+                              criterion=criterion,
                               device=options.device,
                               )
+
+    #with torch.no_grad():
+    #    _outputs_map = ft_trainer.generate_outputs(train=eval_dl_map['train'])
+    #    _clf_str_map = utils.make_classification_reports(_outputs_map)
+
     ft_results = ft_trainer.train(options.n_epochs)
+
+    fine_tune_model.load_state_dict(ft_trainer.get_best_state())
 
     fine_tune_model.eval()
     outputs_map = ft_trainer.generate_outputs(**eval_dl_map)

@@ -121,6 +121,13 @@ class ApplySensorSelection(DictTrf):
     signal_key = attr.ib('signal')
     bad_sensor_method = attr.ib('zero')
 
+    @classmethod
+    def select_from_ras(cls, data_map, selected_columns, bad_columns, **kws):
+        s_df = data_map['sensor_ras_df'].loc[selected_columns]
+        return {'sensor_ras_df': s_df,
+                'sensor_ras_coord_arr': s_df.filter(like='coord').values
+                }
+
     def process(self, data_map):
         signal_df = data_map[self.signal_key]
 
@@ -134,7 +141,6 @@ class ApplySensorSelection(DictTrf):
         if selected_cols is None:
             selected_cols = signal_df.columns.tolist()
 
-
         bs_cols = data_map['bad_sensor_columns']
         sel_signal_df = signal_df.copy()
         if bs_cols is not None and len(bs_cols) > 0:
@@ -145,7 +151,16 @@ class ApplySensorSelection(DictTrf):
             else:
                 raise KeyError(f"Don't understand bad_sensor_method: {self.bad_sensor_method}")
 
-        return {self.signal_key: sel_signal_df}
+        r_val = {self.signal_key: sel_signal_df, 'selected_columns': selected_cols, 'bad_columns': bs_cols,
+                'bad_sensor_method': self.bad_sensor_method}
+
+        # TODO: a way to apply a bunch of selection functions
+        if 'sensor_ras_df' in data_map:
+            self.logger.info("Selecting columns in RAS coordinate data")
+            ras_sel = self.select_from_ras(data_map, **r_val)
+            r_val.update(ras_sel)
+
+        return r_val
 
 
 @attr.s
@@ -220,9 +235,9 @@ class PowerThreshold(DictTrf):
                        #.max().reindex(stim_s.index, method='nearest').fillna(0))
 
         if speaking_quantile_threshold is not None:
-            cls.logger.info("Using speaking quantile")
+            cls.logger.info(f"Using speaking quantile {speaking_quantile_threshold}")
             speaking_quantile_threshold = float(speaking_quantile_threshold)
-            thresholded_speaking_pwr = rolling_pwr.pipe(lambda s: s > s.quantile(speaking_quantile_threshold) )
+            thresholded_speaking_pwr = rolling_pwr.pipe(lambda s: s > s.quantile(speaking_quantile_threshold))
         else:
             thresholded_speaking_pwr = (rolling_pwr > speaking_threshold)
 
@@ -513,6 +528,17 @@ class MultiTaskStartStop(DictTrf):
 
         return dict(word_start_stop_times=mtask_word_df)
 
+@attr.s
+@with_logger
+class ParseSensorRAS(DictTrf):
+    def process(self, data_map):
+        ras_df = pd.DataFrame(data_map['label_contact_r_a_s'])
+
+        ras_df = ras_df.astype({i: 'float32' for i in range(1, 5)})
+
+        ras_df.set_axis(['electrode_name', 'contact_number', 'x_coord', 'y_coord', 'z_coord'], axis=1, inplace=True)
+        ras_arr = ras_df[['x_coord', 'y_coord', 'x_coord']].values
+        return dict(sensor_ras_df=ras_df, sensor_ras_coord_arr=ras_arr)
 
 @attr.s
 @with_logger
