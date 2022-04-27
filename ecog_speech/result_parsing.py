@@ -11,6 +11,7 @@ from ecog_speech.models import base
 from tqdm.auto import tqdm
 import torch
 
+from pprint import pprint
 
 def frame_to_torch_batch(_df, win_size, win_step):
     _arr = torch.from_numpy(_df.values)
@@ -723,7 +724,6 @@ def run(options):
     if options.result_file is None:
         raise ValueError("Must provide result-file option")
 
-    from glob import glob
     result_files = list(glob(options.result_file))
     if len(result_files) == 1:
         return run_one(options, result_files[0])
@@ -773,8 +773,40 @@ default_option_kwargs = [
     dict(dest='--device', default='cuda:0'),
 ]
 
+from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class ResultParsingOptions:
+    result_file: str = None
+    print_results: bool = False
+    base_model_path: Optional[str] = None
+    eval_sets: Optional[str] = None
+
+    eval_win_step_size: int = 1
+    pred_inspect_eval: bool = False
+    base_output_path: Optional[str] = None
+    eval_filter: Optional[str] = None
+    device: str = 'cuda:0'
+
 if __name__ == """__main__""":
-    parser = utils.build_argparse(default_option_kwargs,
-                                  description="ASPEN+MHRG Result Parsing")
-    m_options = parser.parse_args()
-    m_results = run(m_options)
+    from simple_parsing import ArgumentParser
+
+    parser = ArgumentParser()
+    parser.add_arguments(ResultParsingOptions, dest='result_parsing')
+    args = parser.parse_args()
+    result_parsing_options: ResultParsingOptions = args.result_parsing
+    if result_parsing_options.print_results:
+        result_files = list(glob(result_parsing_options.result_file))
+        for rf in result_files:
+            with open(rf) as f:
+                results_json = json.load(f)
+                print("--- " + rf + " ---")
+                pprint(results_json)
+    else:
+        run(result_parsing_options)
+
+#    parser = utils.build_argparse(default_option_kwargs,
+#                                  description="ASPEN+MHRG Result Parsing")
+#    m_options = parser.parse_args()
+#    m_results = run(m_options)

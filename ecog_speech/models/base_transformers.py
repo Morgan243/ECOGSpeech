@@ -658,7 +658,7 @@ class MultiChannelFromSingleChannel(torch.nn.Module):
 
 
 class MultiChannelCog2Vec(torch.nn.Module):
-    def __init__(self, input_shape, c2v_m: CoG2Vec):
+    def __init__(self, input_shape, c2v_m: CoG2Vec, hidden_encoder=None):
         super().__init__()
         self.input_shape = input_shape
         self.c2v_m = c2v_m
@@ -674,11 +674,22 @@ class MultiChannelCog2Vec(torch.nn.Module):
 
         #output_arr_t = output_arr.reshape(B, T, -1)
 
-        encoder_layer = torch.nn.TransformerEncoderLayer(d_model=self.h_dim,
-                                                         nhead=2, batch_first=True,
-                                                         activation="gelu")
+        hidden_encoder = 'linear' if hidden_encoder is None else hidden_encoder
+        self.hidden_encoder_input = hidden_encoder
 
-        self.transformer_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=2)
+        if isinstance(hidden_encoder, torch.nn.Module):
+            self.hidden_encoder = hidden_encoder
+        elif hidden_encoder == 'linear':
+            self.hidden_encoder = torch.nn.Sequential(
+                torch.nn.Linear(self.lin_dim, self.lin_dim),
+                torch.nn.LeakyReLU()
+            )
+        elif hidden_encoder == 'transformer':
+            encoder_layer = torch.nn.TransformerEncoderLayer(d_model=self.h_dim,
+                                                             nhead=2, batch_first=True,
+                                                             activation="gelu")
+
+            self.hidden_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=2)
 
         h_size = 32
         self.classifier_head = torch.nn.Sequential(*[
@@ -700,7 +711,7 @@ class MultiChannelCog2Vec(torch.nn.Module):
 
         trf_arr = feat_arr.reshape(B, self.T, self.h_dim)
 
-        trf_out_arr = self.transformer_encoder(trf_arr)
+        trf_out_arr = self.hidden_encoder(trf_arr)
         lin_in_arr = trf_out_arr.reshape(B, self.lin_dim)
 
         return self.classifier_head(lin_in_arr)

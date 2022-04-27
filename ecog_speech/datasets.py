@@ -378,9 +378,10 @@ class BaseASPEN(BaseDataset):
                 good_and_bad_tuple_d = {k: (set(gs) if gs else (list(range(self.data_maps[k][self.mat_d_keys['signal']].shape[1]))),
                                             bs)
                                          for k, (gs, bs) in good_and_bad_tuple_d.items()}
-                #print("GOOD AND BAD SENSORS: " + str(good_and_bad_tuple_d))
+
                 self.logger.info("GOOD AND BAD SENSORS: " + str(good_and_bad_tuple_d))
                 self.sensor_columns = 'union' if self.sensor_columns is None else self.sensor_columns
+
                 # UNION: Select all good sensors from all inputs, zeros will be filled for those missing
                 if self.sensor_columns == 'union':
                     self.selected_columns = sorted(list({_gs for k, (gs, bs) in good_and_bad_tuple_d.items()
@@ -402,36 +403,76 @@ class BaseASPEN(BaseDataset):
 
             self.sensor_count = len(self.selected_columns)
 
+#            if self.flatten_sensors_to_samples:
+#                # Map full description (word label, window index, sensor,...trial key elements..}
+#                # to the actual pandas index
+#                self.logger.info("Flattening sensors to samples")
+#                self.flat_index_map = {tuple([wrd_id, ix_i, s_i] + list(k_t)): ixes
+#                                       for k_t, index_map in tqdm(self.sample_index_maps.items(),
+#                                                                  desc="Creating sample indices")
+#                                       for wrd_id, ix_list in index_map.items()
+#                                       for ix_i, ixes in enumerate(ix_list)
+#                                       for s_i, s in enumerate(self.selected_columns)}
+#
+#                # Enumerate all the keys across flat_index_map into one large list for index-style,
+#                # has a len() and can be indexed into nicely (via np.ndarray)
+#                self.flat_keys = np.array([(k, k[3:])
+#                                           for i, k in enumerate(self.flat_index_map.keys())],
+#                                          dtype='object')
+#            else:
+#                # Map full description (word label, window index,...trial key elements..}
+#                # to the actual pandas index
+#                self.flat_index_map = {tuple([wrd_id, ix_i] + list(k_t)): ixes
+#                                       for k_t, index_map in tqdm(self.sample_index_maps.items(),
+#                                                                  desc="Creating sample indices")
+#                                       for wrd_id, ix_list in index_map.items()
+#                                       for ix_i, ixes in enumerate(ix_list)}
+#
+#                # Enumerate all the keys across flat_index_map into one large list for index-style,
+#                # has a len() and can be indexed into nicely (via np.ndarray)
+#                self.flat_keys = np.array([(k, k[2:])
+#                                           for i, k in enumerate(self.flat_index_map.keys())],
+#                                          dtype='object')
+
+            # ### New Version ###
+            sample_ix_df_l = list()
+            key_cols = ['word_code', 'sample_ix', 'location', 'patient', 'session', 'trial']
+            for l_p_s_t, index_map in self.sample_index_maps.items():
+                patient_ixes = list()
+
+                cols = key_cols + ['start_t', 'stop_t', 'indices']
+
+                key_l = list(l_p_s_t)
+
+                patient_ixes += [tuple([label_code, ix_i] + key_l + [_ix.min(), _ix.max(), _ix])
+                                 for label_code, indices_l in index_map.items()
+                                 for ix_i, _ix in enumerate(indices_l)]
+
+                p_ix_df = pd.DataFrame(patient_ixes, columns=cols)
+
+                if 'word_start_stop_times' in self.data_maps[l_p_s_t]:
+                    wsst_df = self.data_maps[l_p_s_t]['word_start_stop_times']
+                    nearest_ixes = wsst_df.index.get_indexer(p_ix_df.start_t, method='nearest')
+                    p_ix_df['sent_code'] = wsst_df.iloc[nearest_ixes].stim_sentcode.values
+
+                sample_ix_df_l.append(p_ix_df)
+
+            self.sample_ix_df = pd.concat(sample_ix_df_l).reset_index(drop=True)
+            k_select_offset = 2
             if self.flatten_sensors_to_samples:
-                # Map full description (word label, window index, sensor,...trial key elements..}
-                # to the actual pandas index
-                self.logger.info("Flattening sensors to samples")
-                self.flat_index_map = {tuple([wrd_id, ix_i, s_i] + list(k_t)): ixes
-                                       for k_t, index_map in tqdm(self.sample_index_maps.items(),
-                                                                  desc="Creating sample indices")
-                                       for wrd_id, ix_list in index_map.items()
-                                       for ix_i, ixes in enumerate(ix_list)
-                                       for s_i, s in enumerate(self.selected_columns)}
+                self.sample_ix_df['channel'] = [self.selected_columns] * len(self.sample_ix_df)
+                key_cols.insert(2, 'channel')
+                k_select_offset += 1
+                self.sample_ix_df = self.sample_ix_df.explode('channel')
 
-                # Enumerate all the keys across flat_index_map into one large list for index-style,
-                # has a len() and can be indexed into nicely (via np.ndarray)
-                self.flat_keys = np.array([(k, k[3:])
-                                           for i, k in enumerate(self.flat_index_map.keys())],
-                                          dtype='object')
-            else:
-                # Map full description (word label, window index,...trial key elements..}
-                # to the actual pandas index
-                self.flat_index_map = {tuple([wrd_id, ix_i] + list(k_t)): ixes
-                                       for k_t, index_map in tqdm(self.sample_index_maps.items(),
-                                                                  desc="Creating sample indices")
-                                       for wrd_id, ix_list in index_map.items()
-                                       for ix_i, ixes in enumerate(ix_list)}
+            self.key_cols = key_cols
 
-                # Enumerate all the keys across flat_index_map into one large list for index-style,
-                # has a len() and can be indexed into nicely (via np.ndarray)
-                self.flat_keys = np.array([(k, k[2:])
-                                           for i, k in enumerate(self.flat_index_map.keys())],
-                                          dtype='object')
+            key_df = self.sample_ix_df[self.key_cols]
+            self.flat_keys = np.array(list(zip(key_df.to_records(index=False).tolist(),
+                                      key_df.iloc[:, k_select_offset:].to_records(index=False).tolist())))
+            self.flat_index_map = self.sample_ix_df.set_index(key_cols).indices.to_dict()
+
+            # ## END NEW VERSION
 
             self.logger.info(f"Length of flat index map: {len(self.flat_index_map)}")
 
@@ -449,7 +490,6 @@ class BaseASPEN(BaseDataset):
                               for l_p_s_t_tuple, mat_d in tqdm(self.data_maps.items(),
                                                                desc='Applying sensor selection')}
 
-
         else:
             #print("Warning: using naive shared-referencing across objects - only use when feeling lazy")
             self.logger.warning("Warning: using naive shared-referencing across objects - only use when feeling lazy")
@@ -458,6 +498,12 @@ class BaseASPEN(BaseDataset):
             self.sample_index_maps = self.data_from.sample_index_maps
             self.flat_index_map = self.data_from.flat_index_map
             self.flat_keys = self.data_from.flat_keys
+            self.key_cols = self.data_from.key_cols
+            #self.logger.info("Copying over sample ix dataframe")
+            self.sample_ix_df = self.data_from.sample_ix_df.copy()
+            self.selected_columns = self.data_from.selected_columns
+            self.flatten_sensors_to_samples = self.data_from.flatten_sensors_to_samples
+            self.extra_output_keys = self.data_from.extra_output_keys
 
         self.select(self.selected_word_indices)
 
@@ -600,6 +646,24 @@ class BaseASPEN(BaseDataset):
         right_dataset = self.__class__(data_from=self, selected_word_indices=right_side_indices)
 
         return left_dataset, right_dataset
+
+    def split_select_random_key_levels(self, key='sent_code', **train_test_split_kws):
+        from sklearn.model_selection import train_test_split
+        s: pd.Series = self.sample_ix_df[key]
+        levels = s.unique()
+        train, test = train_test_split(levels, **train_test_split_kws)
+
+        train_mask = s.isin(train)
+        test_mask = s.isin(test)
+
+        train_indices = self.sample_ix_df[train_mask].index.tolist()
+        test_indices = self.sample_ix_df[test_mask].index.tolist()
+
+        train_dataset = self.__class__(data_from=self, selected_word_indices=train_indices)
+        test_dataset = self.__class__(data_from=self, selected_word_indices=test_indices)
+
+        return train_dataset, test_dataset
+
 
     def select(self, sample_indices):
         # select out specific samples from the flat_keys array if selection passed
@@ -890,8 +954,10 @@ class HarvardSentences(BaseASPEN):
                                                                           silence_window_samples=int(48000 * 1.5),
                                                                           speaking_quantile_threshold=0.9,
                                                                           #silence_threshold=0.001,
-                                                                          #silGence_quantile_threshold=0.05,
-                                                                          silence_n_smallest=10000, stim_key='word_stim')),
+                                                                          silence_quantile_threshold=0.05,
+                                                  n_silence_windows=35000,
+                                                                          #silence_n_smallest=30000,
+                                                  stim_key='word_stim')),
             ('speaking_indices', pipeline.WindowSampleIndicesFromStim('stim_pwrt',
                                                                       target_onset_shift=pd.Timedelta(-.5, 's'),
                                                                       # input are centers, and output is a window of .5 sec
@@ -1091,3 +1157,9 @@ class ChangNWW(NorthwesternWords):
 
     def make_pipeline_map(self, default='audio_gate'):
         raise NotImplementedError("ChangNWW with MFC pipeline components not in new skl framework")
+
+if __name__ == """__main__""":
+    hvs_tuples = HarvardSentences.make_tuples_from_sets_str('UCSD-28')
+    hvs = HarvardSentences(hvs_tuples, flatten_sensors_to_samples=False,
+                                    pre_processing_pipeline='audio_gate_speaking_only')
+    hvs[0]

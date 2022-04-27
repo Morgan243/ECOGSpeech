@@ -206,6 +206,7 @@ class PowerThreshold(DictTrf):
     stim_silence_value = attr.ib(0)
     silence_quantile_threshold = attr.ib(None)
     silence_n_smallest = attr.ib(None)
+    n_silence_windows = attr.ib(35000)
     speaking_quantile_threshold = attr.ib(None)
 
     def process(self, data_map):
@@ -215,6 +216,7 @@ class PowerThreshold(DictTrf):
                                     silence_threshold=self.silence_threshold,
                                     silence_window_samples=self.silence_window_samples,
                                     stim_silence_value=self.stim_silence_value,
+                                    n_silence_windows=self.n_silence_windows,
                                     speaking_quantile_threshold=self.speaking_quantile_threshold,
                                     silence_quantile_threshold=self.silence_quantile_threshold,
                                     silence_n_smallest=self.silence_n_smallest)
@@ -224,6 +226,7 @@ class PowerThreshold(DictTrf):
                         speaking_window_samples,
                         silence_threshold,
                         silence_window_samples, stim_silence_value,
+                        n_silence_windows,
                         speaking_quantile_threshold,
                         silence_quantile_threshold,
                         silence_n_smallest):
@@ -241,7 +244,7 @@ class PowerThreshold(DictTrf):
         else:
             thresholded_speaking_pwr = (rolling_pwr > speaking_threshold)
 
-        speaking_stim_auto_m = (stim_s != 0.) & thresholded_speaking_pwr
+        speaking_stim_auto_m = (stim_s != stim_silence_value) & thresholded_speaking_pwr
 
         #### Silence
         silence_rolling_pwr = (audio_s
@@ -260,7 +263,7 @@ class PowerThreshold(DictTrf):
         elif silence_quantile_threshold is not None:
             cls.logger.info("Using silence quantile")
             silence_quantile_threshold = float(silence_quantile_threshold)
-            thresholded_silence_pwr = silence_rolling_pwr.pipe(lambda s: s < s.quantile(silence_quantile_threshold) )
+            thresholded_silence_pwr = silence_rolling_pwr.pipe(lambda s: s <= s.quantile(silence_quantile_threshold) )
         else:
             cls.logger.info("Using silence power-threshold")
             thresholded_silence_pwr = (silence_rolling_pwr < silence_threshold)
@@ -268,6 +271,11 @@ class PowerThreshold(DictTrf):
         #silence_stim_auto_m = (stim_s == stim_silence_value) & (~speaking_stim_auto_m) & thresholded_silence_pwr
         #silence_stim_auto_m = (stim_s == stim_silence_value) & thresholded_silence_pwr
         silence_stim_auto_m = (~speaking_stim_auto_m) & thresholded_silence_pwr
+
+        if n_silence_windows is not None and n_silence_windows > 0:
+            silence_samples = silence_stim_auto_m[silence_stim_auto_m].sample(n_silence_windows)
+            silence_stim_auto_m = pd.Series(False, index=silence_stim_auto_m.index)
+            silence_stim_auto_m[silence_samples.index] = True
 
         # Is the number of unique word codes different when using the threshold selected subset we
         # just produced (stim_auto_m)?
@@ -316,32 +324,34 @@ class SentCodeFromStartStopWordTimes(DictTrf):
         word_df = self.parse_start_stop_word_ms(data_map['start_stop_word_ms'])
         stim = data_map['stim']
 
-        # soeaking is lowest stim code - find all word codes for when they are listening (lt(stim_speaking))
+        # speaking is lowest stim code - find all word codes for when they are listening (lt(stim_speaking))
         listening_stim_s = stim[stim.lt(self.stim_speaking_value) & stim.gt(0)]
         #speaking_stim_s = stim[stim.eq(self.stim_speaking_value) & stim.gt(0)]
         # Find the stim time (with only these values) that is nearest each words start time
-        def closest_index_i_after_t(s, t, v):
-            # Filter stim to times past t threshold time
-            after_t_s = s[s.index >= t]
-            # Within the filtered data, what i index has the value closest to v
-            closest_i_after_t_s = after_t_s.index.get_loc(v, method='nearest')
-            return closest_i_after_t_s
+#        def closest_index_i_after_t(s, t, v):
+#            # Filter stim to times past t threshold time
+#            after_t_s = s[s.index >= t]
+#            # Within the filtered data, what i index has the value closest to v
+#            closest_i_after_t_s = after_t_s.index.get_loc(v, method='nearest')
+#            return closest_i_after_t_s
             # Access the index value at i
             #return after_t_s.index[closest_i_after_t_s]
 
         # Get the listening sample nearest to the words start time from the listening index
         #start_listening_ixes = word_df.apply(lambda r: closest_index#_i_after_t(listening_stim_s, r.stop_t, r.start_t), axis=1)
         # TODO: Can probably request all of these at once now with get_indexer
-        start_listening_ixes = word_df.start_t.apply(lambda v: listening_stim_s.index.get_indexer([v], method='nearest')[0])
+        #start_listening_ixes = word_df.start_t.apply(lambda v: listening_stim_s.index.get_indexer([v], method='nearest')[0])
+        start_listening_ixes = listening_stim_s.index.get_indexer(word_df.start_t.values, method='nearest')
         #start_listening_ixes = word_df.start_t.apply(lambda v: listening_stim_s.index.get_loc(v, method='nearest'))
         # Get the index nearest to the words start time for the stim values - should basically be the start_t value
-        start_stim_ixes = word_df.start_t.apply(lambda v: stim.index.get_indexer([v], method='nearest')[0])
+        #start_stim_ixes = word_df.start_t.apply(lambda v: stim.index.get_indexer([v], method='nearest')[0])
+        start_stim_ixes = stim.index.get_indexer(word_df.start_t, method='nearest')
         #start_stim_ixes = word_df.start_t.apply(lambda v: stim.index.get_loc(v, method='nearest'))
 
         word_df['stim_start_t'] = stim.index[start_stim_ixes]
 
-        word_df['stim_sentcode'] = listening_stim_s.iloc[start_listening_ixes.values].values
-        word_df['stim_sentcode_t'] = listening_stim_s.iloc[start_listening_ixes.values].index
+        word_df['stim_sentcode'] = listening_stim_s.iloc[start_listening_ixes].values
+        word_df['stim_sentcode_t'] = listening_stim_s.iloc[start_listening_ixes].index
         #word_df['stim_sentcode'] = listening_stim_s.iloc[start_listening_ixes.values].values
         #word_df['stim_sentcode_t'] = listening_stim_s.iloc[start_listening_ixes.values].index
 

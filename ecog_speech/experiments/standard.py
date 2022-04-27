@@ -117,6 +117,7 @@ def make_datasets_and_loaders(options, dataset_cls=None, base_data_kws=None,
         (3) Similar to two, but not shuffled and larger batch size (for evaluation)
     """
     #from torchvision import transforms
+    #raise ValueError("BREAK")
     base_data_kws = dict() if base_data_kws is None else base_data_kws
     if dataset_cls is None:
         dataset_cls = datasets.BaseDataset.get_dataset_by_name(options.dataset)
@@ -186,10 +187,20 @@ def make_datasets_and_loaders(options, dataset_cls=None, base_data_kws=None,
     dataset_map['train'] = train_nww
 
     if cv_kws['patient_tuples'] is not None:
+        print("+" * 50)
+        print(f"Using {cv_kws['patient_tuples']}")
         dataset_map['cv'] = dataset_cls(#power_q=options.power_q,
                                         sensor_columns=train_nww.selected_columns,
                                         **cv_kws)
+    elif dataset_cls  == datasets.HarvardSentences:
+        logger.info("Splitting on random key levels for harvard sentences (UCSD)")
+        print("*" * 30)
+        print("Splitting on random key levels for harvard sentences (UCSD)")
+        print("*" * 30)
+        _train, _cv = train_nww.split_select_random_key_levels()
+        dataset_map.update(dict(train=_train, cv=_cv))
     else:
+        print("~" * 100)
         from sklearn.model_selection import train_test_split
         train_ixs, cv_ixes = train_test_split(range(len(train_nww)))
         cv_nww = dataset_cls(data_from=train_nww, **cv_kws).select(cv_ixes)
