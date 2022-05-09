@@ -6,6 +6,7 @@ from sklearn.pipeline import Pipeline
 import attr
 import logging
 from ecog_speech import utils
+import torch
 
 with_logger = utils.with_logger(prefix_name=__name__)
 
@@ -190,6 +191,49 @@ class StandardNormSignal(DictTrf):
         std = df.std()
         return {self.output_key: (df - mu) / std}
 
+
+#from dataclasses import dataclass, field
+#@dataclass
+import torchaudio
+@attr.s
+@with_logger
+class ExtractMFCC(DictTrf):
+
+    n_fft = attr.ib(1024)
+    win_length = attr.ib(None)
+    hop_length = attr.ib(512)
+    n_mels = attr.ib(13)
+    fs = attr.ib(None)
+
+    audio_key = attr.ib('audio')
+    audio_fs_key = attr.ib('fs_audio')
+
+    def process(self, data_map):
+        audio_s = data_map[self.audio_key]
+        fs = data_map[self.audio_fs_key]
+
+        if not hasattr(self, 'melspec_trf'):
+            self.melspec_trf = torchaudio.transforms.MelSpectrogram(fs,
+                                                           n_fft=self.n_fft,
+                                                           win_length=self.win_length,
+                                                           hop_length=self.hop_length,
+                                                           center=True,
+                                                           pad_mode="reflect",
+                                                           power=2.0,
+                                                           norm="slaney",
+                                                           onesided=True,
+                                                           n_mels=self.n_mels,
+                                                           mel_scale="htk")
+
+        audio_arr = torch.from_numpy(audio_s.values).float()
+        audio_mfc = self.melspec_trf(audio_arr)
+
+        audio_mfc_df = pd.DataFrame(audio_mfc.T.detach().cpu())
+        mfc_ix = pd.TimedeltaIndex(pd.RangeIndex(0, audio_mfc_df.shape[0]) / (fs / self.melspec_trf.hop_length),
+                                   unit='s')
+        audio_mfc_df.index = mfc_ix
+
+        return dict(audio_mel_spec=audio_mfc_df)
 
 @attr.s
 @with_logger

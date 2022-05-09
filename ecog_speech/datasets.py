@@ -140,6 +140,8 @@ class BaseDataset(tdata.Dataset):
             dataset_cls = ChangNWW
         elif dataset_name == 'hvs':
             dataset_cls = HarvardSentences
+        elif dataset_name == 'hvsmfc':
+            dataset_cls = HarvardSentencesMFC
         else:
             raise ValueError("Unknown dataset: %s" % dataset_name)
         return dataset_cls
@@ -322,6 +324,10 @@ class BaseASPEN(BaseDataset):
         else:
             self.logger.info(f"{str(self.pre_processing_pipeline)} pipeline passed directly")
             self.pipeline_f = self.pre_processing_pipeline
+
+        if isinstance(self.pipeline_f, Pipeline):
+            self.pipeline_obj = self.pipeline_f
+            self.pipeline_f = self.pipeline_obj.transform
 
         # If no data sharing, then load and parse data from scratch
         if self.data_from is None:
@@ -548,7 +554,7 @@ class BaseASPEN(BaseDataset):
                                                                                     stim_value_remap=0
                                                                                   )),
                 ('output', 'passthrough')
-                    ]).transform,
+                    ]),
 
             'minimal':
                 feature_processing.SubsampleECOG() >>
@@ -886,6 +892,8 @@ class BaseASPEN(BaseDataset):
 
         return axs
 
+    def get_target_shape(self):
+        return 1
 
 @attr.s
 @with_logger
@@ -933,7 +941,8 @@ class HarvardSentences(BaseASPEN):
             ('parse_stim', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['stimcode'],
                                                               self.mat_d_keys['signal_fs'],
                                                               1200, reshape=-1, output_key='stim')),
-            ('parse_sensor_ras', pipeline.ParseSensorRAS())
+            ('parse_sensor_ras', pipeline.ParseSensorRAS()),
+            ('extract_mfc', pipeline.ExtractMFCC())
         ]
 
         parse_input_steps = [
@@ -975,10 +984,10 @@ class HarvardSentences(BaseASPEN):
 
         p_map = {
             'audio_gate': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
-                                   + audio_gate_steps + [('output', 'passthrough')]).transform,
+                                   + audio_gate_steps + [('output', 'passthrough')]),
             'audio_gate_speaking_only': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
                                                   # Slice out the generation of the silence stim data - only speaking
-                                                 + audio_gate_steps[:-1] + [('output', 'passthrough')]).transform,
+                                                 + audio_gate_steps[:-1] + [('output', 'passthrough')]),
 
             'audio_gate_imagine': Pipeline(parse_arr_steps + parse_input_steps + [
                 # Creates listening, imagine, mouth
@@ -1000,7 +1009,7 @@ class HarvardSentences(BaseASPEN):
                                                                         stim_value_remap=0)),
 
                 ('output', 'passthrough')
-            ]).transform,
+            ]),
 
         }
         p_map['default'] = p_map[default]
@@ -1022,6 +1031,24 @@ class HarvardSentences(BaseASPEN):
         return fname
 
 
+@attr.s
+@with_logger
+class HarvardSentencesMFC(HarvardSentences):
+
+    @staticmethod
+    def get_targets(data_map, ix, label, target_transform=None):
+        mel_ix = data_map['audio_mel_spec'].index.get_indexer(ix, method='nearest')
+
+        mel_spec_df = data_map['audio_mel_spec'].iloc[mel_ix]
+        mel_spec_arr = torch.from_numpy(mel_spec_df.values.T)
+
+        # Just window E() - should this be last sample? Center sample? Median?
+        mel_spec_arr = mel_spec_arr.mean(-1)
+
+        return dict(target=mel_spec_arr)
+
+    def get_target_shape(self):
+        return self.pipeline_obj.named_steps.extract_mfc.n_mels
 
 @attr.s
 @with_logger

@@ -1,4 +1,5 @@
 import uuid
+import copy
 import time
 from datetime import datetime
 from os.path import join as pjoin
@@ -16,6 +17,7 @@ import attr
 from ecog_speech.experiments.standard import make_model, make_datasets_and_loaders, default_option_kwargs
 from ecog_speech.experiments import standard, semi_supervised
 from ecog_speech.experiments import base as bxp
+from ecog_speech import datasets
 from dataclasses import dataclass
 import json
 
@@ -271,6 +273,51 @@ class TLTrainer(base.Trainer):
 
         return eval_d
 
+from ecog_speech.models import base_fine_tuners as base_ft
+from ecog_speech.models import base_transformers
+def create_fine_tuning_model(pretrained_model, ft_method='1d_linear',
+                             dataset: datasets.BaseDataset = None,
+                             classifier_head: torch.nn.Module = None):
+    from ecog_speech.models import base
+
+
+    if ft_method == '1d_linear':
+        # Very simple linear classifier head by default
+        if classifier_head is None:
+            h_size = 1024
+            classifier_head = torch.nn.Sequential(*[
+                base.Reshape((pretrained_model.C * pretrained_model.T,)),
+                torch.nn.Linear(pretrained_model.C * pretrained_model.T, h_size),
+                #torch.nn.BatchNorm1d(h_size),
+                torch.nn.LeakyReLU(),
+                torch.nn.Linear(h_size, h_size),
+                torch.nn.LeakyReLU(),
+                torch.nn.Linear(h_size, dataset.get_target_shape()),
+                #torch.nn.Sigmoid()
+            ])
+
+            #nn.init.xavier_uniform_(classifier_head.weight)
+
+        m = copy.deepcopy(pretrained_model)
+        m.feature_model.requires_grad_(False)
+        m.quantizer.codebook_indices = None
+        m.context_model.requires_grad_(False)
+
+        ft_model = base_ft.FineTuner(pre_trained_model=m, output_model=classifier_head,
+                                     pre_trained_model_forward_kws=dict(features_only=True, mask=False),
+                                     pre_trained_model_output_key='x')
+    elif ft_method == '2d_transformers':
+        if dataset is None:
+            raise ValueError(f"A dataset is required for '2d_transformers' method in order to see num sensors")
+        from ecog_speech.models import base_transformers
+
+        ft_model = base_transformers.MultiChannelCog2Vec((len(dataset.selected_columns), 256),
+                                                         pretrained_model, outputs=dataset.get_target_shape())
+    else:
+        raise ValueError(f"Unknown ft_method '{ft_method}'")
+
+    return ft_model
+
 
 def run(options: TransferLearningOptions):
     # Pretrained model already prepared, parse from its results output
@@ -278,14 +325,20 @@ def run(options: TransferLearningOptions):
 
     dataset_map, dl_map, eval_dl_map = semi_supervised.make_datasets_and_loaders(options)
 
-    fine_tune_model = pretrained_model.create_fine_tuning_model(options.fine_tuning_method,
-                                                                dataset=dataset_map['train'])
+    fine_tune_model = create_fine_tuning_model(pretrained_model,
+                                               options.fine_tuning_method,
+                                               dataset=dataset_map['train'])
+    #ft_model = base_transformers.MultiChannelCog2Vec((len(hvs.selected_columns), 256),
+    #                                                 pretrained_model, outputs=hvs.get_target_shape)
 
-    #target = torch.ones([10, 64], dtype=torch.float32)  # 64 classes, batch size = 10
-    #output = torch.full([10, 64], 1.5)  # A prediction (logit)
-    #pos_weight = torch.ones([64])*0.1  # All weights are equal to 1
-    pos_weight = torch.FloatTensor([0.5]).to(options.device)
-    criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+    if options.dataset == 'hvsmfc':
+        criterion = torch.nn.MSELoss()
+        target_key = 'target'
+    elif options.dataset == 'hvs':
+        pos_weight = torch.FloatTensor([0.5]).to(options.device)
+        criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        target_key = 'text_arr'
     #criterion(output, target)  # -log(sigmoid(1.5))
 
     #trainer_cls = base.Trainer
@@ -296,6 +349,7 @@ def run(options: TransferLearningOptions):
                               input_key='signal_arr',
                               learning_rate=options.learning_rate,
                               early_stopping_patience=options.early_stopping_patience,
+                              target_key=target_key,
                               criterion=criterion,
                               device=options.device,
                               )

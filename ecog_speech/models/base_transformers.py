@@ -580,90 +580,18 @@ class CoG2Vec(torch.nn.Module):
                     code_perplexity=code_ppl, prob_perplexity=prob_ppl,
                     temp=curr_temp)
 
-    def create_fine_tuning_model(self, ft_method='1d_linear',
-                                 dataset: datasets.BaseDataset = None,
-                                 classifier_head: torch.nn.Module = None):
-        from ecog_speech.models import base
-
-
-        if ft_method == '1d_linear':
-            # Very simple linear classifier head by default
-            if classifier_head is None:
-                h_size = 1024
-                classifier_head = torch.nn.Sequential(*[
-                    base.Reshape((self.C * self.T,)),
-                    torch.nn.Linear(self.C * self.T, h_size),
-                    #torch.nn.BatchNorm1d(h_size),
-                    torch.nn.LeakyReLU(),
-                    torch.nn.Linear(h_size, h_size),
-                    torch.nn.LeakyReLU(),
-                    torch.nn.Linear(h_size, 1),
-                    #torch.nn.Sigmoid()
-                ])
-
-                #nn.init.xavier_uniform_(classifier_head.weight)
-
-            m = copy.deepcopy(self)
-            m.feature_model.requires_grad_(False)
-            m.quantizer.codebook_indices = None
-            m.context_model.requires_grad_(False)
-
-            ft_model = FineTuner(pre_trained_model=m, output_model=classifier_head,
-                                 pre_trained_model_forward_kws=dict(features_only=True, mask=False),
-                                 pre_trained_model_output_key='x')
-        elif ft_method == '2d_transformers':
-            if dataset is None:
-                raise ValueError(f"A dataset is required for '2d_transformers' method in order to see num sensors")
-            from ecog_speech.models import base_transformers
-
-            # mc2v_m = base_transformers.MultiChannelFromSingleChannel((len(ft_dataset_map['train'].selected_columns), 256),
-            #                                                pretrained_model, )
-
-            ft_model = base_transformers.MultiChannelCog2Vec((len(dataset.selected_columns), 256),
-                                                             self)
-        else:
-            raise ValueError(f"Unknown ft_method '{ft_method}'")
-
-        return ft_model
-
-
-class MultiChannelFromSingleChannel(torch.nn.Module):
-    def __init__(self, input_shape, model_1d, model_dim=1, forward_kws=None, concat_axis=2,
-                 model_output_key='x'):
-        super().__init__()
-        self.input_shape = input_shape
-        self.model_1d = model_1d
-        self.model_dim = model_dim
-        self.forward_kws = dict(features_only=True, mask=False) if forward_kws is None else forward_kws
-        self.concat_axis = concat_axis
-
-        self.model_output_key = model_output_key
-
-        self.T, self.S, self.C = self.model_1d.T, self.input_shape[0], self.model_1d.C
-
-    def forward(self, input_d: dict):
-        ras_arr = input_d['sensor_ras_coord_arr']
-        x_arr = input_d['signal_arr']
-
-        outputs_l = list()
-        for i in range(x_arr.shape[self.model_dim]):
-            _input_d = dict(sensor_ras_coord_arr=ras_arr.select(self.model_dim, i).unsqueeze(1),
-                            signal_arr=x_arr.select(self.model_dim, i).unsqueeze(1))
-            with torch.no_grad():
-                outputs_l.append(self.model_1d(_input_d, **self.forward_kws)[self.model_output_key])
-
-        output_arr = torch.cat([_x.unsqueeze(self.concat_axis) for _x in outputs_l], self.concat_axis)
-
-        return dict(output=output_arr)
+from ecog_speech.models import base_fine_tuners as base_ft
 
 
 class MultiChannelCog2Vec(torch.nn.Module):
-    def __init__(self, input_shape, c2v_m: CoG2Vec, hidden_encoder='linear'):
+    def __init__(self, input_shape, c2v_m: CoG2Vec, hidden_encoder='linear',
+                 outputs=1):
         super().__init__()
         self.input_shape = input_shape
         self.c2v_m = c2v_m
+        self.outputs = outputs
 
-        self.mc_from_1d = MultiChannelFromSingleChannel(self.input_shape, self.c2v_m)
+        self.mc_from_1d = base_ft.MultiChannelFromSingleChannel(self.input_shape, self.c2v_m)
 
         self.S = self.input_shape[0]
         self.T, self.C = self.c2v_m.T, self.c2v_m.C
@@ -679,7 +607,7 @@ class MultiChannelCog2Vec(torch.nn.Module):
         if isinstance(hidden_encoder, torch.nn.Module):
             self.hidden_encoder = hidden_encoder
         elif hidden_encoder == 'linear':
-            self.lin_dim = 16
+            self.lin_dim = 10
             self.dropout_rate = 0.75
             self.hidden_encoder = torch.nn.Sequential(
                 torch.nn.Dropout(self.dropout_rate),
@@ -706,15 +634,15 @@ class MultiChannelCog2Vec(torch.nn.Module):
             self.lin_dim = self.h_dim * self.T
 
 
-        h_size = 32
+        #h_size = 32
         self.classifier_head = torch.nn.Sequential(*[
             # base.Reshape((self.C * self.T,)),
-            torch.nn.Linear(self.lin_dim, h_size),
+            #torch.nn.Linear(self.lin_dim, h_size),
             # torch.nn.BatchNorm1d(h_size),
-            torch.nn.LeakyReLU(),
+            #torch.nn.LeakyReLU(),
             #torch.nn.Linear(h_size, h_size),
             #torch.nn.LeakyReLU(),
-            torch.nn.Linear(h_size, 1),
+            torch.nn.Linear(self.lin_dim, self.outputs),
             # torch.nn.Sigmoid()
         ])
 
@@ -730,38 +658,6 @@ class MultiChannelCog2Vec(torch.nn.Module):
         lin_in_arr = trf_out_arr.reshape(B, self.lin_dim)
 
         return self.classifier_head(lin_in_arr)
-
-class MultiChannelFineTuner(torch.nn.Module):
-    """Takes a (usually pre trained) model that operates on single channels, and applies it to
-    inputs with multiple channels"""
-
-    def __init__(self, pre_trained_1d_model, output_model, pre_trained_model_forward_kws,
-                 pre_trained_model_output_key, concat_axis=1):
-        super().__init__()
-        self.pre_trained_model = pre_trained_1d_model
-        self.output_model = output_model
-        self.pre_trained_model_output_key = pre_trained_model_output_key
-        self.pre_trained_model_forward_kws = pre_trained_model_forward_kws
-
-    def forward(self, input_d, features_only=False, mask=True):
-        X = input_d['signal_arr']
-        pass
-
-
-class FineTuner(torch.nn.Module):
-    def __init__(self, pre_trained_model, output_model, pre_trained_model_forward_kws,
-                 pre_trained_model_output_key):
-        super().__init__()
-        self.pre_trained_model = pre_trained_model
-        self.output_model = output_model
-        self.pre_trained_model_output_key = pre_trained_model_output_key
-        self.pre_trained_model_forward_kws = pre_trained_model_forward_kws
-
-    def forward(self, x):
-        pt_out = self.pre_trained_model(x,
-                                        **(dict() if self.pre_trained_model_forward_kws is None
-                                           else self.pre_trained_model_forward_kws))
-        return self.output_model(pt_out[self.pre_trained_model_output_key])
 
 from ecog_speech.models.base import Trainer
 import attr
