@@ -769,6 +769,9 @@ class BaseASPEN(BaseDataset):
             # Recurse - returns a list, so combine all lists into one with `sum` reduction
             return sum([cls.make_tuples_from_sets_str(s) for s in sets_str_l], list())
 
+        if '~' == sets_str[0]:
+            return cls.make_all_tuples_with_one_left_out(sets_str[1:])
+
         set_terms = sets_str.split('-')
         # e.g. MC-22-1 has three terms ('MC', 22, 1) selecting a specific trial of a specific participant
         if len(set_terms) == 3:
@@ -790,6 +793,14 @@ class BaseASPEN(BaseDataset):
 
         return p_list
 
+
+    @classmethod
+    def make_all_tuples_with_one_left_out(cls, sets_str):
+        selected_t_l = cls.make_tuples_from_sets_str(sets_str)
+        remaining_t_l = sum((l for pid_to_t_l in cls.all_patient_maps.values() for l in pid_to_t_l.values() if
+             all(o not in selected_t_l for o in l)),
+            start=list())
+        return remaining_t_l
 
     @staticmethod
     def get_features(data_map, ix, label=None, transform=None, index_loc=False, signal_key='signal',
