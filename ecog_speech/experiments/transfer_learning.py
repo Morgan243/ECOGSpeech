@@ -42,6 +42,7 @@ class TransferLearningOptions(bxp.DNNModelOptions, bxp.MultiSensorOptions):
 
 
 def make_pretrained_model(options=None, nww=None, model_name=None, model_kws=None, print_details=True):
+    result_json = None
     if options.pretrained_result_input_path is not None:
         from ecog_speech.result_parsing import load_model_from_results
 
@@ -59,7 +60,7 @@ def make_pretrained_model(options=None, nww=None, model_name=None, model_kws=Non
         # Need to pretrain
         pass
 
-    return pretrained_model
+    return pretrained_model, result_json
 
 
 def run_sincnet(options: TransferLearningOptions):
@@ -275,13 +276,13 @@ class TLTrainer(base.Trainer):
 
 from ecog_speech.models import base_fine_tuners as base_ft
 from ecog_speech.models import base_transformers
-def create_fine_tuning_model(pretrained_model, ft_method='1d_linear',
+def create_fine_tuning_model(pretrained_model, fine_tuning_method='1d_linear',
                              dataset: datasets.BaseDataset = None,
                              classifier_head: torch.nn.Module = None):
     from ecog_speech.models import base
 
 
-    if ft_method == '1d_linear':
+    if fine_tuning_method == '1d_linear':
         # Very simple linear classifier head by default
         if classifier_head is None:
             h_size = 1024
@@ -306,7 +307,7 @@ def create_fine_tuning_model(pretrained_model, ft_method='1d_linear',
         ft_model = base_ft.FineTuner(pre_trained_model=m, output_model=classifier_head,
                                      pre_trained_model_forward_kws=dict(features_only=True, mask=False),
                                      pre_trained_model_output_key='x')
-    elif ft_method == '2d_transformers':
+    elif fine_tuning_method == '2d_transformers':
         if dataset is None:
             raise ValueError(f"A dataset is required for '2d_transformers' method in order to see num sensors")
         from ecog_speech.models import base_transformers
@@ -314,20 +315,22 @@ def create_fine_tuning_model(pretrained_model, ft_method='1d_linear',
         ft_model = base_transformers.MultiChannelCog2Vec((len(dataset.selected_columns), 256),
                                                          pretrained_model, outputs=dataset.get_target_shape())
     else:
-        raise ValueError(f"Unknown ft_method '{ft_method}'")
+        raise ValueError(f"Unknown ft_method '{fine_tuning_method}'")
 
     return ft_model
 
 
 def run(options: TransferLearningOptions):
     # Pretrained model already prepared, parse from its results output
-    pretrained_model = make_pretrained_model(options)
+    pretrained_model, pretraining_results = make_pretrained_model(options)
 
     dataset_map, dl_map, eval_dl_map = semi_supervised.make_datasets_and_loaders(options)
 
-    fine_tune_model = create_fine_tuning_model(pretrained_model,
-                                               options.fine_tuning_method,
-                                               dataset=dataset_map['train'])
+    fine_tune_model_kws = dict(fine_tuning_method=options.fine_tuning_method,
+                               #dataset=dataset_map['train']
+                               )
+    fine_tune_model = create_fine_tuning_model(pretrained_model, dataset=dataset_map['train'],
+                                               **fine_tune_model_kws)
     #ft_model = base_transformers.MultiChannelCog2Vec((len(hvs.selected_columns), 256),
     #                                                 pretrained_model, outputs=hvs.get_target_shape)
 
@@ -364,10 +367,58 @@ def run(options: TransferLearningOptions):
 
     fine_tune_model.eval()
     outputs_map = ft_trainer.generate_outputs(**eval_dl_map)
-    #eval_res_map = {k: ft_trainer.eval_on(_dl).to_dict(orient='list') for k, _dl in eval_dl_map.items()}
-    clf_str_map = utils.make_classification_reports(outputs_map)
-    performance_map = {part_name: utils.performance(outputs_d['actuals'], outputs_d['preds'] > 0.5)
-                       for part_name, outputs_d in outputs_map.items()}
+
+    if options.dataset == 'hvsmfc':
+        pass
+    elif options.dataset == 'hvs':
+        #eval_res_map = {k: ft_trainer.eval_on(_dl).to_dict(orient='list') for k, _dl in eval_dl_map.items()}
+        clf_str_map = utils.make_classification_reports(outputs_map)
+        performance_map = {part_name: utils.performance(outputs_d['actuals'], outputs_d['preds'] > 0.5)
+                           for part_name, outputs_d in outputs_map.items()}
+
+    #####
+    # Prep a results structure for saving - everything must be json serializable (no array objects)
+    uid = str(uuid.uuid4())
+    t = int(time.time())
+    name = "%d_%s_TL.json" % (t, uid)
+    res_dict = dict(  # path=path,
+        name=name,
+        datetime=str(datetime.now()), uid=uid,
+        pretraining_results=pretraining_results,
+        # batch_losses=list(losses),
+        batch_losses=ft_results,
+        train_selected_columns=dataset_map['train'].selected_columns,#dataset_map['train'].selected_columns,
+        best_model_epoch=ft_trainer.best_model_epoch,
+        num_trainable_params=utils.number_of_model_params(fine_tune_model),
+        num_params=utils.number_of_model_params(fine_tune_model, trainable_only=False),
+        fine_tune_model_kws=fine_tune_model_kws,
+        options=options,
+        #model_kws=model_kws,
+        #**eval_res_map,
+        #clf_reports=clf_str_map,
+        #**{'train_' + k: v for k, v in train_perf_map.items()},
+        #**{'cv_' + k: v for k, v in cv_perf_map.items()},
+        #**test_perf_map,
+        # evaluation_perf_map=perf_maps,
+        # **pretrain_res,
+        # **perf_map,
+        **vars(options))
+
+    if options.save_model_path is not None:
+        import os
+        p = options.save_model_path
+        if os.path.isdir(p):
+            p = os.path.join(p, uid + '.torch')
+        logger.info("Saving model to " + p)
+        torch.save(fine_tune_model.cpu().state_dict(), p)
+        res_dict['save_model_path'] = p
+
+    if options.result_dir is not None:
+        path = pjoin(options.result_dir, name)
+        logger.info(path)
+        res_dict['path'] = path
+        with open(path, 'w') as f:
+            json.dump(res_dict, f)
 
 
 all_model_hyperparam_names = TransferLearningOptions.get_all_model_hyperparam_names()
