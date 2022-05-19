@@ -6,11 +6,13 @@ import json
 import torch
 from ecog_speech import datasets, utils
 from ecog_speech.models import base, sinc_ieeg
+from typing import Optional, Type
+from ecog_speech.experiments import base as bxp
 
 logger = utils.get_logger(__name__)
 
 
-def make_model(options=None, nww=None, model_name=None, model_kws=None, print_details=True):
+def make_model(options: Type[bxp.DNNModelOptions] = None, nww=None, model_name=None, model_kws=None, print_details=True):
     """
     Helper method - Given command-line options and a NorthwesterWords derived dataset, build the model
     specified in the options.
@@ -19,7 +21,9 @@ def make_model(options=None, nww=None, model_name=None, model_kws=None, print_de
     base_kws = dict()
     if options is not None:
         base_kws.update(dict(
-            window_size=int(nww.sample_ixer.window_size.total_seconds() * nww.fs_signal),
+            #window_size=int(nww.sample_ixer.window_size.total_seconds() * nww.fs_signal),
+            # time/samples is the last dimension
+            window_size=int(nww.get_feature_shape()[-1]),
             dropout=options.dropout,
             dropout2d=options.dropout_2d,
             batch_norm=options.batchnorm,
@@ -226,7 +230,6 @@ def make_datasets_and_loaders(options, dataset_cls=None, base_data_kws=None,
     eval_dataloader_map = {k: v.to_dataloader(**eval_dl_kws)
                            for k, v in dataset_map.items()}
 
-
     return dataset_map, dataloader_map, eval_dataloader_map
 
 
@@ -392,30 +395,30 @@ def run(options):
 
 from dataclasses import dataclass, field
 from ecog_speech.experiments import base as bxp
-class SupervisedOptions(
-
-                        bxp.DNNModelOptions):
+@dataclass
+class SupervisedOptions(bxp.DNNModelOptions):
     # Override the parent class default value
     model_name: str = field(default='base-sn')
     dataset: str = field(default='nww')
     train_sets: str = field(default='MC-19-0,MC-19-1')
 
     # ####
-    random_labels: bool =field(default=False)
+    random_labels: bool = field(default=False)
 
-    dense_width: int = field(default=None)
-    sn_n_bands: int = field(default=1)
-    sn_kernel_size: int = field(default=31)
-    sn_padding: int = field(default=15)
-    sn_band_spacing: str = field(default='linear')
-    n_cnn_filters: int = field(default=None)
-    dropout_2d: bool = field(default=False)
-    in_channel_dropout_rate: float = field(default=0.)
-    roll_channels: bool = field(default=False)
-    shuffle_channels: bool = field(default=False)
-    cog_attn: bool = field(default=False)
-    power_q: float = field(default=0.7)
-    bw_reg_weight: float = field(default=0.0)
+    dense_width: Optional[int] = field(default=None)
+    sn_n_bands: Optional[int] = field(default=1)
+    sn_kernel_size: Optional[int] = field(default=31)
+    sn_padding: Optional[int] = field(default=15)
+    sn_band_spacing: Optional[str] = field(default='linear')
+    n_cnn_filters: Optional[int] = field(default=None)
+    track_sinc_params: Optional[bool] = field(default=False)
+    dropout_2d: Optional[bool] = field(default=False)
+    in_channel_dropout_rate: Optional[float] = field(default=0.)
+    roll_channels: Optional[bool] = field(default=False)
+    shuffle_channels: Optional[bool] = field(default=False)
+    cog_attn: Optional[bool] = field(default=False)
+    power_q: Optional[float] = field(default=0.7)
+    bw_reg_weight: Optional[float] = field(default=0.0)
 
 default_model_hyperparam_option_kwargs = [
     dict(dest='--model-name', default='base-sn', type=str),
@@ -466,7 +469,14 @@ default_option_kwargs = default_model_hyperparam_option_kwargs + [
 ]
 
 if __name__ == """__main__""":
-    parser = utils.build_argparse(default_option_kwargs,
-                                  description="ASPEN+MHRG 'standard' experiments")
-    m_options = parser.parse_args()
+    from simple_parsing import ArgumentParser
+    parser = ArgumentParser(description="'standard' supervised classification experiments")
+    parser.add_arguments(SupervisedOptions, dest='standard_supervised')
+    args = parser.parse_args()
+    m_options: SupervisedOptions = args.standard_supervised
     results = run(m_options)
+
+#    parser = utils.build_argparse(default_option_kwargs,
+#                                  description="ASPEN+MHRG 'standard' experiments")
+#    m_options = parser.parse_args()
+#    results = run(m_options)

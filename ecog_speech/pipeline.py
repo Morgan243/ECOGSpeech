@@ -68,6 +68,7 @@ class ParseTimeSeriesArrToFrame(DictTrf):
         else:
             arr_df = pd.DataFrame(arr, index=ix, dtype=self.dtype)
         self.logger.info(f"{self.array_key}@{fs}, shape: {arr_df.shape}, [{arr_df.index[0], arr_df.index[-1]}]")
+        assert arr_df.index.is_unique, f"NON UNIQUE TIME SERIES INDEX FOR KEY {self.array_key}"
 
         return {self.fs_key: fs, arr_key: arr_df}
 
@@ -317,7 +318,13 @@ class PowerThreshold(DictTrf):
         silence_stim_auto_m = (~speaking_stim_auto_m) & thresholded_silence_pwr
 
         if n_silence_windows is not None and n_silence_windows > 0:
-            silence_samples = silence_stim_auto_m[silence_stim_auto_m].sample(n_silence_windows)
+            available_silence_stim: float = silence_stim_auto_m.sum()
+            cls.logger.info(f"Sampling {n_silence_windows} from {available_silence_stim}")
+            kws = dict(replace=False)
+            if n_silence_windows > available_silence_stim:
+                cls.logger.warning("More silent stims requested than available (see above INFO) - sampling with replace")
+                kws['replace'] = True
+            silence_samples = silence_stim_auto_m[silence_stim_auto_m].sample(n_silence_windows, **kws)
             silence_stim_auto_m = pd.Series(False, index=silence_stim_auto_m.index)
             silence_stim_auto_m[silence_samples.index] = True
 
@@ -773,7 +780,9 @@ class WindowSampleIndicesFromStim(DictTrf):
             #   - this removes the last windows worth since windows starting here would have out of label samples
             # Commented this out - use the offsets to handle this?
             #target_start_ixes = stim[target_start_t:target_stop_t].index.tolist()#[:-expected_window_samples]
-            target_start_ixes = stim[target_start_t:target_stop_t].index.tolist()#[:-expected_window_samples]
+            s_ix = stim[target_start_t:target_stop_t].index
+            assert s_ix.is_unique, f"Index between {target_start_t} and {target_stop_t} is not unique!"
+            target_start_ixes = s_ix.tolist()#[:-expected_window_samples]
 
             # Go through the labeled region indices and pull a window of data
             target_indices = [stim.loc[offs:offs + win_size].iloc[:expected_window_samples].index

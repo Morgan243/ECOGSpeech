@@ -1,6 +1,7 @@
 from ecog_speech.experiments import standard, transfer_learning
 all_model_hyperparam_names = standard.all_model_hyperparam_names + transfer_learning.all_model_hyperparam_names
 
+
 def make_model(options=None, nww=None, model_name=None, model_kws=None, print_details=True):
     #model, _ = experiments.make_model(model_name=results['model_name'], model_kws=model_kws)
     from ecog_speech import datasets

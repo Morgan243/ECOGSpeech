@@ -5,7 +5,7 @@ import sys
 
 
 def get_logger(logname='ecog_speech', console_level=logging.DEBUG, file_level=logging.DEBUG,
-               format_string='%(asctime)s - %(name)s.%(funcName)s - %(levelname)s - %(message)s',
+               format_string='%(asctime)s - %(name)s.%(funcName)s:%(lineno)d - %(levelname)s - %(message)s',
                #format_string='%(asctime)s - %(module)s.%(funcName)s - %(levelname)s - %(message)s',
                output_file=None):
     logger = logging.getLogger(logname)
@@ -16,6 +16,7 @@ def get_logger(logname='ecog_speech', console_level=logging.DEBUG, file_level=lo
         #print("MAKING NEW LOGGER: " + logname)
     #logger = < create_my_logger > if not logging.getLogger().hasHandlers() else logging.getLogger()
     # create logger with 'spam_application'
+    logger.propagate = False
     logger.setLevel(logging.DEBUG)
     formatter = logging.Formatter(format_string)
 

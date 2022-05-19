@@ -574,7 +574,8 @@ class Trainer:
     opt_map = attr.ib()
 
     train_data_gen = attr.ib()
-    input_key = attr.ib('ecog_arr')
+    #input_key = attr.ib('ecog_arr')
+    input_key = attr.ib('signal_arr')
     target_key = attr.ib('text_arr')
 
     #optim_kwargs = attr.ib(dict(weight_decay=0.2, lr=0.001))

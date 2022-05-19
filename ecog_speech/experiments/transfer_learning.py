@@ -4,6 +4,8 @@ import time
 from datetime import datetime
 from os.path import join as pjoin
 import json
+
+import pandas as pd
 import torch
 from ecog_speech import utils
 from ecog_speech.experiments.standard import train_and_test_model
@@ -20,12 +22,13 @@ from ecog_speech.experiments import base as bxp
 from ecog_speech import datasets
 from dataclasses import dataclass
 import json
+from simple_parsing.helpers import Serializable
 
 logger = utils.get_logger(__name__)
 
 
 @dataclass
-class TransferLearningOptions(bxp.DNNModelOptions, bxp.MultiSensorOptions):
+class TransferLearningOptions(bxp.DNNModelOptions, bxp.MultiSensorOptions, Serializable):
     model_name: Optional[str] = None
     dataset: Optional[str] = 'hvs'
     train_sets: Optional[str] = None
@@ -40,25 +43,35 @@ class TransferLearningOptions(bxp.DNNModelOptions, bxp.MultiSensorOptions):
     # 1d_linear, 2d_transformers
     fine_tuning_method: str = '1d_linear'
 
+from ecog_speech import result_parsing
+# Override to make the result parsing options optional in this script
+@dataclass
+class TransferLearningResultParsingOptions(result_parsing.ResultParsingOptions):
+    result_file: Optional[str] = None
+    print_results: Optional[bool] = False
 
-def make_pretrained_model(options=None, nww=None, model_name=None, model_kws=None, print_details=True):
+
+def make_pretrained_model(options: TransferLearningOptions = None,
+                          pretrained_result_input_path: str = None,
+                          pretrained_result_model_base_path: str = None,
+                          nww=None, model_name=None, model_kws=None, print_details=True):
+    pretrained_result_model_base_path = pretrained_result_model_base_path if options is None else options.pretrained_result_model_base_path
+    pretrained_result_input_path = pretrained_result_input_path if options is None else options.pretrained_result_input_path
+
+    assert_err = "pretrained_result_input_path must be populated as parameter or in options object"
+    assert pretrained_result_input_path is not None, assert_err
+
     result_json = None
-    if options.pretrained_result_input_path is not None:
-        from ecog_speech.result_parsing import load_model_from_results
+    from ecog_speech.result_parsing import load_model_from_results
 
-        result_path = options.pretrained_result_input_path
-        model_base_path = options.pretrained_result_model_base_path
+    result_path = pretrained_result_input_path
+    model_base_path = pretrained_result_model_base_path
 
-        print(f"Loading pretrained model from results in {result_path} (base path = {model_base_path})")
-        with open(result_path, 'r') as f:
-            result_json = json.load(f)
+    print(f"Loading pretrained model from results in {result_path} (base path = {model_base_path})")
+    with open(result_path, 'r') as f:
+        result_json = json.load(f)
 
-        pretrained_model = load_model_from_results(result_json, base_model_path=model_base_path)
-    # Need to pre-train the model now
-    else:
-        raise NotImplementedError()
-        # Need to pretrain
-        pass
+    pretrained_model = load_model_from_results(result_json, base_model_path=model_base_path)
 
     return pretrained_model, result_json
 
@@ -276,27 +289,36 @@ class TLTrainer(base.Trainer):
 
 from ecog_speech.models import base_fine_tuners as base_ft
 from ecog_speech.models import base_transformers
-def create_fine_tuning_model(pretrained_model, fine_tuning_method='1d_linear',
+def create_fine_tuning_model(pretrained_model,
+                             n_pretrained_output_channels=None, n_pretrained_output_samples=None,
+                             fine_tuning_method='1d_linear',
                              dataset: datasets.BaseDataset = None,
+                             fine_tuning_target_shape = None, n_pretrained_input_channels=None, n_pretrained_input_samples=256,
                              classifier_head: torch.nn.Module = None):
     from ecog_speech.models import base
+    #n_pretrained_output_channels = n_pretrained_output_channels if pretrained_model is None else pretrained_model.C
+    #n_pretrained_output_samples = n_pretrained_output_samples if pretrained_model is None else pretrained_model.T
+    n_pretrained_output_channels = pretrained_model.C if n_pretrained_output_channels is None else n_pretrained_output_samples
+    n_pretrained_output_samples = pretrained_model.T if n_pretrained_output_samples is None else n_pretrained_output_samples
 
+    n_pretrained_input_channels = n_pretrained_input_channels if dataset is None else len(dataset.selected_columns)
+    #n_pretrained_input_samples = n_pretrained_input_samples if dataset is None else dataset.get_target_shape()
+    fine_tuning_target_shape = dataset.get_target_shape() if fine_tuning_target_shape is None else fine_tuning_target_shape
 
     if fine_tuning_method == '1d_linear':
         # Very simple linear classifier head by default
         if classifier_head is None:
             h_size = 1024
             classifier_head = torch.nn.Sequential(*[
-                base.Reshape((pretrained_model.C * pretrained_model.T,)),
-                torch.nn.Linear(pretrained_model.C * pretrained_model.T, h_size),
+                base.Reshape((n_pretrained_output_channels * n_pretrained_output_samples,)),
+                torch.nn.Linear(n_pretrained_output_channels * n_pretrained_output_samples, h_size),
                 #torch.nn.BatchNorm1d(h_size),
                 torch.nn.LeakyReLU(),
                 torch.nn.Linear(h_size, h_size),
                 torch.nn.LeakyReLU(),
-                torch.nn.Linear(h_size, dataset.get_target_shape()),
+                torch.nn.Linear(h_size, fine_tuning_target_shape),
                 #torch.nn.Sigmoid()
             ])
-
             #nn.init.xavier_uniform_(classifier_head.weight)
 
         m = copy.deepcopy(pretrained_model)
@@ -307,12 +329,13 @@ def create_fine_tuning_model(pretrained_model, fine_tuning_method='1d_linear',
         ft_model = base_ft.FineTuner(pre_trained_model=m, output_model=classifier_head,
                                      pre_trained_model_forward_kws=dict(features_only=True, mask=False),
                                      pre_trained_model_output_key='x')
+
     elif fine_tuning_method == '2d_transformers':
         if dataset is None:
             raise ValueError(f"A dataset is required for '2d_transformers' method in order to see num sensors")
         from ecog_speech.models import base_transformers
 
-        ft_model = base_transformers.MultiChannelCog2Vec((len(dataset.selected_columns), 256),
+        ft_model = base_transformers.MultiChannelCog2Vec((n_pretrained_input_channels, n_pretrained_input_samples),
                                                          pretrained_model, outputs=dataset.get_target_shape())
     else:
         raise ValueError(f"Unknown ft_method '{fine_tuning_method}'")
@@ -331,9 +354,6 @@ def run(options: TransferLearningOptions):
                                )
     fine_tune_model = create_fine_tuning_model(pretrained_model, dataset=dataset_map['train'],
                                                **fine_tune_model_kws)
-    #ft_model = base_transformers.MultiChannelCog2Vec((len(hvs.selected_columns), 256),
-    #                                                 pretrained_model, outputs=hvs.get_target_shape)
-
 
     if options.dataset == 'hvsmfc':
         criterion = torch.nn.MSELoss()
@@ -392,7 +412,7 @@ def run(options: TransferLearningOptions):
         num_trainable_params=utils.number_of_model_params(fine_tune_model),
         num_params=utils.number_of_model_params(fine_tune_model, trainable_only=False),
         fine_tune_model_kws=fine_tune_model_kws,
-        options=options,
+        options=options.dumps_json(),
         #model_kws=model_kws,
         #**eval_res_map,
         #clf_reports=clf_str_map,
@@ -421,6 +441,43 @@ def run(options: TransferLearningOptions):
             json.dump(res_dict, f)
 
 
+def eval(options: TransferLearningResultParsingOptions):
+    result_path = options.result_file
+    res_df = result_parsing.load_results_to_frame(result_path)
+    # ASSUME ONLY ONE PATH GIVEN
+    result_d = res_df.iloc[0].to_dict()
+    tl_options: TransferLearningOptions = TransferLearningOptions.loads_json(result_d['options'])
+    pretrained_model, result_json = make_pretrained_model(
+        pretrained_result_input_path=result_d['pretrained_result_input_path'],
+        pretrained_result_model_base_path=result_d['pretrained_result_model_base_path']
+        )
+
+    from ecog_speech.experiments import semi_supervised
+    tl_options.n_dl_workers = 6
+    dataset_map, dl_map, eval_dl_map = semi_supervised.make_datasets_and_loaders(tl_options)
+
+    ft_model = create_fine_tuning_model(pretrained_model=pretrained_model,
+                                          dataset=dataset_map['train'],
+                                          fine_tuning_method=tl_options.fine_tuning_method)
+    with open('../' + result_d['save_model_path'], 'rb') as f:
+        model_state = torch.load(f)
+
+    ft_model.load_state_dict(model_state)
+
+    test_dset = dataset_map['test']
+    test_dl = eval_dl_map['test']
+
+    with torch.no_grad():
+        all_preds_l = [ft_model(x) for x in tqdm(test_dl, 'Running model')]
+
+    all_preds_arr = torch.cat(all_preds_l, dim=0)
+    all_preds_df = pd.DataFrame(all_preds_arr.detach().cpu().numpy())
+    all_preds_df.columns = all_preds_df.columns.astype(str)
+    all_preds_df.to_parquet('all_preds_test.parquet')
+
+    print(f"All preds array shape: {all_preds_arr.shape}")
+
+
 all_model_hyperparam_names = TransferLearningOptions.get_all_model_hyperparam_names()
 
 
@@ -429,8 +486,12 @@ if __name__ == """__main__""":
 
     parser = ArgumentParser(description="ASPEN+MHRG Transfer Learning experiments")
     parser.add_arguments(TransferLearningOptions, dest='transfer_learning')
+    parser.add_arguments(TransferLearningResultParsingOptions, dest='tl_result_parsing')
     args = parser.parse_args()
     main_options: TransferLearningOptions = args.transfer_learning
+    result_parsing_options: TransferLearningResultParsingOptions = args.tl_result_parsing
+
+    #print(result_parsing_options)
     #main_options.pretrained_result_input_path = '../../results/cog2vec/1649000864_7a68aaf5-e41f-4f4e-bb56-0b0ca0a2a4fb_TL.json'
     #main_options.pretrained_result_model_base_path = '../../results/cog2vec/models/'
     #main_options.dataset = 'hvs'
@@ -438,4 +499,8 @@ if __name__ == """__main__""":
     #main_options.flatten_sensors_to_samples = True
     #main_options.pre_processing_pipeline = 'audio_gate'
 
-    run(main_options)
+    # If no result file given, then assume running a new experiment
+    if result_parsing_options.result_file is None:
+        run(main_options)
+    else:
+        eval(result_parsing_options)

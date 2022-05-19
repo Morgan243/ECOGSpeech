@@ -22,7 +22,9 @@ def make_datasets_and_loaders(options, **kwargs):
                                                                           pre_processing_pipeline=options.pre_processing_pipeline, #'audio_gate_speaking_only',
                                                                           additional_transforms=add_trfs,
                                                                           num_dl_workers=options.n_dl_workers,
-                                                                          base_data_kws=dict(extra_output_keys=["sensor_ras_coord_arr"]),
+                                                                          #base_data_kws=dict(extra_output_keys=["sensor_ras_coord_arr"]),
+                                                                          base_data_kws=dict(extra_output_keys=options.extra_output_keys.split(',')
+                                                                                             if options.extra_output_keys is not None else None),
                                                                           **data_kws, **kwargs)
 
     return dataset_map, dl_map, eval_dl_map
@@ -33,26 +35,30 @@ def run(options):
     from ecog_speech.models import base_transformers
     import torch
 
-    model_kws = dict(input_shape=(1, 256), feature_model=None, context_model=None, projection_model=None,
-                     dropout=options.dropout, negatives_from_everywhere=True, feature_grad_mult=.1,
-                     n_negatives=50, codebook_negatives=25, cross_sample_negatives=25,
-                     mask_length=4, n_encoder_heads=options.n_encoder_heads, n_encoder_layers=options.n_encoder_layers,
-                     quant_num_vars=options.quant_num_vars, quant_num_groups=options.quant_num_groups,
-                     feature_extractor_layers=options.feature_extractor_layers)
+    # TODO: Need way to override defaults in options
+    #options.pre_processing_pipeline = 'audio_gate_speaking_only'
+    dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options)
+
 
     if options.model_name == 'cog2vec':
+        model_kws = dict(input_shape=(1, 256), feature_model=None, context_model=None, projection_model=None,
+                         dropout=options.dropout, negatives_from_everywhere=True, feature_grad_mult=.1,
+                         n_negatives=50, codebook_negatives=25, cross_sample_negatives=25,
+                         mask_length=4, n_encoder_heads=options.n_encoder_heads,
+                         n_encoder_layers=options.n_encoder_layers,
+                         quant_num_vars=options.quant_num_vars, quant_num_groups=options.quant_num_groups,
+                         feature_extractor_layers=options.feature_extractor_layers)
         model = base_transformers.CoG2Vec(**model_kws)
     else:
-        raise ValueError(f"Don't understand model_name '{options.model_name}'")
+        print("Trying to make model from standard experiments module")
+        model, model_kws = standard.make_model(options, nww=datasets['train'])
+        #raise ValueError(f"Don't understand model_name '{options.model_name}'")
 
     # Shake out any forward pass errors now by running example data through model
     with torch.no_grad():
         #model(model.t_x)
         model(model.t_in)
 
-    # TODO: Need way to override defaults in options
-    #options.pre_processing_pipeline = 'audio_gate_speaking_only'
-    dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options)
 
 
     # Default lr reduce to False, only setup if at patience is set
