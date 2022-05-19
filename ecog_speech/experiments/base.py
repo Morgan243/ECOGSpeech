@@ -14,10 +14,13 @@ class BaseExperimentOptions(JsonSerializable):
     test_sets: Optional[str] = None
 
     data_subset: str = 'Data'
+    output_key: str = 'signal_arr'
+    extra_output_keys: Optional[str] = None
 
     result_dir: Optional[str] = None
     save_model_path: Optional[str] = None
     device: Optional[str] = None
+    tag: Optional[str] = None
 
     @classmethod
     def get_all_model_hyperparam_names(cls):
