@@ -510,6 +510,7 @@ class BaseASPEN(BaseDataset):
             self.selected_columns = self.data_from.selected_columns
             self.flatten_sensors_to_samples = self.data_from.flatten_sensors_to_samples
             self.extra_output_keys = self.data_from.extra_output_keys
+            self.fs_signal = self.data_from.fs_signal
 
         self.select(self.selected_word_indices)
 
@@ -535,6 +536,7 @@ class BaseASPEN(BaseDataset):
                 ('Threshold', pipeline.PowerThreshold(speaking_window_samples=48000 // 16,
                                                                     silence_window_samples=int(48000 * 1.5),
                                                                     speaking_quantile_threshold=0.9,
+                                                      #n_silence_windows=5000,
                                                                     #silence_threshold=0.001,
                                                                     #silGence_quantile_threshold=0.05,
                                                                     silence_n_smallest=5000)),
@@ -669,7 +671,6 @@ class BaseASPEN(BaseDataset):
         test_dataset = self.__class__(data_from=self, selected_word_indices=test_indices)
 
         return train_dataset, test_dataset
-
 
     def select(self, sample_indices):
         # select out specific samples from the flat_keys array if selection passed
@@ -837,6 +838,10 @@ class BaseASPEN(BaseDataset):
                 kws['sensor_ras_coord_arr'] = kws['sensor_ras_coord_arr'][channel_select].unsqueeze(0)
 
         return kws
+
+    def get_feature_shape(self):
+        # TODO: Don't hardode signal array everywhere
+        return self[0]['signal_arr'].shape
 
     @staticmethod
     def get_targets(data_map, ix, label, target_transform=None):
