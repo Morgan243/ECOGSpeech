@@ -50,7 +50,7 @@ def run(options):
                          feature_extractor_layers=options.feature_extractor_layers)
         model = base_transformers.CoG2Vec(**model_kws)
     else:
-        print("Trying to make model from standard experiments module")
+        logger.warning("Trying to make model from standard experiments module")
         model, model_kws = standard.make_model(options, nww=dataset_map['train'])
         #raise ValueError(f"Don't understand model_name '{options.model_name}'")
 

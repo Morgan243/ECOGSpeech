@@ -399,6 +399,7 @@ from ecog_speech.experiments import base as bxp
 class SupervisedOptions(bxp.DNNModelOptions):
     # Override the parent class default value
     model_name: str = field(default='base-sn')
+    # TODO: Model config here
     dataset: str = field(default='nww')
     train_sets: str = field(default='MC-19-0,MC-19-1')
 
@@ -419,6 +420,11 @@ class SupervisedOptions(bxp.DNNModelOptions):
     cog_attn: Optional[bool] = field(default=False)
     power_q: Optional[float] = field(default=0.7)
     bw_reg_weight: Optional[float] = field(default=0.0)
+
+
+from simple_parsing import ArgumentParser, choice#, subgroups
+
+
 
 default_model_hyperparam_option_kwargs = [
     dict(dest='--model-name', default='base-sn', type=str),

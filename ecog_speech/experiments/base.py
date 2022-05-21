@@ -1,7 +1,59 @@
 from dataclasses import dataclass, field
 from simple_parsing.helpers import JsonSerializable
 
-from typing import List, Optional
+from typing import List, Optional, Type, ClassVar
+
+
+@dataclass
+class ModelOptions:
+    model_name: str = None
+    device: Optional[str] = None
+
+    #non_hyperparams: ClassVar[Optional[list]] = field(default_factory=lambda: ['device'])
+    non_hyperparams: ClassVar[Optional[list]] = ['device']
+
+
+    @classmethod
+    def get_all_model_hyperparam_names(cls):
+        return [k for k, v in cls.__annotations__.items()
+                 if k not in cls.non_hyperparams]
+
+
+@dataclass
+class DatasetOptions:
+    dataset_name: str = None
+    pre_processing_pipeline: str = 'default'
+
+    train_sets: str = None
+    cv_sets: Optional[str] = None
+    test_sets: Optional[str] = None
+
+    data_subset: str = 'Data'
+    output_key: str = 'signal_arr'
+    extra_output_keys: Optional[str] = None
+
+
+@dataclass
+class TaskOptions:
+    task_name: str = None
+    dataset: Type[DatasetOptions] = None
+
+
+@dataclass
+class ResultOptions:
+    result_dir: Optional[str] = None
+    save_model_path: Optional[str] = None
+
+
+@dataclass
+class Experiment:
+    model: Type[ModelOptions] = None
+    task: Type[TaskOptions] = None
+    result_input: Optional[Type[ResultOptions]] = None
+    result_output: Optional[Type[ResultOptions]] = None
+    tag: Optional[str] = None
+
+# -----
 
 @dataclass
 class BaseExperimentOptions(JsonSerializable):
