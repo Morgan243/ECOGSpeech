@@ -1,60 +1,58 @@
 from dataclasses import dataclass, field
 from simple_parsing.helpers import JsonSerializable
+import uuid
 
 from typing import List, Optional, Type, ClassVar
 
+from ecog_speech.models.base import ModelOptions
+from ecog_speech.datasets import DatasetOptions
+
 
 @dataclass
-class ModelOptions:
-    model_name: str = None
+class TaskOptions(JsonSerializable):
+    task_name: str = None
+    dataset: DatasetOptions = None
+
+    n_epochs: int = 100
+
+    learning_rate: float = 0.001
+    lr_adjust_patience: Optional[float] = None
+    lr_adjust_factor: float = 0.1
+
+    early_stopping_patience: Optional[int] = None
+
     device: Optional[str] = None
 
-    #non_hyperparams: ClassVar[Optional[list]] = field(default_factory=lambda: ['device'])
-    non_hyperparams: ClassVar[Optional[list]] = ['device']
-
-
-    @classmethod
-    def get_all_model_hyperparam_names(cls):
-        return [k for k, v in cls.__annotations__.items()
-                 if k not in cls.non_hyperparams]
-
 
 @dataclass
-class DatasetOptions:
-    dataset_name: str = None
-    pre_processing_pipeline: str = 'default'
-
-    train_sets: str = None
-    cv_sets: Optional[str] = None
-    test_sets: Optional[str] = None
-
-    data_subset: str = 'Data'
-    output_key: str = 'signal_arr'
-    extra_output_keys: Optional[str] = None
-
-
-@dataclass
-class TaskOptions:
-    task_name: str = None
-    dataset: Type[DatasetOptions] = None
-
-
-@dataclass
-class ResultOptions:
+class ResultOptions(JsonSerializable):
     result_dir: Optional[str] = None
     save_model_path: Optional[str] = None
 
 
 @dataclass
-class Experiment:
-    model: Type[ModelOptions] = None
-    task: Type[TaskOptions] = None
-    result_input: Optional[Type[ResultOptions]] = None
-    result_output: Optional[Type[ResultOptions]] = None
+class Experiment(JsonSerializable):
+    model: ModelOptions = None
+    task: TaskOptions = None
+    result_output: ResultOptions = field(default_factory=ResultOptions)
     tag: Optional[str] = None
 
-# -----
+    @classmethod
+    def create_result_dictionary(cls, **kws):
+        from datetime import datetime
+        dt = datetime.now()
+        dt_str = dt.strftime('%Y%m%d_%H%M')
+        uid = str(uuid.uuid4())
+        name = "%s_%s.json" % (dt_str, uid)
+        res_dict = dict(  # path=path,
+            name=name,
+            datetime=str(dt), uid=uid,
+            **kws
+        )
+        return res_dict
 
+
+# -----
 @dataclass
 class BaseExperimentOptions(JsonSerializable):
     model_name: str = None
@@ -92,23 +90,3 @@ class TrainingExperimentOptions(BaseExperimentOptions):
     lr_adjust_factor: float = 0.1
 
     early_stopping_patience: Optional[int] = None
-
-@dataclass
-class MultiSensorOptions:
-    flatten_sensors_to_samples: bool = False
-    """Sensors will bre broken up into sensors - inputs beceome (1, N-timesteps) samples (before batching)"""
-    random_sensors_to_samples: bool = False
-
-@dataclass
-class DNNModelOptions(TrainingExperimentOptions):
-    activation_class: str = 'PReLU'
-    dropout: float = 0.
-    batchnorm: bool = False
-
-    n_dl_workers: int = 4
-    n_dl_eval_workers: int = 6
-
-@dataclass
-class FromResultOptions:
-    result_input_path: Optional[str] = None
-    result_model_base_path: Optional[str] = None
