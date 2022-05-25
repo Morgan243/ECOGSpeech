@@ -25,6 +25,22 @@ pkg_data_dir = os.path.join(os.path.split(os.path.abspath(__file__))[0], '../dat
 
 os.environ['WANDB_CONSOLE'] = 'off'
 
+from dataclasses import dataclass, field
+from simple_parsing.helpers import JsonSerializable
+
+from typing import List, Optional, Type, ClassVar
+
+logger = utils.get_logger(__name__)
+
+
+
+@dataclass
+class MultiSensorOptions:
+    flatten_sensors_to_samples: bool = False
+    """Sensors will bre broken up into sensors - inputs beceome (1, N-timesteps) samples (before batching)"""
+    random_sensors_to_samples: bool = False
+
+
 #########
 # Torchvision style transformations for use in the datasets and loaders
 @attr.s
@@ -51,6 +67,7 @@ class RollDimension:
 
         return ret
 
+
 @attr.s
 class ShuffleDimension:
     """
@@ -68,6 +85,7 @@ class ShuffleDimension:
         # Swap the shuffle_dim back - i.e. do same transpose again
         sample = np.transpose(sample, [self.shuffle_dim, 0])
         return sample
+
 
 class SelectFromDim:
     """Expects numpy arrays - use in Compose - models.base.Select can be used in Torch """
@@ -103,8 +121,11 @@ class RandomIntLike:
         return torch.randint(self.low, self.high, sample.shape, device=sample.device).type_as(sample)
 
 
+@attr.s
 class BaseDataset(tdata.Dataset):
     env_key = None
+    fs_signal = attr.ib(None, init=False)
+
     def to_dataloader(self, batch_size=64, num_workers=2,
                       batches_per_epoch=None, random_sample=True,
                       shuffle=False, **kwargs):
@@ -145,6 +166,12 @@ class BaseDataset(tdata.Dataset):
         else:
             raise ValueError("Unknown dataset: %s" % dataset_name)
         return dataset_cls
+
+    def get_feature_shape(self):
+        raise NotImplementedError()
+
+    def get_target_shape(self):
+        raise NotImplementedError()
 
 
 class StanfordTasks(BaseDataset):
@@ -252,6 +279,7 @@ class DEAP(BaseDataset):
             dat_map = self.load_all_from_dat(subject_p_map)
             self.save_to_npz(dat_map, self.base_path)
 
+
 @attr.s
 @with_logger
 class BaseASPEN(BaseDataset):
@@ -357,7 +385,8 @@ class BaseASPEN(BaseDataset):
                 res_dmap = self.pipeline_f(dmap)
                 self.sample_index_maps[k] = res_dmap['sample_index_map']
                 # THe first data map sets the sampling frequency fs
-                self.fs_signal = getattr(self, 'fs_signal', res_dmap[self.mat_d_keys['signal_fs']])
+                #self.fs_signal = getattr(self, 'fs_signal', res_dmap[self.mat_d_keys['signal_fs']])
+                self.fs_signal = res_dmap[self.mat_d_keys['signal_fs']] if self.fs_signal is None else self.fs_signal
 
                 #self.ecog_window_size = getattr(self, 'ecog_window_size',
                 #                                int(self.fs_signal * self.sample_ixer.window_size.total_seconds()))
@@ -785,7 +814,10 @@ class BaseASPEN(BaseDataset):
         # e.g. MC-22 will return tuples for all of MC-22's data
         elif len(set_terms) == 2:
             org, pid = set_terms
-            assert pid.isdigit() and org in cls.all_patient_maps.keys()
+
+            assert pid.isdigit(), f"pid expected to be a digit, but got {pid}"
+            assert org in cls.all_patient_maps.keys(), f"org expected to be one of {list(cls.all_patient_maps.keys())}, but got {org}"
+
             pmap, pid = cls.all_patient_maps[org], int(pid)
             assert pid in pmap, f"PID: {pid} not in {org}'s known data map"
             p_list = pmap[pid]
@@ -910,6 +942,7 @@ class BaseASPEN(BaseDataset):
 
     def get_target_shape(self):
         return 1
+
 
 @attr.s
 @with_logger
@@ -1066,6 +1099,7 @@ class HarvardSentencesMFC(HarvardSentences):
     def get_target_shape(self):
         return self.pipeline_obj.named_steps.extract_mfc.n_mels
 
+
 @attr.s
 @with_logger
 class NorthwesternWords(BaseASPEN):
@@ -1200,6 +1234,187 @@ class ChangNWW(NorthwesternWords):
 
     def make_pipeline_map(self, default='audio_gate'):
         raise NotImplementedError("ChangNWW with MFC pipeline components not in new skl framework")
+
+
+@dataclass
+class DatasetOptions(JsonSerializable):
+    dataset_name: str = None
+
+    batch_size: int = 256
+    batches_per_epoch: Optional[int] = None
+    """If set, only does this many batches in an epoch - otherwise, will do enough batches to equal dataset size"""
+
+    pre_processing_pipeline: str = 'default'
+
+    train_sets: str = None
+    cv_sets: Optional[str] = None
+    test_sets: Optional[str] = None
+
+    data_subset: str = 'Data'
+    output_key: str = 'signal_arr'
+    extra_output_keys: Optional[str] = None
+    random_sensors_to_samples: bool = False
+    flatten_sensors_to_samples: bool = False
+    #power_q: float = 0.7
+    random_targets: bool = False
+
+    n_dl_workers: int = 4
+    n_dl_eval_workers: int = 6
+
+    def make_datasets_and_loaders(self, dataset_cls=None, base_data_kws=None,
+                                  train_data_kws=None, cv_data_kws=None, test_data_kws=None,
+                                  train_sets_str=None, cv_sets_str=None, test_sets_str=None,
+                                  train_sensor_columns='valid',
+                                  pre_processing_pipeline=None,
+                                  additional_transforms=None,
+                                  # additional_train_transforms=None, additional_eval_transforms=None,
+                                  num_dl_workers=8) -> tuple:
+        """
+        Helper method to create instances of dataset_cls as specified in the command-line options and
+        additional keyword args.
+        Parameters
+        ----------
+        options: object
+            Options object build using the utils module
+        dataset_cls: Derived class of BaseDataset (default=None)
+            E.g. NorthwesterWords
+        train_data_kws: dict (default=None)
+            keyword args to train version of the dataset
+        cv_data_kws: dict (default=None)
+            keyword args to cv version of the dataset
+        test_data_kws: dict (default=None)
+            keyword args to test version of the dataset
+        num_dl_workers: int (default=8)
+            Number of workers in each dataloader. Can be I/O bound, so sometimes okay to over-provision
+
+        Returns
+        -------
+        dataset_map, dataloader_map, eval_dataloader_map
+            three-tuple of (1) map to original dataset (2) map to the constructed dataloaders and
+            (3) Similar to two, but not shuffled and larger batch size (for evaluation)
+        """
+        # from torchvision import transforms
+        # raise ValueError("BREAK")
+        base_data_kws = dict() if base_data_kws is None else base_data_kws
+        if dataset_cls is None:
+            #dataset_cls = datasets.BaseDataset.get_dataset_by_name(options.dataset)
+            dataset_cls = BaseDataset.get_dataset_by_name(self.dataset_name)
+
+        train_p_tuples = dataset_cls.make_tuples_from_sets_str(self.train_sets if train_sets_str is None
+                                                               else train_sets_str)
+        cv_p_tuples = dataset_cls.make_tuples_from_sets_str(self.cv_sets if cv_sets_str is None
+                                                            else cv_sets_str)
+        test_p_tuples = dataset_cls.make_tuples_from_sets_str(self.test_sets if test_sets_str is None
+                                                              else test_sets_str)
+        logger.info("Train tuples: " + str(train_p_tuples))
+        logger.info("CV tuples: " + str(cv_p_tuples))
+        logger.info("Test tuples: " + str(test_p_tuples))
+
+        base_kws = dict(pre_processing_pipeline=self.pre_processing_pipeline
+                                                if pre_processing_pipeline is None
+                                                else pre_processing_pipeline,
+                        data_subset=self.data_subset,
+                        flatten_sensors_to_samples=self.flatten_sensors_to_samples)
+
+        base_kws.update(base_data_kws)
+        train_kws = dict(patient_tuples=train_p_tuples, **base_kws)
+        cv_kws = dict(patient_tuples=cv_p_tuples, **base_kws)
+        test_kws = dict(patient_tuples=test_p_tuples, **base_kws)
+
+        if train_data_kws is not None:
+            train_kws.update(train_data_kws)
+        if cv_data_kws is not None:
+            cv_kws.update(cv_data_kws)
+        if test_data_kws is not None:
+            test_kws.update(test_data_kws)
+
+        dl_kws = dict(num_workers=num_dl_workers, batch_size=self.batch_size,
+                      batches_per_epoch=self.batches_per_epoch,
+                      shuffle=False, random_sample=True)
+        print(f"DL Keyword arguments: {dl_kws}")
+        eval_dl_kws = dict(num_workers=num_dl_workers, batch_size=512,
+                           batches_per_epoch=self.batches_per_epoch,
+                           shuffle=False, random_sample=False if self.batches_per_epoch is None else True)
+
+        dataset_map = dict()
+        logger.info("Using dataset class: %s" % str(dataset_cls))
+        train_nww = dataset_cls(  # power_q=options.power_q,
+            # sensor_columns='valid',
+            sensor_columns=train_sensor_columns,
+            **train_kws)
+
+        roll_channels = getattr(self, 'roll_channels', False)
+        shuffle_channels = getattr(self, 'shuffle_channels', False)
+        if roll_channels and shuffle_channels:
+            raise ValueError("--roll-channels and --shuffle-channels are mutually exclusive")
+        elif roll_channels:
+            logger.info("-->Rolling channels transform<--")
+            train_nww.append_transform(
+                RollDimension(roll_dim=0, min_roll=0,
+                                       max_roll=train_nww.sensor_count - 1)
+            )
+        elif shuffle_channels:
+            logger.info("-->Shuffle channels transform<--")
+            train_nww.append_transform(
+                ShuffleDimension()
+            )
+
+        if getattr(self, 'random_labels', False):
+            logger.info("-->Randomizing target labels<--")
+            train_nww.append_target_transform(
+                RandomIntLike(low=0, high=2)
+            )
+
+        dataset_map['train'] = train_nww
+
+        if cv_kws['patient_tuples'] is not None:
+            print("+" * 50)
+            print(f"Using {cv_kws['patient_tuples']}")
+            dataset_map['cv'] = dataset_cls(  # power_q=options.power_q,
+                sensor_columns=train_nww.selected_columns,
+                **cv_kws)
+        elif dataset_cls == HarvardSentences:
+            logger.info("Splitting on random key levels for harvard sentences (UCSD)")
+            print("*" * 30)
+            print("Splitting on random key levels for harvard sentences (UCSD)")
+            print("*" * 30)
+            _train, _cv = train_nww.split_select_random_key_levels()
+            dataset_map.update(dict(train=_train, cv=_cv))
+        else:
+            print("~" * 100)
+            from sklearn.model_selection import train_test_split
+            train_ixs, cv_ixes = train_test_split(range(len(train_nww)))
+            cv_nww = dataset_cls(data_from=train_nww, **cv_kws).select(cv_ixes)
+            train_nww.select(train_ixs)
+            dataset_map.update(dict(train=train_nww,
+                                    cv=cv_nww))
+
+        if test_kws['patient_tuples'] is not None:
+            dataset_map['test'] = dataset_cls(  # power_q=options.power_q,
+                sensor_columns=train_nww.selected_columns,
+                **test_kws)
+        else:
+            logger.info(" - No test datasets provided - ")
+
+        # dataset_map = dict(train=train_nww, cv=cv_nww, test=test_nww)
+        if self.random_sensors_to_samples:
+            additional_transforms = (list() if additional_transforms is None else additional_transforms)
+            additional_transforms += [SelectFromDim(dim=0,
+                                                    index='random',
+                                                    keep_dim=True)]
+
+        if isinstance(additional_transforms, list):
+            dataset_map = {k: v.append_transform(additional_transforms)
+                           for k, v in dataset_map.items()}
+
+        dataloader_map = {k: v.to_dataloader(**dl_kws)
+                          for k, v in dataset_map.items()}
+        eval_dataloader_map = {k: v.to_dataloader(**eval_dl_kws)
+                               for k, v in dataset_map.items()}
+
+        return dataset_map, dataloader_map, eval_dataloader_map
+
+
 
 if __name__ == """__main__""":
     hvs_tuples = HarvardSentences.make_tuples_from_sets_str('UCSD-28')
