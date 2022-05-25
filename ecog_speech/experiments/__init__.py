@@ -1,8 +1,15 @@
-from ecog_speech.experiments import standard, transfer_learning
-all_model_hyperparam_names = standard.all_model_hyperparam_names + transfer_learning.all_model_hyperparam_names
+
+def get_all_model_hyperparam_names():
+    from ecog_speech.experiments import standard, transfer_learning
+    return standard.all_model_hyperparam_names + transfer_learning.all_model_hyperparam_names
+
+
+#all_model_hyperparam_names = get_all_model_hyperparam_names()
 
 
 def make_model(options=None, nww=None, model_name=None, model_kws=None, print_details=True):
+    from ecog_speech.experiments import standard, transfer_learning
+
     #model, _ = experiments.make_model(model_name=results['model_name'], model_kws=model_kws)
     from ecog_speech import datasets
     if model_name == 'cog2vec':
