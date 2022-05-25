@@ -4,8 +4,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-import datasets
-from ecog_speech import utils
+from ecog_speech import utils, datasets
 import matplotlib
 from ecog_speech.models import kaldi_nn
 from dataclasses import dataclass, field
