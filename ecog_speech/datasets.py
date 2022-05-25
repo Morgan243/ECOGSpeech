@@ -1314,6 +1314,7 @@ class DatasetOptions(JsonSerializable):
                                                 if pre_processing_pipeline is None
                                                 else pre_processing_pipeline,
                         data_subset=self.data_subset,
+                        extra_output_keys=self.extra_output_keys.split(',') if self.extra_output_keys is not None else None,
                         flatten_sensors_to_samples=self.flatten_sensors_to_samples)
 
         base_kws.update(base_data_kws)
