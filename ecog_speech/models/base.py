@@ -3,9 +3,15 @@ from tqdm.auto import tqdm
 import numpy as np
 import pandas as pd
 import torch
+
+import datasets
 from ecog_speech import utils
 import matplotlib
 from ecog_speech.models import kaldi_nn
+from dataclasses import dataclass, field
+from typing import List, Optional, Type, ClassVar
+from simple_parsing.helpers import JsonSerializable
+
 
 SincNN = kaldi_nn.SincConv
 
@@ -939,3 +945,66 @@ class Trainer:
 #                          for out_k, preds_map in output_map.items()}
 
         return output_map
+
+
+# ########
+# Model Options
+@dataclass
+class ModelOptions(JsonSerializable):
+    model_name: str = None
+    non_hyperparams: ClassVar[Optional[list]] = ['device']
+
+    @classmethod
+    def get_all_model_hyperparam_names(cls):
+        return [k for k, v in cls.__annotations__.items()
+                if k not in cls.non_hyperparams]
+
+    def make_model_kws(self, dataset=None, **kws):
+        non_model_params = self.get_all_model_hyperparam_names()
+        return {k: v for k, v in self.__annotations__.items() if k not in non_model_params}
+
+    def make_model(self, dataset=None, **kws):
+        raise NotImplementedError()
+
+    def make_model_regularizer_function(self, model):
+        return None
+
+
+@dataclass
+class DNNModelOptions(ModelOptions):
+    activation_class: str = 'PReLU'
+    dropout: float = 0.
+    dropout_2d: bool = False
+    batch_norm: bool = False
+    print_details: bool = True
+
+
+@dataclass
+class CNNModelOptions(DNNModelOptions):
+    dense_width: Optional[int] = None
+    n_cnn_filters: Optional[int] = None
+    in_channel_dropout_rate: float = 0.
+
+    def make_model_kws(self, dataset: Optional[Type[datasets.BaseDataset]] = None,
+                       in_channels=None, window_size=None):
+        return dict(in_channels=int(dataset.get_feature_shape()[0]) if in_channels is None else in_channels,
+                    window_size=int(dataset.get_feature_shape()[-1]) if window_size is None else window_size,
+                    dropout=self.dropout,
+                    in_channel_dropout_rate=self.in_channel_dropout_rate,
+                    dropout2d=self.dropout_2d,
+                    batch_norm=self.batch_norm,
+                    dense_width=self.dense_width,
+                    n_cnn_filters=self.n_cnn_filters,
+                    activation_cls=self.activation_class,
+                    print_details=self.print_details)
+
+    def make_model(self, dataset: Optional[Type[datasets.BaseDataset]] = None,
+                   in_channels=None, window_size=None):
+        model_kws = self.make_model_kws(dataset, in_channels=in_channels, window_size=window_size)
+        return BaseCNN(**model_kws), model_kws
+
+
+@dataclass
+class BaseCNNModelOptions(CNNModelOptions):
+    model_name: str = "base_cnn"
+

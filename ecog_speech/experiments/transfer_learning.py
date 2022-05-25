@@ -8,7 +8,6 @@ import json
 import pandas as pd
 import torch
 from ecog_speech import utils
-from ecog_speech.experiments.standard import train_and_test_model
 from ecog_speech.models import base
 from typing import List, Optional
 from tqdm.auto import tqdm
@@ -16,9 +15,10 @@ import numpy as np
 
 import attr
 
-from ecog_speech.experiments.standard import make_model, make_datasets_and_loaders, default_option_kwargs
+from ecog_speech.experiments.standard import make_model
 from ecog_speech.experiments import standard, semi_supervised
 from ecog_speech.experiments import base as bxp
+from ecog_speech.models import base as bmp
 from ecog_speech import datasets
 from dataclasses import dataclass
 import json
@@ -28,7 +28,7 @@ logger = utils.get_logger(__name__)
 
 
 @dataclass
-class TransferLearningOptions(bxp.DNNModelOptions, bxp.MultiSensorOptions, Serializable):
+class TransferLearningOptions(bmp.DNNModelOptions, bxp.MultiSensorOptions, Serializable):
     model_name: Optional[str] = None
     dataset: Optional[str] = 'hvs'
     train_sets: Optional[str] = None

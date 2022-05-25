@@ -4,42 +4,20 @@ import torch
 from ecog_speech.models.base import (BaseMultiSincNN, Unsqueeze,
                                      MultiChannelSincNN, CogAttn,
                                      Flatten, Permute,
-                                    ScaleByConstant,
+                                     ScaleByConstant,
                                      MultiDim_Conv1D, MultiDim_BNorm1D)
 
-def get_model_cls_from_options_str(model_str):
-    model = None
-    if 'v2' in model_str:
-        model = TimeNormBaseMultiSincNN_v2
-    elif 'v3' in model_str:
-        model = TimeNormBaseMultiSincNN_v3
-    elif 'v4' in model_str:
-        model = TimeNormBaseMultiSincNN_v4
-    elif 'v5' in model_str:
-        model = TimeNormBaseMultiSincNN_v5
-    elif 'v6' in model_str:
-        model = TimeNormBaseMultiSincNN_v6
-    elif 'v7' in model_str:
-        model = TimeNormBaseMultiSincNN_v7
-    elif 'v8' in model_str:
-        model = TimeNormBaseMultiSincNN_v8
-    elif 'v8' in model_str:
-        model = TimeNormBaseMultiSincNN_v8
-    elif 'v9' in model_str:
-        model = TimeNormBaseMultiSincNN_v9
-    elif 'v10' in model_str:
-        model = TimeNormBaseMultiSincNN_v10
-    elif 'v11' in model_str:
-        model = TimeNormBaseMultiSincNN_v11
-    elif 'v12' in model_str:
-        model = TimeNormBaseMultiSincNN_v12
-    elif 'v13' in model_str:
-        model = TimeNormBaseMultiSincNN_v13
-    else:
-        raise ValueError(f"Don't know model '{model_str}'")
+from ecog_speech import datasets
+from typing import Optional, Type
+from dataclasses import dataclass, field
+from ecog_speech.experiments import base as bxp
+from ecog_speech.models import base as bmp
+from ecog_speech import utils
 
-    return model
 
+logger = utils.get_logger(__name__)
+
+###
 
 class TimeNormBaseMultiSincNN(BaseMultiSincNN):
     #default_batch_norm_cls = MultiDim_BNorm1D
@@ -768,4 +746,112 @@ class TimeNormBaseMultiSincNN_v13(TimeNormBaseMultiSincNN):
                                         #batch_norm=None)
         layer_list += [Flatten(), self.dropout_cls(self.dropout)]
         return layer_list
+
+
+sinc_ieeg_v_map = {
+    (m_str := m_cls.__name__.split('_')[-1]): m_cls
+    for m_cls in [TimeNormBaseMultiSincNN_v2, TimeNormBaseMultiSincNN_v3,
+                  TimeNormBaseMultiSincNN_v4, TimeNormBaseMultiSincNN_v5,
+                  TimeNormBaseMultiSincNN_v6, TimeNormBaseMultiSincNN_v7,
+                  TimeNormBaseMultiSincNN_v8, TimeNormBaseMultiSincNN_v10,
+                  TimeNormBaseMultiSincNN_v11, TimeNormBaseMultiSincNN_v12,
+                  TimeNormBaseMultiSincNN_v13]
+}
+
+from ecog_speech.models import base as bmp
+
+def get_model_cls_from_options_str(model_str):
+    model = None
+    if 'sn-v' in model_str:
+        v = model_str.split('-')[-1]
+        model = sinc_ieeg_v_map[v]
+    elif model_str == 'tnorm-base-sn':
+        model = TimeNormBaseMultiSincNN
+    elif model_str == 'base-sn':
+        model = bmp.BaseMultiSincNN
+    else:
+        raise ValueError(f"Don't know model '{model_str}'")
+
+    return model
+
+#    if 'v2' in model_str:
+#        model = TimeNormBaseMultiSincNN_v2
+#    elif 'v3' in model_str:
+#        model = TimeNormBaseMultiSincNN_v3
+#    elif 'v4' in model_str:
+#        model = TimeNormBaseMultiSincNN_v4
+#    elif 'v5' in model_str:
+#        model = TimeNormBaseMultiSincNN_v5
+#    elif 'v6' in model_str:
+#        model = TimeNormBaseMultiSincNN_v6
+#    elif 'v7' in model_str:
+#        model = TimeNormBaseMultiSincNN_v7
+#    elif 'v8' in model_str:
+#        model = TimeNormBaseMultiSincNN_v8
+#    elif 'v8' in model_str:
+#        model = TimeNormBaseMultiSincNN_v8
+#    elif 'v9' in model_str:
+#        model = TimeNormBaseMultiSincNN_v9
+#    elif 'v10' in model_str:
+#        model = TimeNormBaseMultiSincNN_v10
+#    elif 'v11' in model_str:
+#        model = TimeNormBaseMultiSincNN_v11
+#    elif 'v12' in model_str:
+#        model = TimeNormBaseMultiSincNN_v12
+#    elif 'v13' in model_str:
+#        model = TimeNormBaseMultiSincNN_v13
+#    else:
+#        raise ValueError(f"Don't know model '{model_str}'")
+
+#    return model
+
+
+@dataclass
+class SincIEEGOptions(bmp.CNNModelOptions):
+    model_name: str = 'sinc_ieeg'
+
+    sn_n_bands: int = 1
+    sn_kernel_size: int = 31
+    sn_padding: int = 15
+    sn_band_spacing: str = 'linear'
+    track_sinc_params: bool = False
+    roll_channels: bool = False
+    shuffle_channels: bool = False
+    cog_attn: bool = False
+    bw_reg_weight: float = 0.
+
+    version: str = 'tnorm-base-sn-v13'
+
+    def make_model_kws(self, dataset: Optional[Type[datasets.BaseDataset]] = None,
+                       in_channels=None, window_size=None):
+
+        return dict(in_channels=int(dataset.get_feature_shape()[0]) if in_channels is None else in_channels,
+                    window_size=int(dataset.get_feature_shape()[-1]) if window_size is None else window_size,
+                    dropout=self.dropout,
+                    in_channel_dropout_rate=self.in_channel_dropout_rate,
+                    dropout2d=self.dropout_2d,
+                    batch_norm=self.batch_norm,
+                    dense_width=self.dense_width,
+                    n_cnn_filters=self.n_cnn_filters,
+                    activation_cls=self.activation_class,
+                    print_details=self.print_details,
+                    n_bands=self.sn_n_bands,
+                    sn_padding=self.sn_padding,
+                    fs=dataset.fs_signal,
+                    cog_attn=self.cog_attn,
+                    band_spacing=self.sn_band_spacing
+                    )
+
+    def make_model(self, dataset: Optional[Type[datasets.BaseDataset]] = None,
+                   in_channels=None, window_size=None):
+        model_kws = self.make_model_kws(dataset, in_channels=in_channels, window_size=window_size)
+        model_cls = get_model_cls_from_options_str(self.version)
+        return model_cls(**model_kws), model_kws
+
+    def make_model_regularizer_function(self, model):
+        reg_f = None
+        if self.bw_reg_weight > 0:
+            logger.info(f"!!!! Using BW regularizeer W={self.bw_reg_weight} !!!!")
+            reg_f = lambda m: model.bandwidth_regularizer(m, w=self.bw_reg_weight)
+        return reg_f
 

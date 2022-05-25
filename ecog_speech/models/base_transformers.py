@@ -161,6 +161,8 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
+from dataclasses import dataclass, field
+from ecog_speech.models import base as bmp
 
 from fairseq.modules import GradMultiply
 class CoG2Vec(torch.nn.Module):
@@ -683,7 +685,7 @@ class Cog2VecTrainer(Trainer):
                     _X = _x['signal_arr'].to(self.device)
                     _b_X = _X.select(1, sens_id := 10).unsqueeze(1)
                     out_d = model(_b_X, mask=False, features_only=True)
-                    y = cog2vec.quantizer(out_d['features'])['x']
+                    y = model.quantizer(out_d['features'])['x']
                     scores = torch.cosine_similarity(out_d['x'], y, dim=-1)
                     scores_l = 1 - scores.mean()
                     loss_l.append(scores_l.detach().cpu().item())
@@ -780,7 +782,6 @@ class Cog2VecTrainer(Trainer):
 
         return eval_res_d
 
-
     def loss(self, model_output_d, as_tensor=True):
         logits = model_output_d[self.model_output_logits_key]
         num_vars = model_output_d['num_vars']
@@ -847,7 +848,9 @@ class Cog2VecTrainer(Trainer):
         #    X = X.squeeze()
 
         #m_d = model(X)
-        m_d = model({k: arr.to(self.device) for k, arr in data_batch.items()})
+        m_d = model({k: arr.squeeze().to(self.device) if self.squeeze_first
+                     else arr.to(self.device)
+                    for k, arr in data_batch.items()})
 
         loss_d = self.loss(m_d)
 
@@ -895,6 +898,49 @@ class Cog2VecTrainer(Trainer):
         return eval_d
 
 
+@dataclass
+class Cog2VecOptions(bmp.ModelOptions):
+    model_name: str = ' cog2vec'
+    dropout: float = 0.
+    feature_grad_mult: float = 1
+    negatives_from_everywhere: bool = True
+    n_negatives: int = 100
+    cross_sample_negatives: int = 0
+    codebook_negatives: int = 0
+    mask_length: int = 2
+    mask_prob: float = 0.2
+    n_encoder_heads: int = 8
+    n_encoder_layers: int = 12
+    quant_num_vars: int = 300
+    quant_num_groups: int = 2
+    quant_weight_proj_factor: int = 2
+    quant_weight_proj_depth: int = 1
+    feature_extractor_layers: str = '[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(128, 3, 1)]'
+    feature_extractor_mode: str = 'layer_norm'
+    ras_pos_encoding: bool = True
+    squeeze_first: bool = True
+
+    def make_model_kws(self, dataset=None, **kws):
+        return dict(
+            #input_shape=(1, 256),
+            input_shape=(1, dataset.get_feature_shape()[-1]),
+            feature_model=None, context_model=None, projection_model=None,
+            dropout=self.dropout, negatives_from_everywhere=self.negatives_from_everywhere,
+            feature_grad_mult=self.feature_grad_mult,
+            n_negatives=self.n_negatives, codebook_negatives=self.codebook_negatives,
+            cross_sample_negatives=self.cross_sample_negatives,
+            mask_length=self.mask_length, n_encoder_heads=self.n_encoder_heads,
+            n_encoder_layers=self.n_encoder_layers,
+            quant_num_vars=self.quant_num_vars, quant_num_groups=self.quant_num_groups,
+            feature_extractor_layers=self.feature_extractor_layers
+        )
+
+    def make_model(self, dataset: Optional[datasets.BaseDataset],
+                   in_channels=None, window_size=None):
+        model_kws = self.make_model_kws(dataset)
+        return CoG2Vec(**model_kws), model_kws
+
+
 if __name__ == """__main__""":
     # Demo the model and trainer for debug/testing - use an experiments interface directly for a full CLI
     from ecog_speech.experiments import semi_supervised
@@ -906,3 +952,5 @@ if __name__ == """__main__""":
                                           n_epochs=30)
 
     results = semi_supervised.run(options)
+
+
