@@ -75,7 +75,7 @@ class BaseExperimentOptions(JsonSerializable):
     @classmethod
     def get_all_model_hyperparam_names(cls):
         return [k for k, v in cls.__annotations__.items()
-                 if k not in ('train_sets', 'cv_sets', 'test_sets')]
+                if k not in ('train_sets', 'cv_sets', 'test_sets')]
 
 
 @dataclass
