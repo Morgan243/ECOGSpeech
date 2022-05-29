@@ -14,11 +14,13 @@ import torch
 
 logger = utils.get_logger('semi_supervised')
 
+
 @dataclass
 class SemisupervisedCodebookTaskOptions(bxp.TaskOptions):
     task_name: str = "semisupervised_codebook_training"
     dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='UCSD-19')
     ppl_weight: float = 100.
+
 
 @dataclass
 class SemiSupervisedExperiment(bxp.Experiment):
@@ -30,7 +32,11 @@ class SemiSupervisedExperiment(bxp.Experiment):
 
     #task: bxp.TaskOptions = bxp.TaskOptions('semisupervised_training',
     #                                        dataset=datasets.DatasetOptions('hvs', train_sets='UCSD-19'))
-    task: SemisupervisedCodebookTaskOptions = SemisupervisedCodebookTaskOptions()
+    task: SemisupervisedCodebookTaskOptions = subgroups(
+        {
+            'codebook': SemisupervisedCodebookTaskOptions
+        }, default=SemisupervisedCodebookTaskOptions()
+    )
 
 #def make_datasets_and_loaders(options, **kwargs):
 #    add_trfs = [datasets.SelectFromDim(dim=0, index='random', keep_dim=True)] if options.random_sensors_to_samples else None
