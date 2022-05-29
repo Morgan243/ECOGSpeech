@@ -1297,7 +1297,6 @@ class DatasetOptions(JsonSerializable):
         # raise ValueError("BREAK")
         base_data_kws = dict() if base_data_kws is None else base_data_kws
         if dataset_cls is None:
-            #dataset_cls = datasets.BaseDataset.get_dataset_by_name(options.dataset)
             dataset_cls = BaseDataset.get_dataset_by_name(self.dataset_name)
 
         train_p_tuples = dataset_cls.make_tuples_from_sets_str(self.train_sets if train_sets_str is None
