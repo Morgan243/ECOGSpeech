@@ -900,7 +900,7 @@ class Cog2VecTrainer(Trainer):
 
 @dataclass
 class Cog2VecOptions(bmp.ModelOptions):
-    model_name: str = ' cog2vec'
+    model_name: str = 'cog2vec'
     dropout: float = 0.
     feature_grad_mult: float = 1
     negatives_from_everywhere: bool = True
