@@ -31,6 +31,12 @@ class ResultOptions(JsonSerializable):
 
 
 @dataclass
+class ResultInputOptions(JsonSerializable):
+    result_file: str = None
+    model_base_path: Optional[str] = None
+
+
+@dataclass
 class Experiment(JsonSerializable):
     model: ModelOptions = None
     task: TaskOptions = None

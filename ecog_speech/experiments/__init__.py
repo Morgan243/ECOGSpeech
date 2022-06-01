@@ -1,6 +1,7 @@
+from ecog_speech.experiments import standard, transfer_learning
+
 
 def get_all_model_hyperparam_names():
-    from ecog_speech.experiments import standard, transfer_learning
     return standard.all_model_hyperparam_names + transfer_learning.all_model_hyperparam_names
 
 

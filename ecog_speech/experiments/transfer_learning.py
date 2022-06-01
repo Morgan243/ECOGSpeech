@@ -19,6 +19,7 @@ from ecog_speech.experiments.standard import make_model
 from ecog_speech.experiments import standard, semi_supervised
 from ecog_speech.experiments import base as bxp
 from ecog_speech.models import base as bmp
+from ecog_speech.models import base_transformers as btf
 from ecog_speech import datasets
 from dataclasses import dataclass
 import json
@@ -27,21 +28,21 @@ from simple_parsing.helpers import Serializable
 logger = utils.get_logger(__name__)
 
 
-@dataclass
-class TransferLearningOptions(bmp.DNNModelOptions, bxp.MultiSensorOptions, Serializable):
-    model_name: Optional[str] = None
-    dataset: Optional[str] = 'hvs'
-    train_sets: Optional[str] = None
-
-    pretrained_result_input_path: Optional[str] = None
-    pretrained_result_model_base_path: Optional[str] = None
-
-    pre_train_sets: Optional[str] = None
-    pre_cv_sets: Optional[str] = None
-    pre_test_sets: Optional[str] = None
-
-    # 1d_linear, 2d_transformers
-    fine_tuning_method: str = '1d_linear'
+#@dataclass
+#class TransferLearningOptions(bmp.DNNModelOptions, bxp.MultiSensorOptions, Serializable):
+#    model_name: Optional[str] = None
+#    dataset: Optional[str] = 'hvs'
+#    train_sets: Optional[str] = None
+#
+#    pretrained_result_input_path: Optional[str] = None
+#    pretrained_result_model_base_path: Optional[str] = None
+#
+#    pre_train_sets: Optional[str] = None
+#    pre_cv_sets: Optional[str] = None
+#    pre_test_sets: Optional[str] = None
+#
+#    # 1d_linear, 2d_transformers
+#    fine_tuning_method: str = '1d_linear'
 
 from ecog_speech import result_parsing
 # Override to make the result parsing options optional in this script
@@ -50,127 +51,304 @@ class TransferLearningResultParsingOptions(result_parsing.ResultParsingOptions):
     result_file: Optional[str] = None
     print_results: Optional[bool] = False
 
+from simple_parsing import subgroups
 
-def make_pretrained_model(options: TransferLearningOptions = None,
-                          pretrained_result_input_path: str = None,
-                          pretrained_result_model_base_path: str = None,
-                          nww=None, model_name=None, model_kws=None, print_details=True):
-    pretrained_result_model_base_path = pretrained_result_model_base_path if options is None else options.pretrained_result_model_base_path
-    pretrained_result_input_path = pretrained_result_input_path if options is None else options.pretrained_result_input_path
+@dataclass
+class TransferLearningTask(bxp.TaskOptions):
 
-    assert_err = "pretrained_result_input_path must be populated as parameter or in options object"
-    assert pretrained_result_input_path is not None, assert_err
+    task_name: str = "transfer_learning_training"
+    dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='UCSD-22')
+    method: str = '2d_transformers'
 
-    result_json = None
-    from ecog_speech.result_parsing import load_model_from_results
+@dataclass
+class TransferLearningExperiment(bxp.Experiment):
+    pretrained_result_input: bxp.ResultInputOptions = None
+    task: TransferLearningTask = TransferLearningTask()
+    # Don't need model options directly
+    # TODO: make a fine tuning model options to capture at elast 'method' in task above
+    #model: bmp.ModelOptions = subgroups(
+    #    {
+    #        'cog2vec': btf.Cog2VecOptions,
+    #    },
+    #    default=btf.Cog2VecOptions()
+    #)
 
-    result_path = pretrained_result_input_path
-    model_base_path = pretrained_result_model_base_path
+    @classmethod
+    def make_pretrained_model(cls, #options: TransferLearningOptions = None,
+                              pretrained_result_input_path: str = None,
+                              pretrained_result_model_base_path: str = None):
+        #pretrained_result_model_base_path = pretrained_result_model_base_path if options is None else options.pretrained_result_model_base_path
+        #pretrained_result_input_path = pretrained_result_input_path if options is None else options.pretrained_result_input_path
 
-    print(f"Loading pretrained model from results in {result_path} (base path = {model_base_path})")
-    with open(result_path, 'r') as f:
-        result_json = json.load(f)
+        assert_err = "pretrained_result_input_path must be populated as parameter or in options object"
+        assert pretrained_result_input_path is not None, assert_err
 
-    pretrained_model = load_model_from_results(result_json, base_model_path=model_base_path)
+        result_json = None
+        from ecog_speech.result_parsing import load_model_from_results
 
-    return pretrained_model, result_json
+        result_path = pretrained_result_input_path
+        model_base_path = pretrained_result_model_base_path
+
+        print(f"Loading pretrained model from results in {result_path} (base path = {model_base_path})")
+        with open(result_path, 'r') as f:
+            result_json = json.load(f)
+
+        print(f"\tKEYS: {list(sorted(result_json.keys()))}")
+        pretrained_model = load_model_from_results(result_json, base_model_path=model_base_path)
+
+        return pretrained_model, result_json
+
+    @classmethod
+    def create_fine_tuning_model(cls, pretrained_model,
+                                 n_pretrained_output_channels=None, n_pretrained_output_samples=None,
+                                 fine_tuning_method='1d_linear',
+                                 dataset: datasets.BaseDataset = None,
+                                 fine_tuning_target_shape=None, n_pretrained_input_channels=None,
+                                 n_pretrained_input_samples=256,
+                                 classifier_head: torch.nn.Module = None):
+        from ecog_speech.models import base
+        # n_pretrained_output_channels = n_pretrained_output_channels if pretrained_model is None else pretrained_model.C
+        # n_pretrained_output_samples = n_pretrained_output_samples if pretrained_model is None else pretrained_model.T
+        n_pretrained_output_channels = pretrained_model.C if n_pretrained_output_channels is None else n_pretrained_output_samples
+        n_pretrained_output_samples = pretrained_model.T if n_pretrained_output_samples is None else n_pretrained_output_samples
+
+        n_pretrained_input_channels = n_pretrained_input_channels if dataset is None else len(dataset.selected_columns)
+        # n_pretrained_input_samples = n_pretrained_input_samples if dataset is None else dataset.get_target_shape()
+        fine_tuning_target_shape = dataset.get_target_shape() if fine_tuning_target_shape is None else fine_tuning_target_shape
+
+        if fine_tuning_method == '1d_linear':
+            # Very simple linear classifier head by default
+            if classifier_head is None:
+                h_size = 1024
+                classifier_head = torch.nn.Sequential(*[
+                    base.Reshape((n_pretrained_output_channels * n_pretrained_output_samples,)),
+                    torch.nn.Linear(n_pretrained_output_channels * n_pretrained_output_samples, h_size),
+                    # torch.nn.BatchNorm1d(h_size),
+                    torch.nn.LeakyReLU(),
+                    torch.nn.Linear(h_size, h_size),
+                    torch.nn.LeakyReLU(),
+                    torch.nn.Linear(h_size, fine_tuning_target_shape),
+                    # torch.nn.Sigmoid()
+                ])
+                # nn.init.xavier_uniform_(classifier_head.weight)
+
+            m = copy.deepcopy(pretrained_model)
+            m.feature_model.requires_grad_(False)
+            m.quantizer.codebook_indices = None
+            m.context_model.requires_grad_(False)
+
+            ft_model = base_ft.FineTuner(pre_trained_model=m, output_model=classifier_head,
+                                         pre_trained_model_forward_kws=dict(features_only=True, mask=False),
+                                         pre_trained_model_output_key='x')
+
+        elif fine_tuning_method == '2d_transformers':
+            if dataset is None:
+                raise ValueError(f"A dataset is required for '2d_transformers' method in order to see num sensors")
+            from ecog_speech.models import base_transformers
+
+            ft_model = base_transformers.MultiChannelCog2Vec((n_pretrained_input_channels, n_pretrained_input_samples),
+                                                             pretrained_model, outputs=dataset.get_target_shape())
+        else:
+            raise ValueError(f"Unknown ft_method '{fine_tuning_method}'")
+
+        return ft_model
+
+    def run(self):
+        # Pretrained model already prepared, parse from its results output
+        pretrained_model, pretraining_results = self.make_pretrained_model(self.pretrained_result_input.result_file,
+                                                                           self.pretrained_result_input.model_base_path)
+
+        dataset_map, dl_map, eval_dl_map = self.task.dataset.make_datasets_and_loaders()
+
+        # Capture configurable kws separately so they can be easily saved in the results at the end
+        fine_tune_model_kws = dict(fine_tuning_method=self.task.method)
+        fine_tune_model = self.create_fine_tuning_model(pretrained_model, dataset=dataset_map['train'],
+                                                        **fine_tune_model_kws)
+
+        dset_name = self.task.dataset.dataset_name
+        if dset_name == 'hvsmfc':
+            criterion = torch.nn.MSELoss()
+            target_key = 'target'
+        elif dset_name == 'hvs':
+            pos_weight = torch.FloatTensor([0.5]).to(self.task.device)
+            criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+            target_key = 'text_arr'
+        else:
+            raise ValueError()
+        #criterion(output, target)  # -log(sigmoid(1.5))
+
+        #trainer_cls = base.Trainer
+        trainer_cls = TLTrainer
+        ft_trainer = trainer_cls(model_map=dict(model=fine_tune_model), opt_map=dict(),
+                                  train_data_gen=dl_map['train'],
+                                  cv_data_gen=eval_dl_map.get('cv'),
+                                  input_key='signal_arr',
+                                  learning_rate=self.task.learning_rate,
+                                  early_stopping_patience=self.task.early_stopping_patience,
+                                  target_key=target_key,
+                                  criterion=criterion,
+                                  device=self.task.device,
+                                  )
+
+        #with torch.no_grad():
+        #    _outputs_map = ft_trainer.generate_outputs(train=eval_dl_map['train'])
+        #    _clf_str_map = utils.make_classification_reports(_outputs_map)
+
+        ft_results = ft_trainer.train(self.task.n_epochs)
+
+        fine_tune_model.load_state_dict(ft_trainer.get_best_state())
+
+        fine_tune_model.eval()
+        outputs_map = ft_trainer.generate_outputs(**eval_dl_map)
+
+        if dset_name == 'hvsmfc':
+            pass
+        elif dset_name == 'hvs':
+            #eval_res_map = {k: ft_trainer.eval_on(_dl).to_dict(orient='list') for k, _dl in eval_dl_map.items()}
+            clf_str_map = utils.make_classification_reports(outputs_map)
+            performance_map = {part_name: utils.performance(outputs_d['actuals'], outputs_d['preds'] > 0.5)
+                               for part_name, outputs_d in outputs_map.items()}
+
+        #####
+        # Prep a results structure for saving - everything must be json serializable (no array objects)
+        uid = str(uuid.uuid4())
+        t = int(time.time())
+        name = "%d_%s_TL.json" % (t, uid)
+        res_dict = dict(  # path=path,
+            name=name,
+            datetime=str(datetime.now()), uid=uid,
+            pretraining_results=pretraining_results,
+            # batch_losses=list(losses),
+            batch_losses=ft_results,
+            train_selected_columns=dataset_map['train'].selected_columns,#dataset_map['train'].selected_columns,
+            best_model_epoch=ft_trainer.best_model_epoch,
+            num_trainable_params=utils.number_of_model_params(fine_tune_model),
+            num_params=utils.number_of_model_params(fine_tune_model, trainable_only=False),
+            fine_tune_model_kws=fine_tune_model_kws,
+            options=self.dumps_json(),
+            #model_kws=model_kws,
+            #**eval_res_map,
+            #clf_reports=clf_str_map,
+            #**{'train_' + k: v for k, v in train_perf_map.items()},
+            #**{'cv_' + k: v for k, v in cv_perf_map.items()},
+            #**test_perf_map,
+            # evaluation_perf_map=perf_maps,
+            # **pretrain_res,
+            # **perf_map,
+            **vars(self))
+
+        if self.result_output.save_model_path is not None:
+            import os
+            p = self.result_output.save_model_path
+            if os.path.isdir(p):
+                p = os.path.join(p, uid + '.torch')
+            logger.info("Saving model to " + p)
+            torch.save(fine_tune_model.cpu().state_dict(), p)
+            res_dict['save_model_path'] = p
+
+        if self.result_output.result_dir is not None:
+            path = pjoin(self.result_output.result_dir, name)
+            logger.info(path)
+            res_dict['path'] = path
+            with open(path, 'w') as f:
+                json.dump(res_dict, f)
 
 
-def run_sincnet(options: TransferLearningOptions):
-    ##################
-    def make_sub_results(stage, _trainer, _dataset_map, _outputs_map, _performance_map):
-        return dict(stage=stage,
-                    batch_losses=_trainer.epoch_res_map,
-                    train_selected_columns=_dataset_map['train'].selected_columns,
-                    best_model_epoch=_trainer.best_model_epoch,
-                    **utils.make_classification_reports({k + "_clf_report": d
-                                                         for k, d in _outputs_map.items()}),
-                    **{f"{part_name}_{metric_name}": metric_value
-                       for part_name, perf_d in _performance_map.items()
-                       for metric_name, metric_value in perf_d.items()})
-
-    #####
-    # Load pre-training data and initialize a fresh model from it
-    logger.info("Loading pre-training data")
-    pre_dataset_map, pre_dl_map, pre_eval_dl_map = make_datasets_and_loaders(options,
-                                                                             train_sets_str=options.pre_train_sets,
-                                                                             cv_sets_str=options.pre_cv_sets,
-                                                                             test_sets_str=options.pre_test_sets)
-
-    logger.info("Initializing new model")
-    model, model_kws = make_model(options, pre_dataset_map['train'])
-    logger.info("Pre-training model")
-    pre_trainer, pre_outputs_map, pre_performance_map = train_and_test_model(model, pre_dl_map,
-                                                                             pre_eval_dl_map, options)
-    pre_results_d = make_sub_results('pretraining', pre_trainer, pre_dataset_map, pre_outputs_map, pre_performance_map)
-    # columns used throughout are determined by the pretraining's selected from its training's valid sensors
-    # Future TODO - may want to consider other aspects or something more generic?
-    selected_columns = pre_dataset_map['train'].selected_columns
-
-    batch_cb_history = getattr(pre_trainer, 'batch_cb_history', None)#.get('band_params', None)
-    #pre_band_params = getattr(pre_trainer, 'batch_cb_history', dict()).get('band_params', None)
-    if batch_cb_history is not None:
-        models_batch_results = model.format_results(batch_cb_history)
-        pre_results_d.update(models_batch_results)
-    #pre_results_d['low_hz_frame'], pre_results_d['high_hz_frame'] = (parse_band_params(pre_band_params, model.fs)
-    #                                                                 if pre_band_params is not None else (None, None))
-
-    ### Fine-tuning
-    logger.info("Loading fine-tuning data")
-    dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options,
-                                                                 train_sensor_columns=selected_columns,
-                                                                 train_sets_str=options.train_sets,
-                                                                 cv_sets_str=options.cv_sets,
-                                                                 test_sets_str=options.test_sets)
-    logger.info("Fine-tuning model")
-    trainer, outputs_map, performance_map = train_and_test_model(model, dl_map, eval_dl_map, options,
-                                                                 # Don't overwrite the weights that were pre-trained
-                                                                 weights_init_f=None)
-
-    results_d = make_sub_results('finetuning', trainer, dataset_map, outputs_map, performance_map)
-    logger.info("Fine-tuning complete")
-
-    band_params = getattr(trainer, 'batch_cb_history', dict()).get('band_params', None)
-    if band_params is not None:
-        models_batch_results = model.format_results(band_params)
-        results_d.update(models_batch_results)
-
-    #results_d['low_hz_frame'], results_d['high_hz_frame'] = (parse_band_params(band_params, model.fs)
-    #                                                         if band_params is not None else (None, None))
-
-    uid = str(uuid.uuid4())
-    results_d['uid'] = pre_results_d['uid'] = uid
-    t = int(time.time())
-    name = "%d_%s_TL" % (t, uid)
-    file_name = name + '.json'
-    res_dict = dict(name=name,
-                    file_name=file_name,
-                    datetime=str(datetime.now()), uid=uid,
-                    train_selected_columns=selected_columns,
-                    num_trainable_params=utils.number_of_model_params(model),
-                    num_params=utils.number_of_model_params(model, trainable_only=False),
-                    model_kws=model_kws,
-
-                    pretraining_results=pre_results_d,
-                    finetuning_results=results_d,
-
-                    **vars(options))
-
-    if options.save_model_path is not None:
-        import os
-        p = options.save_model_path
-        if os.path.isdir(p):
-            p = os.path.join(p, uid + '.torch')
-        logger.info("Saving model to " + p)
-        torch.save(model.cpu().state_dict(), p)
-        res_dict['save_model_path'] = p
-
-    if options.result_dir is not None:
-        path = pjoin(options.result_dir, file_name)
-        logger.info(path)
-        res_dict['path'] = path
-        with open(path, 'w') as f:
-            json.dump(res_dict, f)
+#def run_sincnet(options: TransferLearningOptions):
+#    ##################
+#    def make_sub_results(stage, _trainer, _dataset_map, _outputs_map, _performance_map):
+#        return dict(stage=stage,
+#                    batch_losses=_trainer.epoch_res_map,
+#                    train_selected_columns=_dataset_map['train'].selected_columns,
+#                    best_model_epoch=_trainer.best_model_epoch,
+#                    **utils.make_classification_reports({k + "_clf_report": d
+#                                                         for k, d in _outputs_map.items()}),
+#                    **{f"{part_name}_{metric_name}": metric_value
+#                       for part_name, perf_d in _performance_map.items()
+#                       for metric_name, metric_value in perf_d.items()})
+#
+#    #####
+#    # Load pre-training data and initialize a fresh model from it
+#    logger.info("Loading pre-training data")
+#    pre_dataset_map, pre_dl_map, pre_eval_dl_map = make_datasets_and_loaders(options,
+#                                                                             train_sets_str=options.pre_train_sets,
+#                                                                             cv_sets_str=options.pre_cv_sets,
+#                                                                             test_sets_str=options.pre_test_sets)
+#
+#    logger.info("Initializing new model")
+#    model, model_kws = make_model(options, pre_dataset_map['train'])
+#    logger.info("Pre-training model")
+#    pre_trainer, pre_outputs_map, pre_performance_map = train_and_test_model(model, pre_dl_map,
+#                                                                             pre_eval_dl_map, options)
+#    pre_results_d = make_sub_results('pretraining', pre_trainer, pre_dataset_map, pre_outputs_map, pre_performance_map)
+#    # columns used throughout are determined by the pretraining's selected from its training's valid sensors
+#    # Future TODO - may want to consider other aspects or something more generic?
+#    selected_columns = pre_dataset_map['train'].selected_columns
+#
+#    batch_cb_history = getattr(pre_trainer, 'batch_cb_history', None)#.get('band_params', None)
+#    #pre_band_params = getattr(pre_trainer, 'batch_cb_history', dict()).get('band_params', None)
+#    if batch_cb_history is not None:
+#        models_batch_results = model.format_results(batch_cb_history)
+#        pre_results_d.update(models_batch_results)
+#    #pre_results_d['low_hz_frame'], pre_results_d['high_hz_frame'] = (parse_band_params(pre_band_params, model.fs)
+#    #                                                                 if pre_band_params is not None else (None, None))
+#
+#    ### Fine-tuning
+#    logger.info("Loading fine-tuning data")
+#    dataset_map, dl_map, eval_dl_map = make_datasets_and_loaders(options,
+#                                                                 train_sensor_columns=selected_columns,
+#                                                                 train_sets_str=options.train_sets,
+#                                                                 cv_sets_str=options.cv_sets,
+#                                                                 test_sets_str=options.test_sets)
+#    logger.info("Fine-tuning model")
+#    trainer, outputs_map, performance_map = train_and_test_model(model, dl_map, eval_dl_map, options,
+#                                                                 # Don't overwrite the weights that were pre-trained
+#                                                                 weights_init_f=None)
+#
+#    results_d = make_sub_results('finetuning', trainer, dataset_map, outputs_map, performance_map)
+#    logger.info("Fine-tuning complete")
+#
+#    band_params = getattr(trainer, 'batch_cb_history', dict()).get('band_params', None)
+#    if band_params is not None:
+#        models_batch_results = model.format_results(band_params)
+#        results_d.update(models_batch_results)
+#
+#    #results_d['low_hz_frame'], results_d['high_hz_frame'] = (parse_band_params(band_params, model.fs)
+#    #                                                         if band_params is not None else (None, None))
+#
+#    uid = str(uuid.uuid4())
+#    results_d['uid'] = pre_results_d['uid'] = uid
+#    t = int(time.time())
+#    name = "%d_%s_TL" % (t, uid)
+#    file_name = name + '.json'
+#    res_dict = dict(name=name,
+#                    file_name=file_name,
+#                    datetime=str(datetime.now()), uid=uid,
+#                    train_selected_columns=selected_columns,
+#                    num_trainable_params=utils.number_of_model_params(model),
+#                    num_params=utils.number_of_model_params(model, trainable_only=False),
+#                    model_kws=model_kws,
+#
+#                    pretraining_results=pre_results_d,
+#                    finetuning_results=results_d,
+#
+#                    **vars(options))
+#
+#    if options.save_model_path is not None:
+#        import os
+#        p = options.save_model_path
+#        if os.path.isdir(p):
+#            p = os.path.join(p, uid + '.torch')
+#        logger.info("Saving model to " + p)
+#        torch.save(model.cpu().state_dict(), p)
+#        res_dict['save_model_path'] = p
+#
+#    if options.result_dir is not None:
+#        path = pjoin(options.result_dir, file_name)
+#        logger.info(path)
+#        res_dict['path'] = path
+#        with open(path, 'w') as f:
+#            json.dump(res_dict, f)
 
 
 
@@ -289,207 +467,159 @@ class TLTrainer(base.Trainer):
 
 from ecog_speech.models import base_fine_tuners as base_ft
 from ecog_speech.models import base_transformers
-def create_fine_tuning_model(pretrained_model,
-                             n_pretrained_output_channels=None, n_pretrained_output_samples=None,
-                             fine_tuning_method='1d_linear',
-                             dataset: datasets.BaseDataset = None,
-                             fine_tuning_target_shape = None, n_pretrained_input_channels=None, n_pretrained_input_samples=256,
-                             classifier_head: torch.nn.Module = None):
-    from ecog_speech.models import base
-    #n_pretrained_output_channels = n_pretrained_output_channels if pretrained_model is None else pretrained_model.C
-    #n_pretrained_output_samples = n_pretrained_output_samples if pretrained_model is None else pretrained_model.T
-    n_pretrained_output_channels = pretrained_model.C if n_pretrained_output_channels is None else n_pretrained_output_samples
-    n_pretrained_output_samples = pretrained_model.T if n_pretrained_output_samples is None else n_pretrained_output_samples
-
-    n_pretrained_input_channels = n_pretrained_input_channels if dataset is None else len(dataset.selected_columns)
-    #n_pretrained_input_samples = n_pretrained_input_samples if dataset is None else dataset.get_target_shape()
-    fine_tuning_target_shape = dataset.get_target_shape() if fine_tuning_target_shape is None else fine_tuning_target_shape
-
-    if fine_tuning_method == '1d_linear':
-        # Very simple linear classifier head by default
-        if classifier_head is None:
-            h_size = 1024
-            classifier_head = torch.nn.Sequential(*[
-                base.Reshape((n_pretrained_output_channels * n_pretrained_output_samples,)),
-                torch.nn.Linear(n_pretrained_output_channels * n_pretrained_output_samples, h_size),
-                #torch.nn.BatchNorm1d(h_size),
-                torch.nn.LeakyReLU(),
-                torch.nn.Linear(h_size, h_size),
-                torch.nn.LeakyReLU(),
-                torch.nn.Linear(h_size, fine_tuning_target_shape),
-                #torch.nn.Sigmoid()
-            ])
-            #nn.init.xavier_uniform_(classifier_head.weight)
-
-        m = copy.deepcopy(pretrained_model)
-        m.feature_model.requires_grad_(False)
-        m.quantizer.codebook_indices = None
-        m.context_model.requires_grad_(False)
-
-        ft_model = base_ft.FineTuner(pre_trained_model=m, output_model=classifier_head,
-                                     pre_trained_model_forward_kws=dict(features_only=True, mask=False),
-                                     pre_trained_model_output_key='x')
-
-    elif fine_tuning_method == '2d_transformers':
-        if dataset is None:
-            raise ValueError(f"A dataset is required for '2d_transformers' method in order to see num sensors")
-        from ecog_speech.models import base_transformers
-
-        ft_model = base_transformers.MultiChannelCog2Vec((n_pretrained_input_channels, n_pretrained_input_samples),
-                                                         pretrained_model, outputs=dataset.get_target_shape())
-    else:
-        raise ValueError(f"Unknown ft_method '{fine_tuning_method}'")
-
-    return ft_model
 
 
-def run(options: TransferLearningOptions):
-    # Pretrained model already prepared, parse from its results output
-    pretrained_model, pretraining_results = make_pretrained_model(options)
-
-    dataset_map, dl_map, eval_dl_map = semi_supervised.make_datasets_and_loaders(options)
-
-    fine_tune_model_kws = dict(fine_tuning_method=options.fine_tuning_method,
-                               #dataset=dataset_map['train']
-                               )
-    fine_tune_model = create_fine_tuning_model(pretrained_model, dataset=dataset_map['train'],
-                                               **fine_tune_model_kws)
-
-    if options.dataset == 'hvsmfc':
-        criterion = torch.nn.MSELoss()
-        target_key = 'target'
-    elif options.dataset == 'hvs':
-        pos_weight = torch.FloatTensor([0.5]).to(options.device)
-        criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-        target_key = 'text_arr'
-    #criterion(output, target)  # -log(sigmoid(1.5))
-
-    #trainer_cls = base.Trainer
-    trainer_cls = TLTrainer
-    ft_trainer = trainer_cls(model_map=dict(model=fine_tune_model), opt_map=dict(),
-                              train_data_gen=dl_map['train'],
-                              cv_data_gen=eval_dl_map.get('cv'),
-                              input_key='signal_arr',
-                              learning_rate=options.learning_rate,
-                              early_stopping_patience=options.early_stopping_patience,
-                              target_key=target_key,
-                              criterion=criterion,
-                              device=options.device,
-                              )
-
-    #with torch.no_grad():
-    #    _outputs_map = ft_trainer.generate_outputs(train=eval_dl_map['train'])
-    #    _clf_str_map = utils.make_classification_reports(_outputs_map)
-
-    ft_results = ft_trainer.train(options.n_epochs)
-
-    fine_tune_model.load_state_dict(ft_trainer.get_best_state())
-
-    fine_tune_model.eval()
-    outputs_map = ft_trainer.generate_outputs(**eval_dl_map)
-
-    if options.dataset == 'hvsmfc':
-        pass
-    elif options.dataset == 'hvs':
-        #eval_res_map = {k: ft_trainer.eval_on(_dl).to_dict(orient='list') for k, _dl in eval_dl_map.items()}
-        clf_str_map = utils.make_classification_reports(outputs_map)
-        performance_map = {part_name: utils.performance(outputs_d['actuals'], outputs_d['preds'] > 0.5)
-                           for part_name, outputs_d in outputs_map.items()}
-
-    #####
-    # Prep a results structure for saving - everything must be json serializable (no array objects)
-    uid = str(uuid.uuid4())
-    t = int(time.time())
-    name = "%d_%s_TL.json" % (t, uid)
-    res_dict = dict(  # path=path,
-        name=name,
-        datetime=str(datetime.now()), uid=uid,
-        pretraining_results=pretraining_results,
-        # batch_losses=list(losses),
-        batch_losses=ft_results,
-        train_selected_columns=dataset_map['train'].selected_columns,#dataset_map['train'].selected_columns,
-        best_model_epoch=ft_trainer.best_model_epoch,
-        num_trainable_params=utils.number_of_model_params(fine_tune_model),
-        num_params=utils.number_of_model_params(fine_tune_model, trainable_only=False),
-        fine_tune_model_kws=fine_tune_model_kws,
-        options=options.dumps_json(),
-        #model_kws=model_kws,
-        #**eval_res_map,
-        #clf_reports=clf_str_map,
-        #**{'train_' + k: v for k, v in train_perf_map.items()},
-        #**{'cv_' + k: v for k, v in cv_perf_map.items()},
-        #**test_perf_map,
-        # evaluation_perf_map=perf_maps,
-        # **pretrain_res,
-        # **perf_map,
-        **vars(options))
-
-    if options.save_model_path is not None:
-        import os
-        p = options.save_model_path
-        if os.path.isdir(p):
-            p = os.path.join(p, uid + '.torch')
-        logger.info("Saving model to " + p)
-        torch.save(fine_tune_model.cpu().state_dict(), p)
-        res_dict['save_model_path'] = p
-
-    if options.result_dir is not None:
-        path = pjoin(options.result_dir, name)
-        logger.info(path)
-        res_dict['path'] = path
-        with open(path, 'w') as f:
-            json.dump(res_dict, f)
-
-
-def eval(options: TransferLearningResultParsingOptions):
-    result_path = options.result_file
-    res_df = result_parsing.load_results_to_frame(result_path)
-    # ASSUME ONLY ONE PATH GIVEN
-    result_d = res_df.iloc[0].to_dict()
-    tl_options: TransferLearningOptions = TransferLearningOptions.loads_json(result_d['options'])
-    pretrained_model, result_json = make_pretrained_model(
-        pretrained_result_input_path=result_d['pretrained_result_input_path'],
-        pretrained_result_model_base_path=result_d['pretrained_result_model_base_path']
-        )
-
-    from ecog_speech.experiments import semi_supervised
-    tl_options.n_dl_workers = 6
-    dataset_map, dl_map, eval_dl_map = semi_supervised.make_datasets_and_loaders(tl_options)
-
-    ft_model = create_fine_tuning_model(pretrained_model=pretrained_model,
-                                          dataset=dataset_map['train'],
-                                          fine_tuning_method=tl_options.fine_tuning_method)
-    with open('../' + result_d['save_model_path'], 'rb') as f:
-        model_state = torch.load(f)
-
-    ft_model.load_state_dict(model_state)
-
-    test_dset = dataset_map['test']
-    test_dl = eval_dl_map['test']
-
-    with torch.no_grad():
-        all_preds_l = [ft_model(x) for x in tqdm(test_dl, 'Running model')]
-
-    all_preds_arr = torch.cat(all_preds_l, dim=0)
-    all_preds_df = pd.DataFrame(all_preds_arr.detach().cpu().numpy())
-    all_preds_df.columns = all_preds_df.columns.astype(str)
-    all_preds_df.to_parquet('all_preds_test.parquet')
-
-    print(f"All preds array shape: {all_preds_arr.shape}")
-
-
-all_model_hyperparam_names = TransferLearningOptions.get_all_model_hyperparam_names()
+#def run(options: TransferLearningOptions):
+#    # Pretrained model already prepared, parse from its results output
+#    pretrained_model, pretraining_results = make_pretrained_model(options)
+#
+#    dataset_map, dl_map, eval_dl_map = semi_supervised.make_datasets_and_loaders(options)
+#
+#    fine_tune_model_kws = dict(fine_tuning_method=options.fine_tuning_method,
+#                               #dataset=dataset_map['train']
+#                               )
+#    fine_tune_model = create_fine_tuning_model(pretrained_model, dataset=dataset_map['train'],
+#                                               **fine_tune_model_kws)
+#
+#    if options.dataset == 'hvsmfc':
+#        criterion = torch.nn.MSELoss()
+#        target_key = 'target'
+#    elif options.dataset == 'hvs':
+#        pos_weight = torch.FloatTensor([0.5]).to(options.device)
+#        criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+#        target_key = 'text_arr'
+#    #criterion(output, target)  # -log(sigmoid(1.5))
+#
+#    #trainer_cls = base.Trainer
+#    trainer_cls = TLTrainer
+#    ft_trainer = trainer_cls(model_map=dict(model=fine_tune_model), opt_map=dict(),
+#                              train_data_gen=dl_map['train'],
+#                              cv_data_gen=eval_dl_map.get('cv'),
+#                              input_key='signal_arr',
+#                              learning_rate=options.learning_rate,
+#                              early_stopping_patience=options.early_stopping_patience,
+#                              target_key=target_key,
+#                              criterion=criterion,
+#                              device=options.device,
+#                              )
+#
+#    #with torch.no_grad():
+#    #    _outputs_map = ft_trainer.generate_outputs(train=eval_dl_map['train'])
+#    #    _clf_str_map = utils.make_classification_reports(_outputs_map)
+#
+#    ft_results = ft_trainer.train(options.n_epochs)
+#
+#    fine_tune_model.load_state_dict(ft_trainer.get_best_state())
+#
+#    fine_tune_model.eval()
+#    outputs_map = ft_trainer.generate_outputs(**eval_dl_map)
+#
+#    if options.dataset == 'hvsmfc':
+#        pass
+#    elif options.dataset == 'hvs':
+#        #eval_res_map = {k: ft_trainer.eval_on(_dl).to_dict(orient='list') for k, _dl in eval_dl_map.items()}
+#        clf_str_map = utils.make_classification_reports(outputs_map)
+#        performance_map = {part_name: utils.performance(outputs_d['actuals'], outputs_d['preds'] > 0.5)
+#                           for part_name, outputs_d in outputs_map.items()}
+#
+#    #####
+#    # Prep a results structure for saving - everything must be json serializable (no array objects)
+#    uid = str(uuid.uuid4())
+#    t = int(time.time())
+#    name = "%d_%s_TL.json" % (t, uid)
+#    res_dict = dict(  # path=path,
+#        name=name,
+#        datetime=str(datetime.now()), uid=uid,
+#        pretraining_results=pretraining_results,
+#        # batch_losses=list(losses),
+#        batch_losses=ft_results,
+#        train_selected_columns=dataset_map['train'].selected_columns,#dataset_map['train'].selected_columns,
+#        best_model_epoch=ft_trainer.best_model_epoch,
+#        num_trainable_params=utils.number_of_model_params(fine_tune_model),
+#        num_params=utils.number_of_model_params(fine_tune_model, trainable_only=False),
+#        fine_tune_model_kws=fine_tune_model_kws,
+#        options=options.dumps_json(),
+#        #model_kws=model_kws,
+#        #**eval_res_map,
+#        #clf_reports=clf_str_map,
+#        #**{'train_' + k: v for k, v in train_perf_map.items()},
+#        #**{'cv_' + k: v for k, v in cv_perf_map.items()},
+#        #**test_perf_map,
+#        # evaluation_perf_map=perf_maps,
+#        # **pretrain_res,
+#        # **perf_map,
+#        **vars(options))
+#
+#    if options.save_model_path is not None:
+#        import os
+#        p = options.save_model_path
+#        if os.path.isdir(p):
+#            p = os.path.join(p, uid + '.torch')
+#        logger.info("Saving model to " + p)
+#        torch.save(fine_tune_model.cpu().state_dict(), p)
+#        res_dict['save_model_path'] = p
+#
+#    if options.result_dir is not None:
+#        path = pjoin(options.result_dir, name)
+#        logger.info(path)
+#        res_dict['path'] = path
+#        with open(path, 'w') as f:
+#            json.dump(res_dict, f)
+#
+#
+#def eval(options: TransferLearningResultParsingOptions):
+#    result_path = options.result_file
+#    res_df = result_parsing.load_results_to_frame(result_path)
+#    # ASSUME ONLY ONE PATH GIVEN
+#    result_d = res_df.iloc[0].to_dict()
+#    tl_options: TransferLearningOptions = TransferLearningOptions.loads_json(result_d['options'])
+#    pretrained_model, result_json = make_pretrained_model(
+#        pretrained_result_input_path=result_d['pretrained_result_input_path'],
+#        pretrained_result_model_base_path=result_d['pretrained_result_model_base_path']
+#        )
+#
+#    from ecog_speech.experiments import semi_supervised
+#    tl_options.n_dl_workers = 6
+#    dataset_map, dl_map, eval_dl_map = semi_supervised.make_datasets_and_loaders(tl_options)
+#
+#    ft_model = create_fine_tuning_model(pretrained_model=pretrained_model,
+#                                          dataset=dataset_map['train'],
+#                                          fine_tuning_method=tl_options.fine_tuning_method)
+#    with open('../' + result_d['save_model_path'], 'rb') as f:
+#        model_state = torch.load(f)
+#
+#    ft_model.load_state_dict(model_state)
+#
+#    test_dset = dataset_map['test']
+#    test_dl = eval_dl_map['test']
+#
+#    with torch.no_grad():
+#        all_preds_l = [ft_model(x) for x in tqdm(test_dl, 'Running model')]
+#
+#    all_preds_arr = torch.cat(all_preds_l, dim=0)
+#    all_preds_df = pd.DataFrame(all_preds_arr.detach().cpu().numpy())
+#    all_preds_df.columns = all_preds_df.columns.astype(str)
+#    all_preds_df.to_parquet('all_preds_test.parquet')
+#
+#    print(f"All preds array shape: {all_preds_arr.shape}")
+#
+#
+#all_model_hyperparam_names = TransferLearningOptions.get_all_model_hyperparam_names()
 
 
 if __name__ == """__main__""":
     from simple_parsing import ArgumentParser
 
     parser = ArgumentParser(description="ASPEN+MHRG Transfer Learning experiments")
-    parser.add_arguments(TransferLearningOptions, dest='transfer_learning')
-    parser.add_arguments(TransferLearningResultParsingOptions, dest='tl_result_parsing')
+    parser.add_arguments(TransferLearningExperiment, dest='transfer_learning')
+    #parser.add_arguments(TransferLearningOptions, dest='transfer_learning')
+    #parser.add_arguments(TransferLearningResultParsingOptions, dest='tl_result_parsing')
     args = parser.parse_args()
-    main_options: TransferLearningOptions = args.transfer_learning
-    result_parsing_options: TransferLearningResultParsingOptions = args.tl_result_parsing
+    tl: TransferLearningExperiment = args.transfer_learning
+    tl.run()
+
+    #main_options: TransferLearningOptions = args.transfer_learning
+    #result_parsing_options: TransferLearningResultParsingOptions = args.tl_result_parsing
 
     #print(result_parsing_options)
     #main_options.pretrained_result_input_path = '../../results/cog2vec/1649000864_7a68aaf5-e41f-4f4e-bb56-0b0ca0a2a4fb_TL.json'
@@ -500,7 +630,7 @@ if __name__ == """__main__""":
     #main_options.pre_processing_pipeline = 'audio_gate'
 
     # If no result file given, then assume running a new experiment
-    if result_parsing_options.result_file is None:
-        run(main_options)
-    else:
-        eval(result_parsing_options)
+    #if result_parsing_options.result_file is None:
+    #    run(main_options)
+    #else:
+    #    eval(result_parsing_options)

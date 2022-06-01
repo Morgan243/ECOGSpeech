@@ -941,16 +941,16 @@ class Cog2VecOptions(bmp.ModelOptions):
         return CoG2Vec(**model_kws), model_kws
 
 
-if __name__ == """__main__""":
-    # Demo the model and trainer for debug/testing - use an experiments interface directly for a full CLI
-    from ecog_speech.experiments import semi_supervised
-    from ecog_speech import utils
-
-    options = utils.build_default_options(semi_supervised.ss_option_kwargs,
-                                          train_sets='UCSD-22',
-                                          device='cpu',
-                                          n_epochs=30)
-
-    results = semi_supervised.run(options)
+#if __name__ == """__main__""":
+#    # Demo the model and trainer for debug/testing - use an experiments interface directly for a full CLI
+#    from ecog_speech.experiments import semi_supervised
+#    from ecog_speech import utils
+#
+#    options = utils.build_default_options(semi_supervised.ss_option_kwargs,
+#                                          train_sets='UCSD-22',
+#                                          device='cpu',
+#                                          n_epochs=30)
+#
+#    results = semi_supervised.run(options)
 
 
