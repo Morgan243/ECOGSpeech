@@ -165,6 +165,7 @@ from dataclasses import dataclass, field
 from ecog_speech.models import base as bmp
 
 from fairseq.modules import GradMultiply
+
 class CoG2Vec(torch.nn.Module):
     logit_temp = 0.1
 
@@ -211,7 +212,8 @@ class CoG2Vec(torch.nn.Module):
                 dropout=dropout,
                 mode=feature_extractor_mode,#'layer_norm',
                 # mode="default",#cfg.extractor_mode,
-                conv_bias=False  # cfg.conv_bias,
+                conv_bias=False,  # cfg.conv_bias,
+                #squeeze_first=True
             )
             #from fairseq
             # TODO: check on existing norm and GELU activation?

@@ -18,7 +18,9 @@ logger = utils.get_logger('semi_supervised')
 @dataclass
 class SemisupervisedCodebookTaskOptions(bxp.TaskOptions):
     task_name: str = "semisupervised_codebook_training"
-    dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='UCSD-19')
+    dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='UCSD-19',
+                                                               flatten_sensors_to_samples=True,
+                                                               extra_output_keys='sensor_ras_coord_arr')
     ppl_weight: float = 100.
 
 
@@ -83,7 +85,7 @@ class SemiSupervisedExperiment(bxp.Experiment):
         # For some reason the codebook indices isn't always on the right device... so this seems to help force it over
         #trainer.model_map['model'].quantizer.codebook_indices = trainer.model_map['model'].quantizer.codebook_indices.to(trainer.device)
 
-        trainer.squeeze_first = False
+        trainer.squeeze_first = True# False
         trainer.ppl_weight = self.task.ppl_weight
 
         losses = trainer.train(self.task.n_epochs)

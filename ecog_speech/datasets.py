@@ -563,26 +563,26 @@ class BaseASPEN(BaseDataset):
                 ('sensor_selection', pipeline.IdentifyGoodAndBadSensors(sensor_selection=self.sensor_columns)),
                 ('subsample', pipeline.SubsampleSignal()),
                 ('Threshold', pipeline.PowerThreshold(speaking_window_samples=48000 // 16,
-                                                                    silence_window_samples=int(48000 * 1.5),
-                                                                    speaking_quantile_threshold=0.9,
+                                                      silence_window_samples=int(48000 * 1.5),
+                                                      speaking_quantile_threshold=0.9,
                                                       #n_silence_windows=5000,
-                                                                    #silence_threshold=0.001,
-                                                                    #silGence_quantile_threshold=0.05,
-                                                                    silence_n_smallest=5000)),
+                                                      #silence_threshold=0.001,
+                                                      #silGence_quantile_threshold=0.05,
+                                                      silence_n_smallest=5000)),
                 ('speaking_indices', pipeline.WindowSampleIndicesFromStim('stim_pwrt',
-                                                                                    target_onset_shift=pd.Timedelta(-.5, 's'),
-                                                                                    # input are centers, and output is a window of .5 sec
-                                                                                    # so to center it, move the point (center) back .25 secods
-                                                                                    # so that extracted 0.5 sec window saddles the original center
-                                                                                    #target_offset_shift=pd.Timedelta(-0.25, 's')
-                                                                                    target_offset_shift=pd.Timedelta(-0.5, 's')
+                                                                          target_onset_shift=pd.Timedelta(-.5, 's'),
+                                                                          # input are centers, and output is a window of .5 sec
+                                                                          # so to center it, move the point (center) back .25 secods
+                                                                          # so that extracted 0.5 sec window saddles the original center
+                                                                          #target_offset_shift=pd.Timedelta(-0.25, 's')
+                                                                          target_offset_shift=pd.Timedelta(-0.5, 's')
                                                                                     )
                  ),
 
                 ('silence_indices', pipeline.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
-                                                                                    # Center the extracted 0.5 second window
-                                                                                    index_shift=pd.Timedelta(-0.25, 's'),
-                                                                                    stim_value_remap=0
+                                                                           # Center the extracted 0.5 second window
+                                                                           index_shift=pd.Timedelta(-0.25, 's'),
+                                                                           stim_value_remap=0
                                                                                   )),
                 ('output', 'passthrough')
                     ]),
@@ -1413,7 +1413,6 @@ class DatasetOptions(JsonSerializable):
                                for k, v in dataset_map.items()}
 
         return dataset_map, dataloader_map, eval_dataloader_map
-
 
 
 if __name__ == """__main__""":
