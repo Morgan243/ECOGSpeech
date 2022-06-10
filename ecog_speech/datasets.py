@@ -859,6 +859,7 @@ class BaseASPEN(BaseDataset):
         kws['signal_arr'] = torch.from_numpy(np_ecog_arr).float()
 
         #extra_output_keys = ['sensor_ras_coord_arr']
+        extra_output_keys = [extra_output_keys] if isinstance(extra_output_keys, str) else extra_output_keys
         if isinstance(extra_output_keys, list):
             kws.update({k: torch.from_numpy(data_map[k]).float() if isinstance(data_map[k], np.ndarray) else data_map[k]
                         for k in extra_output_keys})
@@ -889,6 +890,7 @@ class BaseASPEN(BaseDataset):
                     offset_seconds=0,
                     figsize=(15, 10), axs=None):
         import matplotlib
+        from matplotlib import pyplot as plt
         from IPython.display import display
         # offs = pd.Timedelta(offset_seconds)
         #t_word_ix = self.word_index[self.word_index == i].index
@@ -903,7 +905,9 @@ class BaseASPEN(BaseDataset):
         # t_word_wav_df = self.speech_df.reindex(t_word_ix)
         ecog_df = self.data_maps[data_k]['signal']
         speech_df = self.data_maps[data_k]['audio']
-        word_txt = self.data_maps[data_k]['word_code_d'].get(ix_k[0], '<no speech>')
+        word_txt = "couldn't get word or text mapping from data_map"
+        if 'word_code_d' in self.data_maps[data_k]:
+            word_txt = self.data_maps[data_k]['word_code_d'].get(ix_k[0], '<no speech>')
 
         t_word_ecog_df = ecog_df.loc[t_word_slice].dropna()
         t_word_wav_df = speech_df.loc[t_word_slice]
@@ -918,7 +922,7 @@ class BaseASPEN(BaseDataset):
         colors = ecog_std.map(c_f).values
 
         if axs is None:
-            fig, axs = matplotlib.pyplot.subplots(figsize=figsize, nrows=2)
+            fig, axs = plt.subplots(figsize=figsize, nrows=2)
         else:
             fig = axs[0].get_figure()
 
@@ -1034,6 +1038,12 @@ class HarvardSentences(BaseASPEN):
         p_map = {
             'audio_gate': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
                                    + audio_gate_steps + [('output', 'passthrough')]),
+            'audio_gate_word_level': Pipeline(parse_arr_steps + parse_input_steps
+                                              # Creates listening, imagine, mouth
+                                              +[('multi_task_start_stop', pipeline.MultiTaskStartStop())]
+                                              + parse_stim_steps
+                                              + audio_gate_steps + [('output', 'passthrough')]),
+
             'audio_gate_speaking_only': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
                                                   # Slice out the generation of the silence stim data - only speaking
                                                  + audio_gate_steps[:-1] + [('output', 'passthrough')]),

@@ -541,7 +541,8 @@ class MultiTaskStartStop(DictTrf):
                 # Filter stim to times past t threshold time
                 after_t_s = s[s.index >= t]
                 # Within the filtered data, what i index has the value closest to v
-                closest_i_after_t_s = after_t_s.index.get_loc(v, method='nearest')
+                #closest_i_after_t_s = after_t_s.index.get_loc(v, method='nearest')
+                closest_i_after_t_s = after_t_s.index.get_indexer([v], method='nearest')[0]
                 # Access the index value at i
                 return after_t_s.index[closest_i_after_t_s]
 
@@ -601,6 +602,7 @@ class ParseSensorRAS(DictTrf):
         ras_arr = ras_df[['x_coord', 'y_coord', 'x_coord']].values
         return dict(sensor_ras_df=ras_df, sensor_ras_coord_arr=ras_arr)
 
+
 @attr.s
 @with_logger
 class StimFromStartStopTimes(DictTrf):
@@ -619,6 +621,9 @@ class StimFromStartStopTimes(DictTrf):
         word_stim = pd.Series(0, index=ix)
 
         # # #
+        code_maps = list()
+        # We'll immediately +1 this, so we won't actually use zero for a word code - it will be silence
+        working_word_ix = 0
         for i, (gname, gdf) in enumerate(_word_df.groupby(self.sent_code_column)):
             start_t = gdf[self.start_t_column].min()
             stop_t = gdf[self.stop_t_column].max()
@@ -635,18 +640,40 @@ class StimFromStartStopTimes(DictTrf):
             is_word_m = gdf.word.str.upper() == gdf.word
 
             # Set each words region in this sentence within the word_stim
-            for ii, (_gname, _gdf) in enumerate(gdf[is_word_m].groupby(self.word_code_column)):
+            #for ii, (_gname, _gdf) in enumerate(gdf[is_word_m].groupby(self.word_code_column)):
+            #for ii, _gname in enumerate(gdf[is_word_m].sort_values('start_t')[self.word_code_column].values):
+            for ii, _start_t in enumerate(gdf[is_word_m].sort_values('start_t').start_t.values):
+                #_gdf = gdf[is_word_m].query(f"{self.word_code_column} == '{_gname}'")
+                _gdf = gdf[is_word_m].pipe(lambda o: o[o.start_t == _start_t])
+                _gname = _gdf[self.word_code_column].unique()
+                assert len(_gname) == 1, f"{len(_gname)} unique words in {self.word_code_column} for sentence {gname}"
+                _gname = _gname[0]
+
                 _start_t = _gdf[self.start_t_column].min()
                 _stop_t = _gdf[self.stop_t_column].max()
 
                 _start_i, _stop_i = sentence_stim.index.get_indexer([_start_t, _stop_t], method='nearest')
                 #_start_i = sentence_stim.index.get_loc(_start_t, method='nearest')
                 #_stop_i = sentence_stim.index.get_loc(_stop_t, method='nearest')
-                word_stim.iloc[_start_i: _stop_i] = word_stim.max() + 1
+
+                word_code = (working_word_ix := working_word_ix + 1)
+                code_maps.append({self.sent_code_column: gname, self.word_code_column: _gname,
+                                  'word_code': word_code, 'start_t': _start_t})
+                word_stim.iloc[_start_i: _stop_i] = word_code
+
+        code_df = pd.DataFrame(code_maps)
+        wsst_df = _word_df.merge(code_df, on=['start_t', 'stim_sentcode', 'word'], how='left')
+        wsst_df = wsst_df.set_index('start_t', drop=False)
+        wsst_df['word_code'] = wsst_df['word_code'].fillna(0).astype(int)
+        word_code_d = wsst_df.set_index('word_code').drop(0).word.to_dict()
 
         return {self.word_stim_output_name: word_stim,
-                self.sentence_stim_output_name: sentence_stim}
-        #return dict(word_stim=word_stim, sentence_stim=sentence_stim)
+                self.sentence_stim_output_name: sentence_stim,
+                'word_code_frame': code_df,
+                'word_start_stop_times': wsst_df,
+                'word_code_d': word_code_d
+                #'wsst_df': wsst_df
+                }
 
 
 def object_as_key_or_itself(key_or_value, remap=None):

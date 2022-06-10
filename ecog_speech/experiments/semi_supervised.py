@@ -85,7 +85,7 @@ class SemiSupervisedExperiment(bxp.Experiment):
         # For some reason the codebook indices isn't always on the right device... so this seems to help force it over
         #trainer.model_map['model'].quantizer.codebook_indices = trainer.model_map['model'].quantizer.codebook_indices.to(trainer.device)
 
-        trainer.squeeze_first = True# False
+        #trainer.squeeze_first = False
         trainer.ppl_weight = self.task.ppl_weight
 
         losses = trainer.train(self.task.n_epochs)
