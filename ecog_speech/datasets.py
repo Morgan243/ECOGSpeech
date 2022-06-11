@@ -504,7 +504,8 @@ class BaseASPEN(BaseDataset):
 
             key_df = self.sample_ix_df[self.key_cols]
             self.flat_keys = np.array(list(zip(key_df.to_records(index=False).tolist(),
-                                      key_df.iloc[:, k_select_offset:].to_records(index=False).tolist())))
+                                      key_df.iloc[:, k_select_offset:].to_records(index=False).tolist())),
+                                      dtype='object')
             self.flat_index_map = self.sample_ix_df.set_index(key_cols).indices.to_dict()
 
             # ## END NEW VERSION
@@ -1002,8 +1003,7 @@ class HarvardSentences(BaseASPEN):
             ('sensor_selection', pipeline.IdentifyGoodAndBadSensors(sensor_selection=self.sensor_columns)),
             ('rescale_signal', pipeline.StandardNormSignal()),
             ('subsample', pipeline.SubsampleSignal()),
-            ('sent_from_start_stop', pipeline.SentCodeFromStartStopWordTimes()),
-
+            ('sent_from_start_stop', pipeline.SentCodeFromStartStopWordTimes())
         ]
 
         parse_stim_steps = [
@@ -1040,7 +1040,7 @@ class HarvardSentences(BaseASPEN):
                                    + audio_gate_steps + [('output', 'passthrough')]),
             'audio_gate_word_level': Pipeline(parse_arr_steps + parse_input_steps
                                               # Creates listening, imagine, mouth
-                                              +[('multi_task_start_stop', pipeline.MultiTaskStartStop())]
+                                              + [('multi_task_start_stop', pipeline.MultiTaskStartStop())]
                                               + parse_stim_steps
                                               + audio_gate_steps + [('output', 'passthrough')]),
 
@@ -1058,14 +1058,17 @@ class HarvardSentences(BaseASPEN):
                 ('stim_from_listening', pipeline.StimFromStartStopTimes(start_t_column='listening_region_start_t',
                                                                          stop_t_column='listening_region_stop_t',
                                                                          word_stim_output_name='listening_word_stim',
-                                                                         sentence_stim_output_name='listening_sentence_stim')),
+                                                                         sentence_stim_output_name='listening_sentence_stim',
+                                                                         set_as_word_stim=False)),
                 ('speaking_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',#'word_stim',
                                                                           target_onset_shift=pd.Timedelta(-.5, 's'),
-                                                                          target_offset_shift=pd.Timedelta(-0.5, 's'))),
+                                                                          target_offset_shift=pd.Timedelta(-0.5, 's'),
+                                                                          )),
                 ('silent_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',
                                                                         target_onset_shift=pd.Timedelta(.5, 's'),
                                                                         target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                        stim_value_remap=0)),
+                                                                        stim_value_remap=0,
+                                                                        )),
 
                 ('output', 'passthrough')
             ]),
@@ -1327,6 +1330,7 @@ class DatasetOptions(JsonSerializable):
                         flatten_sensors_to_samples=self.flatten_sensors_to_samples)
 
         base_kws.update(base_data_kws)
+        logger.info(f"Dataset base keyword arguments: {base_kws}")
         train_kws = dict(patient_tuples=train_p_tuples, **base_kws)
         cv_kws = dict(patient_tuples=cv_p_tuples, **base_kws)
         test_kws = dict(patient_tuples=test_p_tuples, **base_kws)
@@ -1423,6 +1427,20 @@ class DatasetOptions(JsonSerializable):
                                for k, v in dataset_map.items()}
 
         return dataset_map, dataloader_map, eval_dataloader_map
+
+
+@dataclass
+class NorthwesternWordsDatasetOptions(DatasetOptions):
+    dataset_name: str = 'nww'
+    train_sets: str = 'MC-21-0'
+
+
+@dataclass
+class HarvardSentencesDatasetOptions(DatasetOptions):
+    dataset_name: str = 'hvs'
+    train_sets: str = 'UCSD-19'
+    flatten_sensors_to_samples: bool = True
+    extra_output_keys: Optional[str] = 'sensor_ras_coord_arr'
 
 
 if __name__ == """__main__""":

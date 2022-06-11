@@ -18,47 +18,28 @@ logger = utils.get_logger('semi_supervised')
 @dataclass
 class SemisupervisedCodebookTaskOptions(bxp.TaskOptions):
     task_name: str = "semisupervised_codebook_training"
-    dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='UCSD-19',
-                                                               flatten_sensors_to_samples=True,
-                                                               extra_output_keys='sensor_ras_coord_arr')
+
     ppl_weight: float = 100.
 
 
 @dataclass
 class SemiSupervisedExperiment(bxp.Experiment):
     model: bmp.ModelOptions = subgroups(
-        {
-            'cog2vec': base_transformers.Cog2VecOptions
-        }, default=base_transformers.Cog2VecOptions()
+        {"cog2vec": base_transformers.Cog2VecOptions,},
+        default=base_transformers.Cog2VecOptions()
     )
 
-    #task: bxp.TaskOptions = bxp.TaskOptions('semisupervised_training',
-    #                                        dataset=datasets.DatasetOptions('hvs', train_sets='UCSD-19'))
-    task: SemisupervisedCodebookTaskOptions = subgroups(
-        {
-            'codebook': SemisupervisedCodebookTaskOptions
-        }, default=SemisupervisedCodebookTaskOptions()
-    )
+    dataset: datasets.DatasetOptions = subgroups(
+        {"hvs": datasets.HarvardSentencesDatasetOptions,
+         "nww": datasets.NorthwesternWordsDatasetOptions},
+        default=datasets.HarvardSentencesDatasetOptions())
 
-#def make_datasets_and_loaders(options, **kwargs):
-#    add_trfs = [datasets.SelectFromDim(dim=0, index='random', keep_dim=True)] if options.random_sensors_to_samples else None
-#    data_kws = {k: dict(flatten_sensors_to_samples=options.flatten_sensors_to_samples,
-#                        #additional_train_transforms=add_trfs, additional_eval_transforms=add_trfs
-#                )
-#                 for k in ['train_data_kws', 'cv_data_kws', 'test_data_kws']}
-#    dataset_map, dl_map, eval_dl_map = standard.make_datasets_and_loaders(options, #dataset_cls=datasets.HarvardSentences,
-#                                                                          pre_processing_pipeline=options.pre_processing_pipeline, #'audio_gate_speaking_only',
-#                                                                          additional_transforms=add_trfs,
-#                                                                          num_dl_workers=options.n_dl_workers,
-#                                                                          #base_data_kws=dict(extra_output_keys=["sensor_ras_coord_arr"]),
-#                                                                          base_data_kws=dict(extra_output_keys=options.extra_output_keys.split(',')
-#                                                                                             if options.extra_output_keys is not None else None),
-#                                                                          **data_kws, **kwargs)
-#
-#    return dataset_map, dl_map, eval_dl_map
+    task: bxp.TaskOptions = subgroups(
+        {"semi_supervised": SemisupervisedCodebookTaskOptions},
+        default=SemisupervisedCodebookTaskOptions())
 
     def run(self):
-        dataset_map, dl_map, eval_dl_map = self.task.dataset.make_datasets_and_loaders()
+        dataset_map, dl_map, eval_dl_map = self.dataset.make_datasets_and_loaders()
         model, model_kws = self.model.make_model(dataset_map['train'])
         # Shake out any forward pass errors now by running example data through model
         with torch.no_grad():
@@ -128,7 +109,6 @@ class SemiSupervisedExperiment(bxp.Experiment):
                 json.dump(res_dict, f)
 
         return trainer, eval_res_map
-
 
 #def run(options):
 #    from ecog_speech.models import base
@@ -283,6 +263,7 @@ if __name__ == """__main__""":
     parser.add_arguments(SemiSupervisedExperiment, dest='semi_supervised')
     args = parser.parse_args()
     experiment: SemiSupervisedExperiment = args.semi_supervised
+    logger.info(f"EXPERIMENT: {experiment}")
     experiment.run()
 
     #parser.add_arguments(SemiSupervisedOptions, dest='semi_supervised')

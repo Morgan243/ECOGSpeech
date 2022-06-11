@@ -10,8 +10,8 @@ from ecog_speech.datasets import DatasetOptions
 
 @dataclass
 class TaskOptions(JsonSerializable):
-    task_name: str = None
-    dataset: DatasetOptions = None
+    #task_name: str = None
+    #dataset: DatasetOptions = None
 
     n_epochs: int = 100
 
@@ -38,8 +38,8 @@ class ResultInputOptions(JsonSerializable):
 
 @dataclass
 class Experiment(JsonSerializable):
-    model: ModelOptions = None
-    task: TaskOptions = None
+    #model: ModelOptions = None
+    #task: TaskOptions = None
     result_output: ResultOptions = field(default_factory=ResultOptions)
     tag: Optional[str] = None
 

@@ -145,6 +145,11 @@ from simple_parsing import ArgumentParser, choice, subgroups
 
 
 @dataclass
+class SupervisedSpeechDetectionTask(bxp.TaskOptions):
+    task_name: str = 'supervised_speech_detection'
+    dataset = datasets.NorthwesternWordsDatasetOptions
+
+@dataclass
 class StandardExperiment(bxp.Experiment):
     model: bmp.ModelOptions = subgroups(
         {"sinc_ieeg": sinc_ieeg.SincIEEGOptions,
@@ -152,8 +157,11 @@ class StandardExperiment(bxp.Experiment):
         default=sinc_ieeg.SincIEEGOptions()
     )
 
-    task: bxp.TaskOptions = bxp.TaskOptions('supervised_speech_detection',
-                                            dataset=datasets.DatasetOptions('nww', train_sets='MC-21-0'))
+    task: SupervisedSpeechDetectionTask = SupervisedSpeechDetectionTask
+    #task: bxp.TaskOptions = bxp.TaskOptions('supervised_speech_detection',
+    #                                        dataset=datasets.NorthwesternWordsDatasetOptions
+                                            #dataset=datasets.DatasetOptions('nww', train_sets='MC-21-0')
+                                            #)
 
     @staticmethod
     def train_and_test_model_orig(model, dl_map, eval_dl_map, options, Trainer_CLS=base.Trainer,

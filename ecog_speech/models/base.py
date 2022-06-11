@@ -950,7 +950,7 @@ class Trainer:
 # Model Options
 @dataclass
 class ModelOptions(JsonSerializable):
-    model_name: str = None
+    #model_name: str = None
     non_hyperparams: ClassVar[Optional[list]] = ['device']
 
     @classmethod

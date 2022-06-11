@@ -611,6 +611,8 @@ class StimFromStartStopTimes(DictTrf):
     sent_code_column = attr.ib('stim_sentcode')
     word_code_column = attr.ib('word')
     word_stim_output_name = attr.ib('word_stim')
+    word_code_map_output_name = attr.ib('word_code')
+    set_as_word_stim = attr.ib(True)
     sentence_stim_output_name = attr.ib('sentence_stim')
 
     def process(self, data_map):
@@ -624,14 +626,13 @@ class StimFromStartStopTimes(DictTrf):
         code_maps = list()
         # We'll immediately +1 this, so we won't actually use zero for a word code - it will be silence
         working_word_ix = 0
+        #code_col_output_name = f'{self.word_code_column}_code'
         for i, (gname, gdf) in enumerate(_word_df.groupby(self.sent_code_column)):
             start_t = gdf[self.start_t_column].min()
             stop_t = gdf[self.stop_t_column].max()
 
             #  Use index.get_indexer([item], method=...)
             start_i, stop_i = sentence_stim.index.get_indexer([start_t, stop_t], method='nearest')
-            #start_i = sentence_stim.index.get_loc(start_t, method='nearest')
-            #stop_i = sentence_stim.index.get_loc(stop_t, method='nearest')
 
             # Set this sentence to some incrementing indicator
             sentence_stim.iloc[start_i: stop_i] = sentence_stim.max() + 1
@@ -658,23 +659,27 @@ class StimFromStartStopTimes(DictTrf):
 
                 word_code = (working_word_ix := working_word_ix + 1)
                 code_maps.append({self.sent_code_column: gname, self.word_code_column: _gname,
-                                  'word_code': word_code, 'start_t': _start_t})
+                                  self.word_code_map_output_name: word_code, 'start_t': _start_t})
                 word_stim.iloc[_start_i: _stop_i] = word_code
 
-        code_df = pd.DataFrame(code_maps)
-        wsst_df = _word_df.merge(code_df, on=['start_t', 'stim_sentcode', 'word'], how='left')
-        wsst_df = wsst_df.set_index('start_t', drop=False)
-        wsst_df['word_code'] = wsst_df['word_code'].fillna(0).astype(int)
-        word_code_d = wsst_df.set_index('word_code').drop(0).word.to_dict()
-
-        return {self.word_stim_output_name: word_stim,
+        out = {self.word_stim_output_name: word_stim,
                 self.sentence_stim_output_name: sentence_stim,
-                'word_code_frame': code_df,
-                'word_start_stop_times': wsst_df,
-                'word_code_d': word_code_d
                 #'wsst_df': wsst_df
                 }
 
+        if self.set_as_word_stim:
+            code_df = pd.DataFrame(code_maps)
+            wsst_df = _word_df.merge(code_df, on=['start_t', 'stim_sentcode', self.word_code_column], how='left')
+            wsst_df = wsst_df.set_index('start_t', drop=False).rename_axis(index='start_time')
+            wsst_df[self.word_code_map_output_name] = wsst_df[self.word_code_map_output_name].fillna(0).astype(int)
+            word_code_d = wsst_df.set_index('word_code').drop(0).word.to_dict()
+            out.update(
+                {'word_code_frame': code_df,
+                 'word_start_stop_times': wsst_df,
+                 'word_code_d': word_code_d}
+            )
+
+        return out
 
 def object_as_key_or_itself(key_or_value, remap=None):
     """
