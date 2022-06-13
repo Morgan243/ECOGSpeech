@@ -1,9 +1,12 @@
 from ecog_speech import datasets, experiments, result_parsing, utils
 from ecog_speech import pipeline as feature_processing
+from dataclasses import dataclass, field
 from ecog_speech import visuals as viz
 import pandas as pd
 import matplotlib
 import numpy as np
+import os
+
 
 def plot_ucsd_sentence_regions(data_map):
     import matplotlib
@@ -38,9 +41,15 @@ def plot_ucsd_sentence_regions(data_map):
     fig.tight_layout()
     return fig, axs
 
-def plot_ucsd_word_regions(data_map):
+
+def plot_ucsd_word_regions(data_map, include_listen=None, include_speaking=None,
+                           include_imagine=None, include_mouth=None,
+                           legend_kws=None,
+                           **region_plot_overrides):
     import matplotlib
     from tqdm.auto import tqdm
+    legend_kws = dict(fontsize=6.5, loc='upper center') if legend_kws is None else legend_kws
+
     ds_audio = data_map['audio'].resample('0.001S').mean()
     word_df = data_map['word_start_stop_times']
     plt_sent_codes = list(sorted(word_df.stim_sentcode.unique()))
@@ -49,23 +58,41 @@ def plot_ucsd_word_regions(data_map):
     fig, axs = matplotlib.pyplot.subplots(nrows=n_rows, ncols=2, figsize=(27, n_rows * 3))
     axs = axs.reshape(-1)
 
-    for i, sent_code in (enumerate(tqdm(plt_sent_codes))):
+    for i, sent_code in (enumerate(tqdm(plt_sent_codes, 'Processing by sentence'))):
+        # Map the region of the sentence to the word regions - e.g. spoken vs. imagine
+        sent_region_map = dict()
         ax = axs[i]
-        plt_word_df = word_df[word_df.stim_sentcode.eq(sent_code)]
-        speaking_regions_l = (plt_word_df[plt_word_df.word.str.upper() == plt_word_df.word]
-                              .pipe(lambda _df: _df[['start_t', 'stop_t', 'word']].assign(v=1)).values.tolist())
-        imagine_regions_l = (plt_word_df[plt_word_df.word.str.upper() == plt_word_df.word]
-                             .pipe(
-            lambda _df: _df.assign(word=_df.word + '_im')[['imagine_start_t', 'imagine_stop_t', 'word']].assign(
-                v=1)).values.tolist())
+        plt_word_df = word_df[word_df.stim_sentcode.eq(sent_code) & (word_df.word.str.upper() == word_df.word)].copy()
+        plt_word_df['word'] = plt_word_df['word'] + '(' + plt_word_df['word_code'].astype(str) + ')'
+        if include_speaking or ('word' in plt_word_df.columns and include_speaking is None):
+            sent_region_map['speaking'] = plt_word_df[['start_t', 'stop_t', 'word']].assign(v=1).values.tolist()
 
-        region_tuples = speaking_regions_l + imagine_regions_l
+        if include_imagine or ('imagine_start_t' in plt_word_df.columns and include_imagine is None):
+            sent_region_map['imagining'] = (plt_word_df.assign(word=plt_word_df.word + '_img', v=1)
+                                            [['imagine_start_t', 'imagine_stop_t', 'word', 'v']]
+                                            .values.tolist())
+        if include_mouth or ('mouth_start_t' in plt_word_df.columns and include_mouth is None):
+            sent_region_map['mouthing'] = (plt_word_df.assign(word=plt_word_df.word + '_mth', v=1)
+                                           [['mouth_start_t', 'mouth_stop_t', 'word', 'v']]
+                                           .values.tolist())
+
+        if include_listen or ('listen_start_t' in plt_word_df.columns and include_listen is None):
+            sent_region_map['listen'] = (plt_word_df.assign(word=plt_word_df.word + '_lis', v=1)
+                                         [['listen_start_t', 'listen_stop_t', 'word', 'v']]
+                                         .values.tolist())
+
+
+        region_tuples = sum(sent_region_map.values(), list())  #speaking_regions_l + imagine_regions_l
+        region_plot_kwargs = dict(style='--', alpha=0.9, lw=4,
+                                  title=f"sentcode={sent_code}",
+                                  cmap='tab20')
+        region_plot_kwargs.update(region_plot_overrides)
         fig, ax, ax2 = viz.plot_multi_region_over_signal(signal_s=ds_audio, region_min_max_tuples=region_tuples,
-                                                   region_plot_kwargs=dict(ls='--', alpha=0.9, lw=4,
-                                                                           title=f"sentcode={sent_code}",
-                                                                           cmap='tab20'),
-                                                   ax=ax)
-        ax2.legend(ncol=2, fontsize=8, loc='center')
+                                                         region_plot_kwargs=region_plot_kwargs,
+                                                         ax=ax)
+        ax2.legend(ncol=len(sent_region_map), **legend_kws)
+
+    fig.tight_layout()
 
     return fig, axs
 
@@ -147,12 +174,14 @@ def plot_label_inspection_figures(data_map):
     wrd_code_len_s = pd.Series({wrd_cd: len(ixes)
                                 for wrd_cd, ixes in data_map['sample_index_map'].items()}, name='n_ixes')
     n_speak_wins = len(wrd_code_len_s.drop(0))
-    hist_title = f'Hist of Word Codes\' N={n_speak_wins} label windows\nN={wrd_code_len_s.loc[0]} silence samples (not inc. histo)\n{len(wrd_code_len_s)} unique word codes'
+    hist_title = f'Hist of Word Codes\' N={n_speak_wins} label windows' \
+                 f'\nN={wrd_code_len_s.loc[0]} silence samples (not inc. histo)\n' \
+                 f'{len(wrd_code_len_s)} unique word codes'
     hist_title += f'\nLongest regions: {wrd_code_len_s.drop(0).nlargest(5).index.tolist()}'
     ax = wrd_code_len_s.drop(0).plot.hist(title=hist_title)
     ax.set_xlabel('N Windows in label region')
     ax.set_ylabel('N Word codes')
-    ax.set_xlim(0)
+    #ax.set_xlim(0)
     fig = ax.get_figure()
     # fig.patches.
     fig.patch.set_facecolor('white')
@@ -166,20 +195,34 @@ def plot_label_inspection_figures(data_map):
     return output_fig_map
 
 
+@dataclass
+class PlotLabelRegionOptions:
+    output_dir: str = './'
+    dataset_name: str = 'hvs'
+    data_subset: str = 'UCSD'
+    pre_proc_pipeline: str = 'word_level'
+    n_workers: int = 2
+
+
 if __name__ == """__main__""":
+    from simple_parsing import ArgumentParser
     from tqdm.auto import tqdm
     from matplotlib import pyplot as plt
-    from sklearn.pipeline import FeatureUnion, Pipeline
     import pathlib
 
-    #psubset = 'MC'
-    #dataset_cls = datasets.NorthwesternWords
-    psubset = 'UCSD'
-    dataset_cls = datasets.HarvardSentences
-    pre_proc_pipeline = 'audio_gate_imagine'
+    parser = ArgumentParser()
+    parser.add_arguments(PlotLabelRegionOptions, dest='plt_label_region_opts')
+    args = parser.parse_args()
+    plt_label_region_opts: PlotLabelRegionOptions = args.plt_label_region_opts
+
+
+    psubset = plt_label_region_opts.data_subset
+    dataset_cls = datasets.BaseDataset.get_dataset_by_name(plt_label_region_opts.dataset_name)
+    pre_proc_pipeline = plt_label_region_opts.pre_proc_pipeline
 
     def run_one(pid, pt, ptuples):
         output_path = f'{psubset}-{pt[1]}-{pt[3]}_label_inspection_plots.pdf'
+        output_path = os.path.join(plt_label_region_opts.output_dir, output_path)
         if pathlib.Path(output_path).is_file():
             print("Skipping " + str(output_path))
             return
@@ -187,13 +230,12 @@ if __name__ == """__main__""":
         dset = dataset_cls(patient_tuples=[pt], pre_processing_pipeline=pre_proc_pipeline)
         print("Getting data map")
         data_map = dset.data_maps[pt]
-        # Should only be onw
-        # for i, (pt, data_map) in enumerate(dset.data_maps.items()):
         print("Plotting")
         fig_map = plot_label_inspection_figures(data_map)
 
-        if psubset == 'UCSD' and pre_proc_pipeline == 'audio_gate_imagine':
-            fig, _ = plot_ucsd_word_regions(data_map)
+        if psubset == 'UCSD':# and pre_proc_pipeline == 'audio_gate_imagine':
+            fig, _ = plot_ucsd_word_regions(data_map, include_listen=False, include_speaking=True,
+                                            include_imagine=False, include_mouth=False)
             fig_map['UCSD_words'] = fig
 
             fig, _ = plot_ucsd_sentence_regions(data_map)
@@ -215,11 +257,14 @@ if __name__ == """__main__""":
 
 
     from multiprocessing import Pool
-    p = Pool(2)
+    p = Pool(plt_label_region_opts.n_workers) if plt_label_region_opts.n_workers > 1 else None
     for pid, ptuples in tqdm(dataset_cls.all_patient_maps[psubset].items()):
         for pt in ptuples:
-            p.apply_async(run_one, kwds=dict(pid=pid, pt=pt, ptuples=ptuples))
-            #run_one(pid=pid, pt=pt, ptuples=ptuples)
+            if p is not None:
+                p.apply_async(run_one, kwds=dict(pid=pid, pt=pt, ptuples=ptuples))
+            else:
+                run_one(pid=pid, pt=pt, ptuples=ptuples)
 
-    p.close()
-    p.join()
+    if p is not None:
+        p.close()
+        p.join()

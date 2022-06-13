@@ -547,8 +547,6 @@ class MultiTaskStartStop(DictTrf):
                 return after_t_s.index[closest_i_after_t_s]
 
             stim_ixes = word_m_df.apply(lambda r: closest_index_i_after_t(_stim, r.stop_t, r.start_t), axis=1)
-            #stim_ixes = word_m_df.start_t.apply(lambda v: _stim.index.get_loc(v, method='nearest'))
-            # stim_ixes = _word_df.start_t.apply(lambda v: _stim.index.get_loc(v, method='nearest'))
 
             # stim_ixes = _word_df.apply(lambda r: _stim.loc[_stim.index >= r.start_t].index.get_loc(r.start_t, method='nearest'), axis=1)
             nearest_stim_d[f'{stim_name}_region_start_t'] = stim_ixes
@@ -568,7 +566,9 @@ class MultiTaskStartStop(DictTrf):
         def make_ref_offset_from_sent_code_groups(s_df):
             # how far away from start of index/ref time
             ref_diff_s = (s_df.index.to_series()
+                          # Distance from the start
                           .pipe(lambda s: s - s.min())
+                          #
                           .fillna(pd.Timedelta(0))
                           .rename('ref_diff_from_min'))
 
@@ -587,6 +587,10 @@ class MultiTaskStartStop(DictTrf):
         mtask_word_df = _word_nearest_df.join(_word_nearest_df
                                               .groupby('stim_sentcode')
                                               .apply(make_ref_offset_from_sent_code_groups))
+
+        # Extract the word-level start stop for listening, assumed given in a similar cadence
+        mtask_word_df['listen_start_t'] = mtask_word_df['listening_region_start_t'] + mtask_word_df['ref_diff_from_min']
+        mtask_word_df['listen_stop_t'] = mtask_word_df['listen_start_t'] + mtask_word_df['speaking_length_t']
 
         return dict(word_start_stop_times=mtask_word_df)
 
@@ -628,11 +632,11 @@ class StimFromStartStopTimes(DictTrf):
         working_word_ix = 0
         #code_col_output_name = f'{self.word_code_column}_code'
         for i, (gname, gdf) in enumerate(_word_df.groupby(self.sent_code_column)):
-            start_t = gdf[self.start_t_column].min()
-            stop_t = gdf[self.stop_t_column].max()
+            sent_start_t = gdf[self.start_t_column].min()
+            sent_stop_t = gdf[self.stop_t_column].max()
 
             #  Use index.get_indexer([item], method=...)
-            start_i, stop_i = sentence_stim.index.get_indexer([start_t, stop_t], method='nearest')
+            start_i, stop_i = sentence_stim.index.get_indexer([sent_start_t, sent_stop_t], method='nearest')
 
             # Set this sentence to some incrementing indicator
             sentence_stim.iloc[start_i: stop_i] = sentence_stim.max() + 1
@@ -663,7 +667,7 @@ class StimFromStartStopTimes(DictTrf):
                 word_stim.iloc[_start_i: _stop_i] = word_code
 
         out = {self.word_stim_output_name: word_stim,
-                self.sentence_stim_output_name: sentence_stim,
+               self.sentence_stim_output_name: sentence_stim,
                 #'wsst_df': wsst_df
                 }
 

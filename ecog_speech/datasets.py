@@ -33,7 +33,6 @@ from typing import List, Optional, Type, ClassVar
 logger = utils.get_logger(__name__)
 
 
-
 @dataclass
 class MultiSensorOptions:
     flatten_sensors_to_samples: bool = False
@@ -57,7 +56,7 @@ class RollDimension:
     def __call__(self, sample):
         roll_amount = int(np.random.random_integers(self.min_roll,
                                                     self.max_roll))
-        #return torch.roll(sample, roll_amount, self.roll_dim)
+        # return torch.roll(sample, roll_amount, self.roll_dim)
         r_sample = np.roll(sample, roll_amount, self.roll_dim)
 
         if self.return_roll_amount:
@@ -89,6 +88,7 @@ class ShuffleDimension:
 
 class SelectFromDim:
     """Expects numpy arrays - use in Compose - models.base.Select can be used in Torch """
+
     def __init__(self, dim=0, index='random', keep_dim=True):
         super(SelectFromDim, self).__init__()
         self.dim = dim
@@ -132,7 +132,7 @@ class BaseDataset(tdata.Dataset):
         dset = self
         if random_sample:
             if batches_per_epoch is None:
-                #batches_per_epoch = len(dset) // batch_size
+                # batches_per_epoch = len(dset) // batch_size
                 batches_per_epoch = int(np.ceil(len(dset) / batch_size))
 
             dataloader = tdata.DataLoader(dset, batch_size=batch_size,
@@ -317,8 +317,8 @@ class BaseASPEN(BaseDataset):
     post_processing_func = attr.ib(None)
     post_processing_kws = attr.ib(attr.Factory(dict))
 
-    #power_threshold = attr.ib(0.007)
-    #power_q = attr.ib(0.70)
+    # power_threshold = attr.ib(0.007)
+    # power_q = attr.ib(0.70)
     pre_processing_pipeline = attr.ib(None)
     # If using one source of data, with different `selected_word_indices`, then
     # passing the first NWW dataset to all subsequent ones built on the same source data
@@ -361,7 +361,7 @@ class BaseASPEN(BaseDataset):
         if self.data_from is None:
             self.logger.info("Loading data directly")
             # Leave this here for now...
-            #self.mfcc_m = torchaudio.transforms.MFCC(self.default_audio_sample_rate,
+            # self.mfcc_m = torchaudio.transforms.MFCC(self.default_audio_sample_rate,
             #                                         self.num_mfcc)
 
             ## Data loading ##
@@ -369,11 +369,11 @@ class BaseASPEN(BaseDataset):
             # - Only minimal processing into Python objects done here
             data_iter = tqdm(self.patient_tuples, desc="Loading data")
             mat_data_maps = {l_p_s_t_tuple: self.load_data(*l_p_s_t_tuple,
-                                                            #sensor_columns=self.sensor_columns,
+                                                           # sensor_columns=self.sensor_columns,
                                                            # IMPORTANT: Don't parse data yet
-                                                            #parse_mat_data=False,
-                                                            subset=self.data_subset)
-                              for l_p_s_t_tuple in data_iter}
+                                                           # parse_mat_data=False,
+                                                           subset=self.data_subset)
+                             for l_p_s_t_tuple in data_iter}
 
             #  Important processing  #
             # - Process each subject in data map through pipeline func
@@ -385,14 +385,14 @@ class BaseASPEN(BaseDataset):
                 res_dmap = self.pipeline_f(dmap)
                 self.sample_index_maps[k] = res_dmap['sample_index_map']
                 # THe first data map sets the sampling frequency fs
-                #self.fs_signal = getattr(self, 'fs_signal', res_dmap[self.mat_d_keys['signal_fs']])
+                # self.fs_signal = getattr(self, 'fs_signal', res_dmap[self.mat_d_keys['signal_fs']])
                 self.fs_signal = res_dmap[self.mat_d_keys['signal_fs']] if self.fs_signal is None else self.fs_signal
 
-                #self.ecog_window_size = getattr(self, 'ecog_window_size',
+                # self.ecog_window_size = getattr(self, 'ecog_window_size',
                 #                                int(self.fs_signal * self.sample_ixer.window_size.total_seconds()))
-                #self.ecog_window_size = int(self.fs_signal * self.sample_ixer.window_size.total_seconds())
+                # self.ecog_window_size = int(self.fs_signal * self.sample_ixer.window_size.total_seconds())
 
-                #self.n_samples_per_window = res_dmap['n_samples_per_window']
+                # self.n_samples_per_window = res_dmap['n_samples_per_window']
                 self.n_samples_per_window = getattr(self, 'n_samples_per_window', res_dmap['n_samples_per_window'])
                 self.logger.info(f"N samples per window: {self.n_samples_per_window}")
 
@@ -401,18 +401,18 @@ class BaseASPEN(BaseDataset):
 
                 self.data_maps[k] = res_dmap
 
-
             ###
             # Sensor selection logic - based on the patients loaded - which sensors do we use?
             if self.sensor_columns is None or isinstance(self.sensor_columns, str):
-                #good_and_bad_tuple_d = {l_p_s_t_tuple: self.identify_good_and_bad_sensors(mat_d, self.sensor_columns)
+                # good_and_bad_tuple_d = {l_p_s_t_tuple: self.identify_good_and_bad_sensors(mat_d, self.sensor_columns)
                 #                            for l_p_s_t_tuple, mat_d in mat_data_maps.items()}
                 good_and_bad_tuple_d = {l_p_s_t_tuple: (mat_d['good_sensor_columns'], mat_d['bad_sensor_columns'])
                                         for l_p_s_t_tuple, mat_d in self.data_maps.items()}
 
-                good_and_bad_tuple_d = {k: (set(gs) if gs else (list(range(self.data_maps[k][self.mat_d_keys['signal']].shape[1]))),
-                                            bs)
-                                         for k, (gs, bs) in good_and_bad_tuple_d.items()}
+                good_and_bad_tuple_d = {
+                    k: (set(gs) if gs else (list(range(self.data_maps[k][self.mat_d_keys['signal']].shape[1]))),
+                        bs)
+                    for k, (gs, bs) in good_and_bad_tuple_d.items()}
 
                 self.logger.info("GOOD AND BAD SENSORS: " + str(good_and_bad_tuple_d))
                 self.sensor_columns = 'union' if self.sensor_columns is None else self.sensor_columns
@@ -420,54 +420,54 @@ class BaseASPEN(BaseDataset):
                 # UNION: Select all good sensors from all inputs, zeros will be filled for those missing
                 if self.sensor_columns == 'union':
                     self.selected_columns = sorted(list({_gs for k, (gs, bs) in good_and_bad_tuple_d.items()
-                                                        for _gs in gs}))
+                                                         for _gs in gs}))
                 # INTERSECTION: Select only sensors that are rated good in all inputs
                 elif self.sensor_columns == 'intersection' or self.sensor_columns == 'valid':
                     s = [set(gs) for k, (gs, bs) in good_and_bad_tuple_d.items()]
                     self.selected_columns = sorted(list(s[0].intersection(*s[1:])))
 
-                #elif self.sensor_columns == 'all':
+                # elif self.sensor_columns == 'all':
                 else:
                     raise ValueError("Unknown snsor columns argument: " + str(self.sensor_columns))
-                #print("Selected columns with -%s- method: %s"
+                # print("Selected columns with -%s- method: %s"
                 #      % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
                 self.logger.info("Selected columns with -%s- method: %s"
-                                  % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
+                                 % (self.sensor_columns, ", ".join(map(str, self.selected_columns))))
             else:
                 self.selected_columns = self.sensor_columns
 
             self.sensor_count = len(self.selected_columns)
 
-#            if self.flatten_sensors_to_samples:
-#                # Map full description (word label, window index, sensor,...trial key elements..}
-#                # to the actual pandas index
-#                self.logger.info("Flattening sensors to samples")
-#                self.flat_index_map = {tuple([wrd_id, ix_i, s_i] + list(k_t)): ixes
-#                                       for k_t, index_map in tqdm(self.sample_index_maps.items(),
-#                                                                  desc="Creating sample indices")
-#                                       for wrd_id, ix_list in index_map.items()
-#                                       for ix_i, ixes in enumerate(ix_list)
-#                                       for s_i, s in enumerate(self.selected_columns)}
-#
-#                # Enumerate all the keys across flat_index_map into one large list for index-style,
-#                # has a len() and can be indexed into nicely (via np.ndarray)
-#                self.flat_keys = np.array([(k, k[3:])
-#                                           for i, k in enumerate(self.flat_index_map.keys())],
-#                                          dtype='object')
-#            else:
-#                # Map full description (word label, window index,...trial key elements..}
-#                # to the actual pandas index
-#                self.flat_index_map = {tuple([wrd_id, ix_i] + list(k_t)): ixes
-#                                       for k_t, index_map in tqdm(self.sample_index_maps.items(),
-#                                                                  desc="Creating sample indices")
-#                                       for wrd_id, ix_list in index_map.items()
-#                                       for ix_i, ixes in enumerate(ix_list)}
-#
-#                # Enumerate all the keys across flat_index_map into one large list for index-style,
-#                # has a len() and can be indexed into nicely (via np.ndarray)
-#                self.flat_keys = np.array([(k, k[2:])
-#                                           for i, k in enumerate(self.flat_index_map.keys())],
-#                                          dtype='object')
+            #            if self.flatten_sensors_to_samples:
+            #                # Map full description (word label, window index, sensor,...trial key elements..}
+            #                # to the actual pandas index
+            #                self.logger.info("Flattening sensors to samples")
+            #                self.flat_index_map = {tuple([wrd_id, ix_i, s_i] + list(k_t)): ixes
+            #                                       for k_t, index_map in tqdm(self.sample_index_maps.items(),
+            #                                                                  desc="Creating sample indices")
+            #                                       for wrd_id, ix_list in index_map.items()
+            #                                       for ix_i, ixes in enumerate(ix_list)
+            #                                       for s_i, s in enumerate(self.selected_columns)}
+            #
+            #                # Enumerate all the keys across flat_index_map into one large list for index-style,
+            #                # has a len() and can be indexed into nicely (via np.ndarray)
+            #                self.flat_keys = np.array([(k, k[3:])
+            #                                           for i, k in enumerate(self.flat_index_map.keys())],
+            #                                          dtype='object')
+            #            else:
+            #                # Map full description (word label, window index,...trial key elements..}
+            #                # to the actual pandas index
+            #                self.flat_index_map = {tuple([wrd_id, ix_i] + list(k_t)): ixes
+            #                                       for k_t, index_map in tqdm(self.sample_index_maps.items(),
+            #                                                                  desc="Creating sample indices")
+            #                                       for wrd_id, ix_list in index_map.items()
+            #                                       for ix_i, ixes in enumerate(ix_list)}
+            #
+            #                # Enumerate all the keys across flat_index_map into one large list for index-style,
+            #                # has a len() and can be indexed into nicely (via np.ndarray)
+            #                self.flat_keys = np.array([(k, k[2:])
+            #                                           for i, k in enumerate(self.flat_index_map.keys())],
+            #                                          dtype='object')
 
             # ### New Version ###
             sample_ix_df_l = list()
@@ -504,7 +504,7 @@ class BaseASPEN(BaseDataset):
 
             key_df = self.sample_ix_df[self.key_cols]
             self.flat_keys = np.array(list(zip(key_df.to_records(index=False).tolist(),
-                                      key_df.iloc[:, k_select_offset:].to_records(index=False).tolist())),
+                                               key_df.iloc[:, k_select_offset:].to_records(index=False).tolist())),
                                       dtype='object')
             self.flat_index_map = self.sample_ix_df.set_index(key_cols).indices.to_dict()
 
@@ -513,11 +513,11 @@ class BaseASPEN(BaseDataset):
             self.logger.info(f"Length of flat index map: {len(self.flat_index_map)}")
 
             # Finish processing the data mapping loaded from the mat data files
-            #self.data_maps = {l_p_s_t_tuple: self.parse_mat_arr_dict(mat_d, self.selected_columns)
+            # self.data_maps = {l_p_s_t_tuple: self.parse_mat_arr_dict(mat_d, self.selected_columns)
             #                  for l_p_s_t_tuple, mat_d in tqdm(mat_data_maps.items(), desc='Parsing data')}
             ###-----
             assert self.sensor_count == len(self.selected_columns)
-            #print(f"Selected {len(self.selected_columns)} sensors")
+            # print(f"Selected {len(self.selected_columns)} sensors")
             self.logger.info(f"Selected {len(self.selected_columns)} sensors")
             ###-----
 
@@ -527,15 +527,15 @@ class BaseASPEN(BaseDataset):
                                                                desc='Applying sensor selection')}
 
         else:
-            #print("Warning: using naive shared-referencing across objects - only use when feeling lazy")
+            # print("Warning: using naive shared-referencing across objects - only use when feeling lazy")
             self.logger.warning("Warning: using naive shared-referencing across objects - only use when feeling lazy")
-            #self.mfcc_m = self.data_from.mfcc_m
+            # self.mfcc_m = self.data_from.mfcc_m
             self.data_maps = self.data_from.data_maps
             self.sample_index_maps = self.data_from.sample_index_maps
             self.flat_index_map = self.data_from.flat_index_map
             self.flat_keys = self.data_from.flat_keys
             self.key_cols = self.data_from.key_cols
-            #self.logger.info("Copying over sample ix dataframe")
+            # self.logger.info("Copying over sample ix dataframe")
             self.sample_ix_df = self.data_from.sample_ix_df.copy()
             self.selected_columns = self.data_from.selected_columns
             self.flatten_sensors_to_samples = self.data_from.flatten_sensors_to_samples
@@ -566,27 +566,27 @@ class BaseASPEN(BaseDataset):
                 ('Threshold', pipeline.PowerThreshold(speaking_window_samples=48000 // 16,
                                                       silence_window_samples=int(48000 * 1.5),
                                                       speaking_quantile_threshold=0.9,
-                                                      #n_silence_windows=5000,
-                                                      #silence_threshold=0.001,
-                                                      #silGence_quantile_threshold=0.05,
+                                                      # n_silence_windows=5000,
+                                                      # silence_threshold=0.001,
+                                                      # silGence_quantile_threshold=0.05,
                                                       silence_n_smallest=5000)),
                 ('speaking_indices', pipeline.WindowSampleIndicesFromStim('stim_pwrt',
                                                                           target_onset_shift=pd.Timedelta(-.5, 's'),
                                                                           # input are centers, and output is a window of .5 sec
                                                                           # so to center it, move the point (center) back .25 secods
                                                                           # so that extracted 0.5 sec window saddles the original center
-                                                                          #target_offset_shift=pd.Timedelta(-0.25, 's')
+                                                                          # target_offset_shift=pd.Timedelta(-0.25, 's')
                                                                           target_offset_shift=pd.Timedelta(-0.5, 's')
-                                                                                    )
+                                                                          )
                  ),
 
                 ('silence_indices', pipeline.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
-                                                                           # Center the extracted 0.5 second window
-                                                                           index_shift=pd.Timedelta(-0.25, 's'),
-                                                                           stim_value_remap=0
-                                                                                  )),
+                                                                          # Center the extracted 0.5 second window
+                                                                          index_shift=pd.Timedelta(-0.25, 's'),
+                                                                          stim_value_remap=0
+                                                                          )),
                 ('output', 'passthrough')
-                    ]),
+            ]),
 
             'minimal':
                 feature_processing.SubsampleECOG() >>
@@ -594,10 +594,10 @@ class BaseASPEN(BaseDataset):
         }
         p_map['default'] = p_map[default]
 
-
         return p_map
 
-    def to_eval_replay_dataloader(self, patient_k=None, data_k='ecog', stim_k='stim', win_step=1, batch_size=1024, num_workers=4,
+    def to_eval_replay_dataloader(self, patient_k=None, data_k='ecog', stim_k='stim', win_step=1, batch_size=1024,
+                                  num_workers=4,
                                   ecog_transform=None):
         if patient_k is None:
             patient_k = list(self.data_maps.keys())
@@ -610,20 +610,20 @@ class BaseASPEN(BaseDataset):
             ecog_torch_arr = torch.from_numpy(data_map[data_k].values).float()
             outputs = list()
             for _iix in tqdm(range(0, ecog_torch_arr.shape[0] - self.ecog_window_size, win_step),
-                            desc='creating windows'):
+                             desc='creating windows'):
                 _ix = slice(_iix, _iix + self.ecog_window_size)
                 feats = self.get_features(data_map, _ix, transform=ecog_transform, index_loc=True)
                 # TODO: Just grabbing the max stim wode in the range - better or more useful way to do this?
                 targets = self.get_targets(data_map, None, label=data_map['stim'].iloc[_ix].max())
                 so = dict(**feats, **targets)
                 so = {k: v for k, v in so.items()
-                        if isinstance(v, torch.Tensor)}
+                      if isinstance(v, torch.Tensor)}
                 outputs.append(so)
             t_dl = torch.utils.data.DataLoader(outputs, batch_size=batch_size, num_workers=num_workers)
             dl_map[k] = t_dl
 
         ret = dl_map
-        #if len(ret) == 1:
+        # if len(ret) == 1:
         #    ret = list(dl_map.values())[0]
         return ret
 
@@ -644,9 +644,9 @@ class BaseASPEN(BaseDataset):
 
         so.update(
             self.get_features(data_d, self.flat_index_map[ix_k],
-                               ix_k, transform=self.transform,
-                               channel_select=selected_channels,
-                               extra_output_keys=self.extra_output_keys)
+                              ix_k, transform=self.transform,
+                              channel_select=selected_channels,
+                              extra_output_keys=self.extra_output_keys)
         )
 
         so.update(
@@ -663,7 +663,7 @@ class BaseASPEN(BaseDataset):
                 if isinstance(v, torch.Tensor)}
 
     def split_select_at_time(self, split_time: float):
-        #split_time = 0.75
+        # split_time = 0.75
         from tqdm.auto import tqdm
 
         selected_keys_arr = self.flat_keys[self.selected_word_indices]
@@ -767,7 +767,7 @@ class BaseASPEN(BaseDataset):
     # Entry point to get data
     @classmethod
     def load_data(cls, location=None, patient=None, session=None, trial=None, base_path=None,
-                  sensor_columns=None,  subset=None):
+                  sensor_columns=None, subset=None):
 
         location = cls.default_location if location is None else location
         patient = cls.default_patient if patient is None else patient
@@ -806,7 +806,7 @@ class BaseASPEN(BaseDataset):
         set_terms = sets_str.split('-')
         # e.g. MC-22-1 has three terms ('MC', 22, 1) selecting a specific trial of a specific participant
         if len(set_terms) == 3:
-            #org, pid, ix = sets_str.split('-')
+            # org, pid, ix = sets_str.split('-')
             org, pid, ix = set_terms
             assert pid.isdigit() and ix.isdigit() and org in cls.all_patient_maps.keys()
             pmap, pid, ix = cls.all_patient_maps[org], int(pid), int(ix)
@@ -827,13 +827,12 @@ class BaseASPEN(BaseDataset):
 
         return p_list
 
-
     @classmethod
     def make_all_tuples_with_one_left_out(cls, sets_str):
         selected_t_l = cls.make_tuples_from_sets_str(sets_str)
         remaining_t_l = sum((l for pid_to_t_l in cls.all_patient_maps.values() for l in pid_to_t_l.values() if
-             all(o not in selected_t_l for o in l)),
-            start=list())
+                             all(o not in selected_t_l for o in l)),
+                            start=list())
         return remaining_t_l
 
     @staticmethod
@@ -848,10 +847,10 @@ class BaseASPEN(BaseDataset):
         # Transpose to keep time as last index for torch
         np_ecog_arr = kws['signal'].values.T
 
-        #if self.flatten_sensors_to_samples:
+        # if self.flatten_sensors_to_samples:
         # Always pass a list/array for channels, even if only 1, to maintain the dimension
         if channel_select is not None:
-            np_ecog_arr = np_ecog_arr[channel_select]#[None, :]
+            np_ecog_arr = np_ecog_arr[channel_select]  # [None, :]
 
         if transform is not None:
             # print("Apply transform to shape of " + str(np_ecog_arr.shape))
@@ -859,16 +858,16 @@ class BaseASPEN(BaseDataset):
 
         kws['signal_arr'] = torch.from_numpy(np_ecog_arr).float()
 
-        #extra_output_keys = ['sensor_ras_coord_arr']
+        # extra_output_keys = ['sensor_ras_coord_arr']
         extra_output_keys = [extra_output_keys] if isinstance(extra_output_keys, str) else extra_output_keys
         if isinstance(extra_output_keys, list):
             kws.update({k: torch.from_numpy(data_map[k]).float() if isinstance(data_map[k], np.ndarray) else data_map[k]
                         for k in extra_output_keys})
 
             if 'sensor_ras_coord_arr' in kws and channel_select is not None:
-#                print(channel_select)
-#                if not isinstance(channel_select[0], int):
-#                    print("WHAT")
+                #                print(channel_select)
+                #                if not isinstance(channel_select[0], int):
+                #                    print("WHAT")
                 kws['sensor_ras_coord_arr'] = kws['sensor_ras_coord_arr'][channel_select].unsqueeze(0)
 
         return kws
@@ -894,7 +893,7 @@ class BaseASPEN(BaseDataset):
         from matplotlib import pyplot as plt
         from IPython.display import display
         # offs = pd.Timedelta(offset_seconds)
-        #t_word_ix = self.word_index[self.word_index == i].index
+        # t_word_ix = self.word_index[self.word_index == i].index
         ix_k, data_k = self.selected_flat_keys[i]
         t_word_ix = self.flat_index_map[ix_k]
         offs_td = pd.Timedelta(offset_seconds, 's')
@@ -912,8 +911,8 @@ class BaseASPEN(BaseDataset):
 
         t_word_ecog_df = ecog_df.loc[t_word_slice].dropna()
         t_word_wav_df = speech_df.loc[t_word_slice]
-        #display(t_word_ecog_df.describe())
-        #scols = self.default_sensor_columns
+        # display(t_word_ecog_df.describe())
+        # scols = self.default_sensor_columns
         scols = self.selected_columns
 
         ecog_std = ecog_df[scols].std()
@@ -971,8 +970,8 @@ class HarvardSentences(BaseASPEN):
     )
 
     all_patient_maps = dict(UCSD={
-         4: [('UCSD', 4, 1, 1)],
-         5: [('UCSD', 5, 1, 1)],
+        4: [('UCSD', 4, 1, 1)],
+        5: [('UCSD', 5, 1, 1)],
         10: [('UCSD', 10, 1, 1)],
         18: [('UCSD', 18, 1, 1)],
         19: [('UCSD', 19, 1, 1)],
@@ -1003,7 +1002,10 @@ class HarvardSentences(BaseASPEN):
             ('sensor_selection', pipeline.IdentifyGoodAndBadSensors(sensor_selection=self.sensor_columns)),
             ('rescale_signal', pipeline.StandardNormSignal()),
             ('subsample', pipeline.SubsampleSignal()),
-            ('sent_from_start_stop', pipeline.SentCodeFromStartStopWordTimes())
+            ('sent_from_start_stop', pipeline.SentCodeFromStartStopWordTimes()),
+            # Creates listening, imagine, mouth
+             ('multi_task_start_stop', pipeline.MultiTaskStartStop()),
+
         ]
 
         parse_stim_steps = [
@@ -1013,57 +1015,80 @@ class HarvardSentences(BaseASPEN):
 
         audio_gate_steps = [
             ('Threshold', pipeline.PowerThreshold(speaking_window_samples=48000 // 16,
-                                                                          silence_window_samples=int(48000 * 1.5),
-                                                                          speaking_quantile_threshold=0.9,
-                                                                          #silence_threshold=0.001,
-                                                                          silence_quantile_threshold=0.05,
+                                                  silence_window_samples=int(48000 * 1.5),
+                                                  speaking_quantile_threshold=0.9,
+                                                  # silence_threshold=0.001,
+                                                  silence_quantile_threshold=0.05,
                                                   n_silence_windows=35000,
-                                                                          #silence_n_smallest=30000,
+                                                  # silence_n_smallest=30000,
                                                   stim_key='word_stim')),
             ('speaking_indices', pipeline.WindowSampleIndicesFromStim('stim_pwrt',
                                                                       target_onset_shift=pd.Timedelta(-.5, 's'),
-                                                                      # input are centers, and output is a window of .5 sec
-                                                                      # so to center it, move the point (center) back .25 secods
-                                                                      # so that extracted 0.5 sec window saddles the original center
-                                                                      #target_offset_shift=pd.Timedelta(-0.25, 's')
+                                                                      # input are centers, and output is a window of
+                                                                      # .5 sec so to center it, move the point (
+                                                                      # center) back .25 secods so that extracted 0.5
+                                                                      # sec window saddles the original center
+                                                                      # target_offset_shift=pd.Timedelta(-0.25, 's')
                                                                       target_offset_shift=pd.Timedelta(-0.5, 's'),
                                                                       max_target_region_size=300
-                                                                                )),
-             ('silence_indices', pipeline.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
-                                                                        # Center the extracted 0.5 second window
-                                                                        index_shift=pd.Timedelta(-0.25, 's'),
-                                                                        stim_value_remap=0
-                                                                                  ))]
+                                                                      )),
+            ('silence_indices', pipeline.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
+                                                                      # Center the extracted 0.5 second window
+                                                                      index_shift=pd.Timedelta(-0.25, 's'),
+                                                                      stim_value_remap=0
+                                                                      ))]
 
         p_map = {
+            # -----
+            # Directly from audio
             'audio_gate': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
                                    + audio_gate_steps + [('output', 'passthrough')]),
-            'audio_gate_word_level': Pipeline(parse_arr_steps + parse_input_steps
-                                              # Creates listening, imagine, mouth
-                                              + [('multi_task_start_stop', pipeline.MultiTaskStartStop())]
-                                              + parse_stim_steps
-                                              + audio_gate_steps + [('output', 'passthrough')]),
+            # ---
+            # Word level
+            'word_level': Pipeline(parse_arr_steps + parse_input_steps  + parse_stim_steps
+
+            # This stim will be used for silent indices
+             + [('stim_from_listening', pipeline.StimFromStartStopTimes(start_t_column='listening_region_start_t',
+                                                                        stop_t_column='listening_region_stop_t',
+                                                                        word_stim_output_name='listening_word_stim',
+                                                                        sentence_stim_output_name='listening_sentence_stim',
+                                                                        set_as_word_stim=False)),
+                 # Target index extraction
+                 ('speaking_indices', pipeline.WindowSampleIndicesFromStim('word_stim',  # 'word_stim',
+                                                                           target_onset_shift=pd.Timedelta(-.5, 's'),
+                                                                           target_offset_shift=pd.Timedelta(-0.5, 's'),
+                                                                           )),
+                 # Negative target index extraction
+                 ('silent_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',
+                                                                         target_onset_shift=pd.Timedelta(.5, 's'),
+                                                                         target_offset_shift=pd.Timedelta(-0.5, 's'),
+                                                                         stim_value_remap=0)),
+                ('output', 'passthrough')
+              ]),
+            # --
 
             'audio_gate_speaking_only': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
-                                                  # Slice out the generation of the silence stim data - only speaking
+                                                 # Slice out the generation of the silence stim data - only speaking
                                                  + audio_gate_steps[:-1] + [('output', 'passthrough')]),
 
             'audio_gate_imagine': Pipeline(parse_arr_steps + parse_input_steps + [
                 # Creates listening, imagine, mouth
-                ('multi_task_start_stop', pipeline.MultiTaskStartStop()),
+                #('multi_task_start_stop', pipeline.MultiTaskStartStop()),
                 # Creates the word_stim and sentence_stim from the start stop of imagine
                 ('stim_from_start_stop', pipeline.StimFromStartStopTimes(start_t_column='imagine_start_t',
                                                                          stop_t_column='imagine_stop_t')),
                 # creat stim for listening (i.e. not speaking or active) that we'll use for silent
                 ('stim_from_listening', pipeline.StimFromStartStopTimes(start_t_column='listening_region_start_t',
-                                                                         stop_t_column='listening_region_stop_t',
-                                                                         word_stim_output_name='listening_word_stim',
-                                                                         sentence_stim_output_name='listening_sentence_stim',
-                                                                         set_as_word_stim=False)),
-                ('speaking_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',#'word_stim',
+                                                                        stop_t_column='listening_region_stop_t',
+                                                                        word_stim_output_name='listening_word_stim',
+                                                                        sentence_stim_output_name='listening_sentence_stim',
+                                                                        set_as_word_stim=False)),
+                # Target index extraction - word stim is the imagine stim extracted above
+                ('speaking_indices', pipeline.WindowSampleIndicesFromStim('word_stim',
                                                                           target_onset_shift=pd.Timedelta(-.5, 's'),
                                                                           target_offset_shift=pd.Timedelta(-0.5, 's'),
                                                                           )),
+                # Negative target index extraction - use listening regions for negatives
                 ('silent_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',
                                                                         target_onset_shift=pd.Timedelta(.5, 's'),
                                                                         target_offset_shift=pd.Timedelta(-0.5, 's'),
@@ -1155,7 +1180,7 @@ class NorthwesternWords(BaseASPEN):
              ('MayoClinic', 24, 1, 3),
              ('MayoClinic', 24, 1, 4)],
 
-        #25: [('MayoClinic', 25, 1, 1),
+        # 25: [('MayoClinic', 25, 1, 1),
         #     ('MayoClinic', 25, 1, 2)],
 
         26: [('MayoClinic', 26, 1, 1),
@@ -1211,16 +1236,16 @@ class NorthwesternWords(BaseASPEN):
                             SN=syn_patient_set_map,
                             NW=nw_patient_set_map)
     fname_prefix_map = {'MayoClinic': 'MC', 'Synthetic': 'SN', 'Northwestern': 'NW'}
-    tuple_to_sets_str_map = {t:f"{l}-{p}-{i}"
+    tuple_to_sets_str_map = {t: f"{l}-{p}-{i}"
                              for l, p_d in all_patient_maps.items()
-                              for p, t_l in p_d.items()
-                               for i, t in enumerate(t_l)}
+                             for p, t_l in p_d.items()
+                             for i, t in enumerate(t_l)}
 
     #######
     ## Path handling
     @classmethod
     def make_filename(cls, patient, session, trial, location):
-        if location in cls.fname_prefix_map:#== 'Mayo Clinic':
+        if location in cls.fname_prefix_map:  # == 'Mayo Clinic':
             return f"{cls.fname_prefix_map.get(location)}{str(patient).zfill(3)}-SW-S{session}-R{trial}.mat"
         else:
             raise ValueError("Don't know location " + location)
@@ -1231,7 +1256,7 @@ class ChangNWW(NorthwesternWords):
     """
     Northwester-style with Chang pre-processing steps
     """
-    #data_subset = 'Preprocessed/Chang1'
+    # data_subset = 'Preprocessed/Chang1'
     data_subset = 'Preprocessed/Chang3'
     mat_d_signal_key = 'signal'
     default_signal_sample_rate = 200
@@ -1268,7 +1293,7 @@ class DatasetOptions(JsonSerializable):
     extra_output_keys: Optional[str] = None
     random_sensors_to_samples: bool = False
     flatten_sensors_to_samples: bool = False
-    #power_q: float = 0.7
+    # power_q: float = 0.7
     random_targets: bool = False
 
     n_dl_workers: int = 4
@@ -1323,10 +1348,11 @@ class DatasetOptions(JsonSerializable):
         logger.info("Test tuples: " + str(test_p_tuples))
 
         base_kws = dict(pre_processing_pipeline=self.pre_processing_pipeline
-                                                if pre_processing_pipeline is None
-                                                else pre_processing_pipeline,
+        if pre_processing_pipeline is None
+        else pre_processing_pipeline,
                         data_subset=self.data_subset,
-                        extra_output_keys=self.extra_output_keys.split(',') if self.extra_output_keys is not None else None,
+                        extra_output_keys=self.extra_output_keys.split(
+                            ',') if self.extra_output_keys is not None else None,
                         flatten_sensors_to_samples=self.flatten_sensors_to_samples)
 
         base_kws.update(base_data_kws)
@@ -1365,7 +1391,7 @@ class DatasetOptions(JsonSerializable):
             logger.info("-->Rolling channels transform<--")
             train_nww.append_transform(
                 RollDimension(roll_dim=0, min_roll=0,
-                                       max_roll=train_nww.sensor_count - 1)
+                              max_roll=train_nww.sensor_count - 1)
             )
         elif shuffle_channels:
             logger.info("-->Shuffle channels transform<--")
@@ -1446,5 +1472,5 @@ class HarvardSentencesDatasetOptions(DatasetOptions):
 if __name__ == """__main__""":
     hvs_tuples = HarvardSentences.make_tuples_from_sets_str('UCSD-28')
     hvs = HarvardSentences(hvs_tuples, flatten_sensors_to_samples=False,
-                                    pre_processing_pipeline='audio_gate_speaking_only')
+                           pre_processing_pipeline='audio_gate_speaking_only')
     hvs[0]
