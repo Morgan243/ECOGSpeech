@@ -6,7 +6,7 @@ from os.path import join as pjoin
 import os
 import json
 
-from typing import List, Optional, Type, ClassVar
+from typing import Optional
 
 from ecog_speech import utils
 logger = utils.get_logger('experiments.base')
