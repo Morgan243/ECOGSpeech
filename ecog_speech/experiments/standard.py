@@ -1,93 +1,10 @@
-import uuid
-import time
-from datetime import datetime
 from os.path import join as pjoin
 import json
 import torch
 from ecog_speech import datasets, utils
 from ecog_speech.models import base, sinc_ieeg
-from typing import Optional, Type
-from ecog_speech.experiments import base as bxp
-from ecog_speech.models import base as bmp
 
 logger = utils.get_logger(__name__)
-
-
-def make_model(options: Type[bmp.DNNModelOptions] = None, nww=None, model_name=None, model_kws=None, print_details=True):
-    """
-    Helper method - Given command-line options and a NorthwesterWords derived dataset, build the model
-    specified in the options.
-    """
-    assert not (nww is None and model_kws is None)
-    base_kws = dict()
-    if options is not None:
-        base_kws.update(dict(
-            #window_size=int(nww.sample_ixer.window_size.total_seconds() * nww.fs_signal),
-            # time/samples is the last dimension
-            window_size=int(nww.get_feature_shape()[-1]),
-            dropout=options.dropout,
-            dropout2d=options.dropout_2d,
-            batch_norm=options.batchnorm,
-            dense_width=options.dense_width,
-            activation_cls=options.activation_class,
-            print_details=print_details
-        ))
-
-    model_name = options.model_name if model_name is None else model_name
-
-    if model_name == 'base-sn':
-        if model_kws is None:
-            model_kws = dict(in_channels=len(nww.selected_columns),
-                             n_bands=options.sn_n_bands,
-                             n_cnn_filters=options.n_cnn_filters,
-                             sn_padding=options.sn_padding,
-                             sn_kernel_size=options.sn_kernel_size,
-                             in_channel_dropout_rate=options.in_channel_dropout_rate,
-                             fs=nww.fs_signal,
-                             cog_attn=options.cog_attn,
-                             **base_kws)
-        model = base.BaseMultiSincNN(**model_kws)
-    elif model_name == 'tnorm-base-sn':
-        if model_kws is None:
-            model_kws = dict(in_channels=len(nww.selected_columns),
-                             n_bands=options.sn_n_bands,
-                             n_cnn_filters=options.n_cnn_filters,
-                             sn_padding=options.sn_padding,
-                             sn_kernel_size=options.sn_kernel_size,
-                             in_channel_dropout_rate=options.in_channel_dropout_rate,
-                             fs=nww.fs_signal,
-                             cog_attn=options.cog_attn,
-                             band_spacing=options.sn_band_spacing,
-                             **base_kws)
-        model = sinc_ieeg.TimeNormBaseMultiSincNN(**model_kws)
-    elif 'tnorm-base-sn-v' in model_name:
-        if model_kws is None:
-            model_kws = dict(in_channels=len(nww.selected_columns),
-                             n_bands=options.sn_n_bands,
-                             n_cnn_filters=options.n_cnn_filters,
-                             sn_padding=options.sn_padding,
-                             sn_kernel_size=options.sn_kernel_size,
-                             in_channel_dropout_rate=options.in_channel_dropout_rate,
-                             fs=nww.fs_signal,
-                             cog_attn=options.cog_attn,
-                             band_spacing=options.sn_band_spacing,
-                             **base_kws)
-        model_cls = sinc_ieeg.get_model_cls_from_options_str(model_name)
-        model = model_cls(**model_kws)
-    elif model_name == 'base-cnn':
-        if model_kws is None:
-            model_kws = dict(in_channels=len(nww.selected_columns),
-                             in_channel_dropout_rate=options.in_channel_dropout_rate,
-                             n_cnn_filters=options.n_cnn_filters,
-                             # band_spacing=options.sn_band_spacing,
-                             **base_kws)
-        model = base.BaseCNN(**model_kws)
-    else:
-        msg = f"Unknown model name {model_name}"
-        raise ValueError(msg)
-
-    return model, model_kws
-
 
 #def train_and_test_model(model, dl_map, eval_dl_map, options, Trainer_CLS=base.Trainer,
 #                         **trainer_kws):
@@ -138,10 +55,10 @@ def make_model(options: Type[bmp.DNNModelOptions] = None, nww=None, model_name=N
 #    # Prep a results structure for saving - everything must be json serializable (no array objects)
 #
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from ecog_speech.experiments import base as bxp
 from ecog_speech.models import base as bmp
-from simple_parsing import ArgumentParser, choice, subgroups
+from simple_parsing import subgroups
 
 
 @dataclass

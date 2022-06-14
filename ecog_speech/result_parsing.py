@@ -6,6 +6,8 @@ from matplotlib import pyplot as plt
 from glob import glob
 import os
 import json
+
+import models
 from ecog_speech import datasets, feature_processing, experiments, utils
 from ecog_speech.models import base
 from tqdm.auto import tqdm
@@ -597,7 +599,7 @@ def load_model_from_results(results, base_model_path=None, **kws_update):
         #raise ValueError(f"Unrecognized model_name: {results['model_name']} in {result_file})")
 
     model_kws.update(kws_update)
-    model, _ = experiments.make_model(model_name=results['model_name'], model_kws=model_kws)
+    model, _ = models.make_model(model_name=results['model_name'], model_kws=model_kws)
 
     with open(model_path, 'rb') as f:
         model_state = torch.load(f)
@@ -671,7 +673,7 @@ def run_one(options, result_file):
                            # TODO: This may hide problems or cause issues?
                            sensor_columns=list(range(model_kws['in_channels'])))
 
-        model, _ = experiments.make_model(model_name=results['model_name'], model_kws=model_kws)
+        model, _ = models.make_model(model_name=results['model_name'], model_kws=model_kws)
 
         with open(model_path, 'rb') as f:
             model_state = torch.load(f)

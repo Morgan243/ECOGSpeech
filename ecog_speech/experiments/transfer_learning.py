@@ -15,7 +15,7 @@ import numpy as np
 
 import attr
 
-from ecog_speech.experiments.standard import make_model
+from sinc_ieeg import make_model
 from ecog_speech.experiments import standard, semi_supervised
 from ecog_speech.experiments import base as bxp
 from ecog_speech.models import base as bmp

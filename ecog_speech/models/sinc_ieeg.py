@@ -1,12 +1,16 @@
 import numpy as np
 import torch
 
+import base
+import base as bmp
+
 from ecog_speech.models.base import (BaseMultiSincNN, Unsqueeze,
                                      MultiChannelSincNN, CogAttn,
                                      Flatten, Permute,
                                      ScaleByConstant,
                                      MultiDim_Conv1D, MultiDim_BNorm1D)
 
+from ecog_speech.models import base as bmp
 from ecog_speech import datasets
 from typing import Optional, Type
 from dataclasses import dataclass, field
@@ -213,6 +217,7 @@ class TimeNormBaseMultiSincNN_v3(TimeNormBaseMultiSincNN):
 class TimeNormBaseMultiSincNN_v4(TimeNormBaseMultiSincNN):
 #    """Same as v3, only use LeakyReLU to use fewer parameters"""
     default_activation_cls = torch.nn.LeakyReLU
+
 
 class TimeNormBaseMultiSincNN_v5(TimeNormBaseMultiSincNN):
     """
@@ -670,6 +675,7 @@ class TimeNormBaseMultiSincNN_v12(TimeNormBaseMultiSincNN):
         layer_list += [Flatten(), self.dropout_cls(self.dropout)]
         return layer_list
 
+
 class TimeNormBaseMultiSincNN_v13(TimeNormBaseMultiSincNN):
     """
     User regular 2d batch norm at the band level following the
@@ -758,7 +764,6 @@ sinc_ieeg_v_map = {
                   TimeNormBaseMultiSincNN_v13]
 }
 
-from ecog_speech.models import base as bmp
 
 def get_model_cls_from_options_str(model_str):
     model = None
@@ -773,37 +778,6 @@ def get_model_cls_from_options_str(model_str):
         raise ValueError(f"Don't know model '{model_str}'")
 
     return model
-
-#    if 'v2' in model_str:
-#        model = TimeNormBaseMultiSincNN_v2
-#    elif 'v3' in model_str:
-#        model = TimeNormBaseMultiSincNN_v3
-#    elif 'v4' in model_str:
-#        model = TimeNormBaseMultiSincNN_v4
-#    elif 'v5' in model_str:
-#        model = TimeNormBaseMultiSincNN_v5
-#    elif 'v6' in model_str:
-#        model = TimeNormBaseMultiSincNN_v6
-#    elif 'v7' in model_str:
-#        model = TimeNormBaseMultiSincNN_v7
-#    elif 'v8' in model_str:
-#        model = TimeNormBaseMultiSincNN_v8
-#    elif 'v8' in model_str:
-#        model = TimeNormBaseMultiSincNN_v8
-#    elif 'v9' in model_str:
-#        model = TimeNormBaseMultiSincNN_v9
-#    elif 'v10' in model_str:
-#        model = TimeNormBaseMultiSincNN_v10
-#    elif 'v11' in model_str:
-#        model = TimeNormBaseMultiSincNN_v11
-#    elif 'v12' in model_str:
-#        model = TimeNormBaseMultiSincNN_v12
-#    elif 'v13' in model_str:
-#        model = TimeNormBaseMultiSincNN_v13
-#    else:
-#        raise ValueError(f"Don't know model '{model_str}'")
-
-#    return model
 
 
 @dataclass
@@ -855,3 +829,78 @@ class SincIEEGOptions(bmp.CNNModelOptions):
             reg_f = lambda m: model.bandwidth_regularizer(m, w=self.bw_reg_weight)
         return reg_f
 
+
+def make_model(options: Type[bmp.DNNModelOptions] = None, nww=None, model_name=None, model_kws=None, print_details=True):
+    """
+    Helper method - Given command-line options and a NorthwesterWords derived dataset, build the model
+    specified in the options.
+    """
+    assert not (nww is None and model_kws is None)
+    base_kws = dict()
+    if options is not None:
+        base_kws.update(dict(
+            #window_size=int(nww.sample_ixer.window_size.total_seconds() * nww.fs_signal),
+            # time/samples is the last dimension
+            window_size=int(nww.get_feature_shape()[-1]),
+            dropout=options.dropout,
+            dropout2d=options.dropout_2d,
+            batch_norm=options.batchnorm,
+            dense_width=options.dense_width,
+            activation_cls=options.activation_class,
+            print_details=print_details
+        ))
+
+    model_name = options.model_name if model_name is None else model_name
+
+    if model_name == 'base-sn':
+        if model_kws is None:
+            model_kws = dict(in_channels=len(nww.selected_columns),
+                             n_bands=options.sn_n_bands,
+                             n_cnn_filters=options.n_cnn_filters,
+                             sn_padding=options.sn_padding,
+                             sn_kernel_size=options.sn_kernel_size,
+                             in_channel_dropout_rate=options.in_channel_dropout_rate,
+                             fs=nww.fs_signal,
+                             cog_attn=options.cog_attn,
+                             **base_kws)
+        model = base.BaseMultiSincNN(**model_kws)
+    elif model_name == 'tnorm-base-sn':
+        if model_kws is None:
+            model_kws = dict(in_channels=len(nww.selected_columns),
+                             n_bands=options.sn_n_bands,
+                             n_cnn_filters=options.n_cnn_filters,
+                             sn_padding=options.sn_padding,
+                             sn_kernel_size=options.sn_kernel_size,
+                             in_channel_dropout_rate=options.in_channel_dropout_rate,
+                             fs=nww.fs_signal,
+                             cog_attn=options.cog_attn,
+                             band_spacing=options.sn_band_spacing,
+                             **base_kws)
+        model = TimeNormBaseMultiSincNN(**model_kws)
+    elif 'tnorm-base-sn-v' in model_name:
+        if model_kws is None:
+            model_kws = dict(in_channels=len(nww.selected_columns),
+                             n_bands=options.sn_n_bands,
+                             n_cnn_filters=options.n_cnn_filters,
+                             sn_padding=options.sn_padding,
+                             sn_kernel_size=options.sn_kernel_size,
+                             in_channel_dropout_rate=options.in_channel_dropout_rate,
+                             fs=nww.fs_signal,
+                             cog_attn=options.cog_attn,
+                             band_spacing=options.sn_band_spacing,
+                             **base_kws)
+        model_cls = get_model_cls_from_options_str(model_name)
+        model = model_cls(**model_kws)
+    elif model_name == 'base-cnn':
+        if model_kws is None:
+            model_kws = dict(in_channels=len(nww.selected_columns),
+                             in_channel_dropout_rate=options.in_channel_dropout_rate,
+                             n_cnn_filters=options.n_cnn_filters,
+                             # band_spacing=options.sn_band_spacing,
+                             **base_kws)
+        model = base.BaseCNN(**model_kws)
+    else:
+        msg = f"Unknown model name {model_name}"
+        raise ValueError(msg)
+
+    return model, model_kws
