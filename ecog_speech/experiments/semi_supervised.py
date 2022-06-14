@@ -1,6 +1,3 @@
-#import standard
-#from ecog_speech.experiments.standard import make_model, make_datasets_and_loaders, default_option_kwargs
-from ecog_speech.experiments import standard
 from ecog_speech import utils
 from dataclasses import dataclass, field
 import json
@@ -24,7 +21,7 @@ class SemisupervisedCodebookTaskOptions(bxp.TaskOptions):
 @dataclass
 class SemiSupervisedExperiment(bxp.Experiment):
     model: bmp.ModelOptions = subgroups(
-        {"cog2vec": base_transformers.Cog2VecOptions,},
+        {"cog2vec": base_transformers.Cog2VecOptions, 'dummy': base_transformers.Cog2VecOptions},
         default=base_transformers.Cog2VecOptions()
     )
 
@@ -92,23 +89,11 @@ class SemiSupervisedExperiment(bxp.Experiment):
         uid = res_dict['uid']
         name = res_dict['name']
 
-        if self.result_output.save_model_path is not None:
-            import os
-            p = self.result_output.save_model_path
-            if os.path.isdir(p):
-                p = os.path.join(p, uid + '.torch')
-            logger.info("Saving model to " + p)
-            torch.save(model.cpu().state_dict(), p)
-            res_dict['save_model_path'] = p
-
-        if self.result_output.result_dir is not None:
-            path = pjoin(self.result_output.result_dir, name)
-            logger.info(path)
-            res_dict['path'] = path
-            with open(path, 'w') as f:
-                json.dump(res_dict, f)
+        self.save_results(model, name, result_output=self.result_output, uid=uid, res_dict=res_dict)
 
         return trainer, eval_res_map
+
+
 
 
 if __name__ == """__main__""":

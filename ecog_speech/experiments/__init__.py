@@ -1,11 +1,3 @@
-from ecog_speech.experiments import standard, transfer_learning
-
-
-def get_all_model_hyperparam_names():
-    return standard.all_model_hyperparam_names + transfer_learning.all_model_hyperparam_names
-
-
-#all_model_hyperparam_names = get_all_model_hyperparam_names()
 
 
 def make_model(options=None, nww=None, model_name=None, model_kws=None, print_details=True):

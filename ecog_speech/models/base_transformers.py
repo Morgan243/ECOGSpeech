@@ -11,6 +11,10 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 import math
 from torch.nn import Module, Parameter
+from ecog_speech.models.base import Trainer
+import attr
+from tqdm.auto import tqdm
+
 
 # https://github.com/pytorch/audio/blob/a92ae3688afad51245d135a3f361fb7e20364d6d/torchaudio/models/wav2vec2/components.py#L718
 def _compute_mask_indices(
@@ -163,8 +167,9 @@ class PositionalEncoding(nn.Module):
 
 from dataclasses import dataclass, field
 from ecog_speech.models import base as bmp
-
+from ecog_speech.models import base_fine_tuners as base_ft
 from fairseq.modules import GradMultiply
+
 
 class CoG2Vec(torch.nn.Module):
     logit_temp = 0.1
@@ -584,8 +589,6 @@ class CoG2Vec(torch.nn.Module):
                     code_perplexity=code_ppl, prob_perplexity=prob_ppl,
                     temp=curr_temp)
 
-from ecog_speech.models import base_fine_tuners as base_ft
-
 
 class MultiChannelCog2Vec(torch.nn.Module):
     def __init__(self, input_shape, c2v_m: CoG2Vec, hidden_encoder='linear',
@@ -663,14 +666,11 @@ class MultiChannelCog2Vec(torch.nn.Module):
 
         return self.classifier_head(lin_in_arr)
 
-from ecog_speech.models.base import Trainer
-import attr
-from tqdm.auto import tqdm
+
 @attr.s
 class Cog2VecTrainer(Trainer):
     input_key = attr.ib('signal_arr')
     squeeze_first = True
-    #model_output_logits_key = 'x'
     model_output_logits_key = 'preds'
     ppl_weight = 100.
 
@@ -718,7 +718,6 @@ class Cog2VecTrainer(Trainer):
 
         self.model_map['model'].train()
         return loss_l
-
 
     def eval_on(self, dataloader, cb=None):
         model = self.model_map['model']

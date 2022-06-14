@@ -215,7 +215,6 @@ if __name__ == """__main__""":
     args = parser.parse_args()
     plt_label_region_opts: PlotLabelRegionOptions = args.plt_label_region_opts
 
-
     psubset = plt_label_region_opts.data_subset
     dataset_cls = datasets.BaseDataset.get_dataset_by_name(plt_label_region_opts.dataset_name)
     pre_proc_pipeline = plt_label_region_opts.pre_proc_pipeline

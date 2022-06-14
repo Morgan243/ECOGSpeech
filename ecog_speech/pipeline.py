@@ -183,7 +183,6 @@ class SubsampleSignal(DictTrf):
 class StandardNormSignal(DictTrf):
     signal_key = attr.ib('signal')
     output_key = attr.ib('signal')
-    #signal_rate_key = attr.ib('fs_signal')
     rate = attr.ib(2)
 
     def process(self, data_map):
@@ -193,8 +192,6 @@ class StandardNormSignal(DictTrf):
         return {self.output_key: (df - mu) / std}
 
 
-#from dataclasses import dataclass, field
-#@dataclass
 import torchaudio
 @attr.s
 @with_logger
@@ -235,6 +232,7 @@ class ExtractMFCC(DictTrf):
         audio_mfc_df.index = mfc_ix
 
         return dict(audio_mel_spec=audio_mfc_df)
+
 
 @attr.s
 @with_logger
@@ -684,6 +682,7 @@ class StimFromStartStopTimes(DictTrf):
             )
 
         return out
+
 
 def object_as_key_or_itself(key_or_value, remap=None):
     """

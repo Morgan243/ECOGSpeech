@@ -572,6 +572,7 @@ class MultiDim_Conv1D(torch.nn.Module):
 
 with_logger = utils.with_logger(prefix_name=__name__)
 
+
 @with_logger
 @attr.attrs
 class Trainer:
@@ -950,7 +951,6 @@ class Trainer:
 # Model Options
 @dataclass
 class ModelOptions(JsonSerializable):
-    #model_name: str = None
     non_hyperparams: ClassVar[Optional[list]] = ['device']
 
     @classmethod
@@ -962,7 +962,7 @@ class ModelOptions(JsonSerializable):
         non_model_params = self.get_all_model_hyperparam_names()
         return {k: v for k, v in self.__annotations__.items() if k not in non_model_params}
 
-    def make_model(self, dataset=None, **kws):
+    def make_model(self, dataset: Optional[datasets.BaseDataset] = None, in_channels=None, window_size=None):
         raise NotImplementedError()
 
     def make_model_regularizer_function(self, model):

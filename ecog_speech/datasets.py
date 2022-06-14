@@ -14,6 +14,10 @@ import torchvision.transforms
 from torch.utils import data as tdata
 
 from tqdm.auto import tqdm
+from dataclasses import dataclass, field
+from simple_parsing.helpers import JsonSerializable
+
+from typing import List, Optional, Type, ClassVar
 
 from ecog_speech import feature_processing, utils, pipeline
 from sklearn.pipeline import Pipeline
@@ -24,11 +28,6 @@ path_map = dict()
 pkg_data_dir = os.path.join(os.path.split(os.path.abspath(__file__))[0], '../data')
 
 os.environ['WANDB_CONSOLE'] = 'off'
-
-from dataclasses import dataclass, field
-from simple_parsing.helpers import JsonSerializable
-
-from typing import List, Optional, Type, ClassVar
 
 logger = utils.get_logger(__name__)
 
@@ -1048,7 +1047,7 @@ class HarvardSentences(BaseASPEN):
             'word_level': Pipeline(parse_arr_steps + parse_input_steps  + parse_stim_steps
 
             # This stim will be used for silent indices
-             + [('stim_from_listening', pipeline.StimFromStartStopTimes(start_t_column='listening_region_start_t',
+              + [('stim_from_listening', pipeline.StimFromStartStopTimes(start_t_column='listening_region_start_t',
                                                                         stop_t_column='listening_region_stop_t',
                                                                         word_stim_output_name='listening_word_stim',
                                                                         sentence_stim_output_name='listening_sentence_stim',
@@ -1274,6 +1273,8 @@ class ChangNWW(NorthwesternWords):
         raise NotImplementedError("ChangNWW with MFC pipeline components not in new skl framework")
 
 
+# ###########
+# Options ---
 @dataclass
 class DatasetOptions(JsonSerializable):
     dataset_name: str = None
@@ -1473,4 +1474,4 @@ if __name__ == """__main__""":
     hvs_tuples = HarvardSentences.make_tuples_from_sets_str('UCSD-28')
     hvs = HarvardSentences(hvs_tuples, flatten_sensors_to_samples=False,
                            pre_processing_pipeline='audio_gate_speaking_only')
-    hvs[0]
+    print(hvs[0])

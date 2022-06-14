@@ -1,18 +1,19 @@
 from dataclasses import dataclass, field
 from simple_parsing.helpers import JsonSerializable
 import uuid
+import torch
+from os.path import join as pjoin
+import os
+import json
 
 from typing import List, Optional, Type, ClassVar
 
-from ecog_speech.models.base import ModelOptions
-from ecog_speech.datasets import DatasetOptions
+from ecog_speech import utils
+logger = utils.get_logger('experiments.base')
 
 
 @dataclass
 class TaskOptions(JsonSerializable):
-    #task_name: str = None
-    #dataset: DatasetOptions = None
-
     n_epochs: int = 100
 
     learning_rate: float = 0.001
@@ -38,8 +39,6 @@ class ResultInputOptions(JsonSerializable):
 
 @dataclass
 class Experiment(JsonSerializable):
-    #model: ModelOptions = None
-    #task: TaskOptions = None
     result_output: ResultOptions = field(default_factory=ResultOptions)
     tag: Optional[str] = None
 
@@ -57,6 +56,28 @@ class Experiment(JsonSerializable):
         )
         return res_dict
 
+    @classmethod
+    def save_results(cls, model: torch.nn.Module,
+                     name: str,
+                     result_output: ResultOptions,
+                     uid: str,
+                     res_dict: dict):
+        if result_output.save_model_path is not None:
+            p = result_output.save_model_path
+            if os.path.isdir(p):
+                p = pjoin(p, uid + '.torch')
+            logger.info("Saving model to " + p)
+            torch.save(model.cpu().state_dict(), p)
+            res_dict['save_model_path'] = p
+
+        if result_output.result_dir is not None:
+            path = pjoin(result_output.result_dir, name)
+            logger.info(path)
+            res_dict['path'] = path
+            with open(path, 'w') as f:
+                json.dump(res_dict, f)
+
+        return res_dict
 
 # -----
 @dataclass
