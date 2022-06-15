@@ -31,7 +31,7 @@ class SemiSupervisedExperiment(bxp.Experiment):
         default=datasets.HarvardSentencesDatasetOptions())
 
     task: bxp.TaskOptions = subgroups(
-        {"semi_supervised": SemisupervisedCodebookTaskOptions},
+        {"semi_supervised": SemisupervisedCodebookTaskOptions, "dummy": SemisupervisedCodebookTaskOptions},
         default=SemisupervisedCodebookTaskOptions())
 
     def run(self):

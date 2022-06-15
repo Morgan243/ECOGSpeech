@@ -64,7 +64,7 @@ from simple_parsing import subgroups
 @dataclass
 class SupervisedSpeechDetectionTask(bxp.TaskOptions):
     task_name: str = 'supervised_speech_detection'
-    dataset = datasets.NorthwesternWordsDatasetOptions
+    dataset = datasets.NorthwesternWordsDatasetOptions()
 
 @dataclass
 class StandardExperiment(bxp.Experiment):
@@ -74,7 +74,7 @@ class StandardExperiment(bxp.Experiment):
         default=sinc_ieeg.SincIEEGOptions()
     )
 
-    task: SupervisedSpeechDetectionTask = SupervisedSpeechDetectionTask
+    task: SupervisedSpeechDetectionTask = SupervisedSpeechDetectionTask()
     #task: bxp.TaskOptions = bxp.TaskOptions('supervised_speech_detection',
     #                                        dataset=datasets.NorthwesternWordsDatasetOptions
                                             #dataset=datasets.DatasetOptions('nww', train_sets='MC-21-0')
