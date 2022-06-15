@@ -18,11 +18,11 @@ Pass `--help` for detailed usage
 - Run basic configrutaions of Base models and Northwestern words.
 - Example usage:
 ```bash
-python experiments.py --dropout=0.5 --dropout-2d --n-cnn-filters=32 --n-epochs=35
+python -m ecog_speech.experiments.standard --model.dropout=0.5 --model.dropout_2d --model.n_cnn_filters=32 --n_epochs=35
 ```
 - Add `--results-dir` option to save results in a `./results/` directory
 ```bash
-python experiments.py --result-dir=./results/ --dropout=0.5 --dropout-2d --n-cnn-filters=32 --n-epochs=35
+python -m ecog_speech.experiments.standard --result_dir=./results/ --model.dropout=0.5 --model.dropout_2d --model.n_cnn_filters=32 --n_epochs=35
 ```
 
 #### result_parsing.py
