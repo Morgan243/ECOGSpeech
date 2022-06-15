@@ -1,8 +1,6 @@
 import numpy as np
 import torch
 
-import base
-import base as bmp
 
 from ecog_speech.models.base import (BaseMultiSincNN, Unsqueeze,
                                      MultiChannelSincNN, CogAttn,
@@ -10,7 +8,6 @@ from ecog_speech.models.base import (BaseMultiSincNN, Unsqueeze,
                                      ScaleByConstant,
                                      MultiDim_Conv1D, MultiDim_BNorm1D)
 
-from ecog_speech.models import base as bmp
 from ecog_speech import datasets
 from typing import Optional, Type
 from dataclasses import dataclass, field
@@ -863,7 +860,7 @@ def make_model(options: Type[bmp.DNNModelOptions] = None, nww=None, model_name=N
                              fs=nww.fs_signal,
                              cog_attn=options.cog_attn,
                              **base_kws)
-        model = base.BaseMultiSincNN(**model_kws)
+        model = bmp.BaseMultiSincNN(**model_kws)
     elif model_name == 'tnorm-base-sn':
         if model_kws is None:
             model_kws = dict(in_channels=len(nww.selected_columns),
@@ -898,7 +895,7 @@ def make_model(options: Type[bmp.DNNModelOptions] = None, nww=None, model_name=N
                              n_cnn_filters=options.n_cnn_filters,
                              # band_spacing=options.sn_band_spacing,
                              **base_kws)
-        model = base.BaseCNN(**model_kws)
+        model = bmp.BaseCNN(**model_kws)
     else:
         msg = f"Unknown model name {model_name}"
         raise ValueError(msg)
