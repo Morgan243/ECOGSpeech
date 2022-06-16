@@ -1,4 +1,5 @@
 from sklearn.base import BaseEstimator, TransformerMixin
+import torchaudio
 import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
@@ -192,7 +193,6 @@ class StandardNormSignal(DictTrf):
         return {self.output_key: (df - mu) / std}
 
 
-import torchaudio
 @attr.s
 @with_logger
 class ExtractMFCC(DictTrf):
@@ -482,6 +482,7 @@ class SentCodeFromStartStopWordTimes(DictTrf):
                     #word_stim=word_stim, sentence_stim=sentence_stim
                     )
 
+
 # Create multi-task start stop that extracts the start and stop times
 # Create general stim from start stop times
 # Separate out current implementation of stim from startstop stimes to be sentence start stop extract?
@@ -592,6 +593,7 @@ class MultiTaskStartStop(DictTrf):
 
         return dict(word_start_stop_times=mtask_word_df)
 
+
 @attr.s
 @with_logger
 class ParseSensorRAS(DictTrf):
@@ -643,8 +645,6 @@ class StimFromStartStopTimes(DictTrf):
             is_word_m = gdf.word.str.upper() == gdf.word
 
             # Set each words region in this sentence within the word_stim
-            #for ii, (_gname, _gdf) in enumerate(gdf[is_word_m].groupby(self.word_code_column)):
-            #for ii, _gname in enumerate(gdf[is_word_m].sort_values('start_t')[self.word_code_column].values):
             for ii, _start_t in enumerate(gdf[is_word_m].sort_values('start_t').start_t.values):
                 #_gdf = gdf[is_word_m].query(f"{self.word_code_column} == '{_gname}'")
                 _gdf = gdf[is_word_m].pipe(lambda o: o[o.start_t == _start_t])

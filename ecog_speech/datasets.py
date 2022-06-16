@@ -1066,6 +1066,22 @@ class HarvardSentences(BaseASPEN):
               ]),
             # --
 
+            'region_classification': Pipeline(
+                parse_arr_steps + parse_input_steps + parse_stim_steps
+                + [
+                    ('listening_stim', pipeline.StimFromStartStopTimes(start_t_column='listening_region_start_t',
+                                                                        stop_t_column='listening_region_stop_t',
+                                                                        word_stim_output_name='listening_word_stim',
+                                                                        sentence_stim_output_name='listening_sentence_stim',
+                                                                        set_as_word_stim=False)),
+                    ('mouthing_stim', pipeline.StimFromStartStopTimes(start_t_column='mouth_region_start_t',
+                                                                      stop_t_column='mouth_region_stop_t',
+                                                                      word_stim_output_name='mouthing_region_stim',
+                                                                      sentence_stim_output_name='mouthing_sentence_stim',
+                                                                      set_as_word_stim=False)),
+                ]
+            ),
+
             'audio_gate_speaking_only': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
                                                  # Slice out the generation of the silence stim data - only speaking
                                                  + audio_gate_steps[:-1] + [('output', 'passthrough')]),
