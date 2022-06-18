@@ -194,7 +194,7 @@ class StandardExperiment(bxp.Experiment):
             #**test_perf_map,
             **{'train_' + k: v for k, v in performance_map['train'].items()},
             **{'cv_' + k: v for k, v in performance_map['cv'].items()},
-            **performance_map['test'],
+            **performance_map.get('test', dict()),
             **vars(self))
 
         uid = res_dict['uid']
