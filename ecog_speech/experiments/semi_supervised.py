@@ -84,7 +84,11 @@ class SemiSupervisedExperiment(bxp.Experiment):
             num_params=utils.number_of_model_params(model, trainable_only=False),
             model_kws=model_kws,
             **eval_res_map,
-            **vars(self))
+            model_options=vars(self.model),
+            task_options=vars(self.dataset),
+            dataset_options=vars(self.dataset),
+            result_output_options=vars(self.result_output)
+        )
 
         uid = res_dict['uid']
         name = res_dict['name']
