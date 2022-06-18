@@ -7,8 +7,8 @@ from glob import glob
 import os
 import json
 
-import models
 from ecog_speech import datasets, feature_processing, experiments, utils
+from ecog_speech import models
 from ecog_speech.models import base
 from tqdm.auto import tqdm
 import torch
