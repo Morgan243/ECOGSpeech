@@ -77,6 +77,7 @@ class SemiSupervisedExperiment(bxp.Experiment):
         eval_res_map = {k: trainer.eval_on(_dl).to_dict(orient='list') for k, _dl in eval_dl_map.items()}
 
         res_dict = self.create_result_dictionary(
+            model_name=self.model.model_name,
             batch_losses=losses,
             train_selected_columns=dataset_map['train'].selected_columns,  # dataset_map['train'].selected_columns,
             best_model_epoch=trainer.best_model_epoch,
