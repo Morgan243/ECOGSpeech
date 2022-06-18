@@ -2,6 +2,16 @@ from sklearn.metrics import classification_report
 from collections import namedtuple
 import logging
 import sys
+import json
+
+
+# https://stackoverflow.com/questions/42033142/is-there-an-easy-way-to-check-if-an-object-is-json-serializable-in-python
+def is_jsonable(x):
+    try:
+        json.dumps(x)
+        return True
+    except (TypeError, OverflowError):
+        return False
 
 
 def get_logger(logname='ecog_speech', console_level=logging.DEBUG, file_level=logging.DEBUG,
