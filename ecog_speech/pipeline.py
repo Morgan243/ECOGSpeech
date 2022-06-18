@@ -135,8 +135,11 @@ class ApplySensorSelection(DictTrf):
         signal_df = data_map[self.signal_key]
 
         if self.selection is None:
+            self.logger.info("Checking data_map for good_sensor_columns")
             selected_cols = data_map.get('good_sensor_columns')
+            self.logger.inf(f"Got: {selected_cols}")
         elif isinstance(self.selection, list):
+            self.logger.info(f"Selection of columns passed to sensor selection")
             selected_cols = self.selection
         else:
             raise ValueError(f"Don't understand selection: {self.selection}")
@@ -154,8 +157,10 @@ class ApplySensorSelection(DictTrf):
             else:
                 raise KeyError(f"Don't understand bad_sensor_method: {self.bad_sensor_method}")
 
-        r_val = {self.signal_key: sel_signal_df, 'selected_columns': selected_cols, 'bad_columns': bs_cols,
-                'bad_sensor_method': self.bad_sensor_method}
+        r_val = {self.signal_key: sel_signal_df,
+                 'selected_columns': selected_cols,
+                 'bad_columns': bs_cols,
+                 'bad_sensor_method': self.bad_sensor_method}
 
         # TODO: a way to apply a bunch of selection functions
         if 'sensor_ras_df' in data_map:
@@ -609,7 +614,28 @@ class ParseSensorRAS(DictTrf):
 
 @attr.s
 @with_logger
-class StimFromStartStopTimes(DictTrf):
+class NewStimFromRegionStartStopTimes(DictTrf):
+    start_t_column = attr.ib('start_t')
+    stop_t_column = attr.ib('stop_t')
+    label_column = attr.ib('word')
+    code_column = attr.ib('word_code')
+
+    stim_output_name = attr.ib('word_stim')
+
+    start_stop_time_input_name = attr.ib('word_start_stop_times')
+    series_with_timestamp_index = attr.ib('stim')
+    default_stim_value = attr.ib(0)
+
+    def process(self, data_map):
+        _word_df = data_map[self.start_stop_time_input_name].copy()
+        time_s = data_map[self.series_with_timestamp_index]
+        ix = time_s.index
+
+        output_stim = pd.Series(self.default_stim_value, index=ix, name=self.stim_output_name)
+
+@attr.s
+@with_logger
+class SentenceAndWordStimFromRegionStartStopTimes(DictTrf):
     start_t_column = attr.ib('start_t')
     stop_t_column = attr.ib('stop_t')
     sent_code_column = attr.ib('stim_sentcode')
@@ -645,9 +671,9 @@ class StimFromStartStopTimes(DictTrf):
             is_word_m = gdf.word.str.upper() == gdf.word
 
             # Set each words region in this sentence within the word_stim
-            for ii, _start_t in enumerate(gdf[is_word_m].sort_values('start_t').start_t.values):
+            for ii, _start_t in enumerate(gdf[is_word_m].sort_values(self.start_t_column)[self.start_t_column].values):
                 #_gdf = gdf[is_word_m].query(f"{self.word_code_column} == '{_gname}'")
-                _gdf = gdf[is_word_m].pipe(lambda o: o[o.start_t == _start_t])
+                _gdf = gdf[is_word_m].pipe(lambda o: o[o[self.start_t_column] == _start_t])
                 _gname = _gdf[self.word_code_column].unique()
                 assert len(_gname) == 1, f"{len(_gname)} unique words in {self.word_code_column} for sentence {gname}"
                 _gname = _gname[0]

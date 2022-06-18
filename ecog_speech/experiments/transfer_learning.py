@@ -3,9 +3,7 @@ import copy
 import time
 from datetime import datetime
 from os.path import join as pjoin
-import json
 
-import pandas as pd
 import torch
 from ecog_speech import utils
 from ecog_speech.models import base
@@ -15,15 +13,11 @@ import numpy as np
 
 import attr
 
-from sinc_ieeg import make_model
-from ecog_speech.experiments import standard, semi_supervised
+from ecog_speech.models.sinc_ieeg import make_model
 from ecog_speech.experiments import base as bxp
-from ecog_speech.models import base as bmp
-from ecog_speech.models import base_transformers as btf
 from ecog_speech import datasets
 from dataclasses import dataclass
 import json
-from simple_parsing.helpers import Serializable
 
 logger = utils.get_logger(__name__)
 
@@ -54,16 +48,27 @@ class TransferLearningResultParsingOptions(result_parsing.ResultParsingOptions):
 from simple_parsing import subgroups
 
 @dataclass
-class TransferLearningTask(bxp.TaskOptions):
-
-    task_name: str = "transfer_learning_training"
+class SpeechDetectionFineTuningTask(bxp.TaskOptions):
+    task_name: str = "speech_classification_fine_tuning"
     dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='UCSD-22')
     method: str = '2d_transformers'
 
+
 @dataclass
-class TransferLearningExperiment(bxp.Experiment):
+class RegionDetectionFineTuningTask(bxp.TaskOptions):
+    task_name: str = "region_classification_fine_tuning"
+    dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='UCSD-22',
+                                                               pre_processing_pipeline='region_classification')
+    method: str = '2d_transformers'
+
+
+@dataclass
+class FineTuningExperiment(bxp.Experiment):
     pretrained_result_input: bxp.ResultInputOptions = None
-    task: TransferLearningTask = TransferLearningTask()
+    task: SpeechDetectionFineTuningTask = subgroups(
+        {'speech_detection':SpeechDetectionFineTuningTask(),
+         'region_detection': RegionDetectionFineTuningTask()},
+        default=RegionDetectionFineTuningTask())
     # Don't need model options directly
     # TODO: make a fine tuning model options to capture at elast 'method' in task above
     #model: bmp.ModelOptions = subgroups(
@@ -166,18 +171,24 @@ class TransferLearningExperiment(bxp.Experiment):
                                                         **fine_tune_model_kws)
 
         dset_name = self.task.dataset.dataset_name
+        squeeze_target = False
         if dset_name == 'hvsmfc':
             criterion = torch.nn.MSELoss()
             target_key = 'target'
-        elif dset_name == 'hvs':
+        elif self.task.task_name == 'speech_classification_fine_tuning':
             pos_weight = torch.FloatTensor([0.5]).to(self.task.device)
             criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-            target_key = 'text_arr'
+            target_key = 'target_arr'
+        elif self.task.task_name == 'region_classification_fine_tuning':
+            #criterion = torch.nn.BCEWithLogitsLoss()
+            criterion = torch.nn.CrossEntropyLoss()
+            target_key = 'target_arr'
+            squeeze_target = True
         else:
-            raise ValueError()
-        #criterion(output, target)  # -log(sigmoid(1.5))
+            raise ValueError(f"Don't understand {dset_name} and {self.task.task_name}")
 
-        #trainer_cls = base.Trainer
+        logger.info(f"Criterion for {self.task.task_name}: {criterion} on {target_key}")
+
         trainer_cls = TLTrainer
         ft_trainer = trainer_cls(model_map=dict(model=fine_tune_model), opt_map=dict(),
                                   train_data_gen=dl_map['train'],
@@ -188,6 +199,7 @@ class TransferLearningExperiment(bxp.Experiment):
                                   target_key=target_key,
                                   criterion=criterion,
                                   device=self.task.device,
+                                 squeeze_target=squeeze_target
                                   )
 
         #with torch.no_grad():
@@ -355,10 +367,13 @@ class TransferLearningExperiment(bxp.Experiment):
 @attr.s
 class TLTrainer(base.Trainer):
     input_key = attr.ib('signal_arr')
+    squeeze_target = attr.ib(False)
     squeeze_first = True
 
     def loss(self, model_output_d, input_d, as_tensor=True):
-        crit_loss = self.criterion(model_output_d, input_d[self.target_key])
+        crit_loss = self.criterion(model_output_d,
+                                   input_d[self.target_key].squeeze() if self.squeeze_target
+                                   else input_d[self.target_key])
         return crit_loss
 
     def _eval(self, epoch_i, dataloader, model_key='model'):
@@ -376,11 +391,12 @@ class TLTrainer(base.Trainer):
                     input_d = {k: v.to(self.device) for k, v in _x.items()}
                     #input_arr = input_d[self.input_key]
                     #actual_arr = input_d[self.target_key]
-                    preds = model(input_d)
+                    m_output = model(input_d)
 
-                    actuals = input_d[self.target_key]
+                    #actuals = input_d[self.target_key]
 
-                    loss = self.criterion(preds, actuals)
+                    #loss = self.criterion(preds, actuals)
+                    loss = self.loss(m_output, input_d)
 
                     loss_l.append(loss.detach().cpu().item())
 
@@ -427,7 +443,9 @@ class TLTrainer(base.Trainer):
         #m_output = model(input_arr)
         m_output = model(input_d)
 
-        crit_loss = self.criterion(m_output, actual_arr)
+        #crit_loss = self.criterion(m_output, actual_arr)
+        #crit_loss = self.loss(m_output, actual_arr)
+        crit_loss = self.loss(m_output, input_d)
         res_d['crit_loss'] = crit_loss.detach().cpu().item()
 
         if self.model_regularizer is not None:
@@ -611,11 +629,11 @@ if __name__ == """__main__""":
     from simple_parsing import ArgumentParser
 
     parser = ArgumentParser(description="ASPEN+MHRG Transfer Learning experiments")
-    parser.add_arguments(TransferLearningExperiment, dest='transfer_learning')
+    parser.add_arguments(FineTuningExperiment, dest='transfer_learning')
     #parser.add_arguments(TransferLearningOptions, dest='transfer_learning')
     #parser.add_arguments(TransferLearningResultParsingOptions, dest='tl_result_parsing')
     args = parser.parse_args()
-    tl: TransferLearningExperiment = args.transfer_learning
+    tl: FineTuningExperiment = args.transfer_learning
     tl.run()
 
     #main_options: TransferLearningOptions = args.transfer_learning
