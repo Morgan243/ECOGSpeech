@@ -1013,7 +1013,7 @@ class HarvardSentences(BaseASPEN):
             ('subsample', pipeline.SubsampleSignal()),
             ('sent_from_start_stop', pipeline.SentCodeFromStartStopWordTimes()),
             # Creates listening, imagine, mouth
-             ('multi_task_start_stop', pipeline.MultiTaskStartStop()),
+            # ('multi_task_start_stop', pipeline.MultiTaskStartStop()),
 
         ]
 
@@ -1124,6 +1124,68 @@ class HarvardSentences(BaseASPEN):
                     ('output', 'passthrough')
                 ]
             ),
+
+            'dev': Pipeline(parse_arr_steps + parse_input_steps + [('new_mtss', pipeline.NewMultiTaskStartStop()),
+
+                                                                   ('speakinging_stim',
+                                                                    pipeline.SentenceAndWordStimFromRegionStartStopTimes(
+                                                                        start_t_column='start_t',
+                                                                        stop_t_column='stop_t',
+                                                                        word_stim_output_name='speaking_word_stim',
+                                                                        sentence_stim_output_name='sentence_stim',
+                                                                        set_as_word_stim=False)),
+                                                                   ('listening_stim',
+                                                                    pipeline.SentenceAndWordStimFromRegionStartStopTimes(
+                                                                        start_t_column='listening_word_start_t',
+                                                                        stop_t_column='listening_word_stop_t',
+                                                                        word_stim_output_name='listening_word_stim',
+                                                                        sentence_stim_output_name='listening_sentence_stim',
+                                                                        set_as_word_stim=False)),
+                                                                   ('mouthing_stim',
+                                                                    pipeline.SentenceAndWordStimFromRegionStartStopTimes(
+                                                                        start_t_column='mouthing_word_start_t',
+                                                                        stop_t_column='mouthing_word_stop_t',
+                                                                        word_stim_output_name='mouthing_word_stim',
+                                                                        sentence_stim_output_name='mouthing_sentence_stim',
+                                                                        set_as_word_stim=False)),
+                                                                   ('imagining_stim',
+                                                                    pipeline.SentenceAndWordStimFromRegionStartStopTimes(
+                                                                        start_t_column='imagining_word_start_t',
+                                                                        stop_t_column='imagining_word_stop_t',
+                                                                        word_stim_output_name='imagining_word_stim',
+                                                                        sentence_stim_output_name='imagining_sentence_stim',
+                                                                        set_as_word_stim=False)),
+
+                                                                   ('speaking_indices',
+                                                                    pipeline.WindowSampleIndicesFromStim('speaking_word_stim',
+                                                                                     # 'word_stim',
+                                                                                     target_onset_shift=pd.Timedelta(-.5, 's'),
+                                                                                     target_offset_shift=pd.Timedelta(-0.5, 's'),
+                                                                                     stim_value_remap=0)),
+
+                                                                   ('listening_indices',
+                                                                    pipeline.WindowSampleIndicesFromStim(
+                                                                        'listening_word_stim',
+                                                                        target_onset_shift=pd.Timedelta(-.5, 's'),
+                                                                        target_offset_shift=pd.Timedelta(-0.5, 's'),
+                                                                        stim_value_remap=1)),
+
+                                                                   ('mouthing_indices',
+                                                                    pipeline.WindowSampleIndicesFromStim(
+                                                                        'mouthing_word_stim',
+                                                                        target_onset_shift=pd.Timedelta(-.5, 's'),
+                                                                        target_offset_shift=pd.Timedelta(-0.5, 's'),
+                                                                        stim_value_remap=2)),
+
+                                                                   ('imagining_indices',
+                                                                    pipeline.WindowSampleIndicesFromStim(
+                                                                        'imagining_word_stim',
+                                                                        target_onset_shift=pd.Timedelta(-.5, 's'),
+                                                                        target_offset_shift=pd.Timedelta(-0.5, 's'),
+                                                                        stim_value_remap=3)),
+
+                                                                   ('output', 'passthrough')
+                                                                   ]),
 
             'audio_gate_speaking_only': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
                                                  # Slice out the generation of the silence stim data - only speaking
@@ -1366,7 +1428,8 @@ class DatasetOptions(JsonSerializable):
                                   pre_processing_pipeline=None,
                                   additional_transforms=None,
                                   # additional_train_transforms=None, additional_eval_transforms=None,
-                                  num_dl_workers=8) -> tuple:
+                                  #num_dl_workers=None
+                                  ) -> tuple:
         """
         Helper method to create instances of dataset_cls as specified in the command-line options and
         additional keyword args.
@@ -1428,11 +1491,11 @@ class DatasetOptions(JsonSerializable):
         if test_data_kws is not None:
             test_kws.update(test_data_kws)
 
-        dl_kws = dict(num_workers=num_dl_workers, batch_size=self.batch_size,
+        dl_kws = dict(num_workers=self.n_dl_workers, batch_size=self.batch_size,
                       batches_per_epoch=self.batches_per_epoch,
                       shuffle=False, random_sample=True)
         print(f"DL Keyword arguments: {dl_kws}")
-        eval_dl_kws = dict(num_workers=num_dl_workers, batch_size=512,
+        eval_dl_kws = dict(num_workers=self.n_dl_eval_workers, batch_size=512,
                            batches_per_epoch=self.batches_per_epoch,
                            shuffle=False, random_sample=False if self.batches_per_epoch is None else True)
 

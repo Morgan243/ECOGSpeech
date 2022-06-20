@@ -216,10 +216,18 @@ class FineTuningExperiment(bxp.Experiment):
         if dset_name == 'hvsmfc':
             pass
         elif dset_name == 'hvs':
+            target_shape = dataset_map['train'].get_target_shape()
             #eval_res_map = {k: ft_trainer.eval_on(_dl).to_dict(orient='list') for k, _dl in eval_dl_map.items()}
-            clf_str_map = utils.make_classification_reports(outputs_map)
-            performance_map = {part_name: utils.performance(outputs_d['actuals'], outputs_d['preds'] > 0.5)
-                               for part_name, outputs_d in outputs_map.items()}
+            kws = dict(threshold=(0.5 if target_shape == 1 else None))
+            clf_str_map = utils.make_classification_reports(outputs_map, **kws)
+            if target_shape == 1:
+                performance_map = {part_name: utils.performance(outputs_d['actuals'],
+                                                                outputs_d['preds'] > 0.5)
+                                   for part_name, outputs_d in outputs_map.items()}
+            else:
+                performance_map = {part_name: utils.multiclass_performance(outputs_d['actuals'],
+                                                                           outputs_d['preds'].argmax(1))
+                                   for part_name, outputs_d in outputs_map.items()}
 
         #####
         # Prep a results structure for saving - everything must be json serializable (no array objects)
