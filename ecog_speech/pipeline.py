@@ -745,12 +745,20 @@ class MultiTaskStartStop(DictTrf):
 @attr.s
 @with_logger
 class ParseSensorRAS(DictTrf):
+    ras_key = attr.ib('label_contact_common')
+
+    @staticmethod
+    def ras_to_frame(ras):
+        return pd.DataFrame(
+            # Pass to numpy array first to have it coalesce all the scalar string arrays into a multi dim object arr
+            np.array(ras),
+            # hardcoded columns for now
+            columns=['electrode_name', 'contact_number', 'x_coord', 'y_coord', 'z_coord']
+            # Use Pandas to try and convert everything to numbers
+        ).apply(pd.to_numeric, downcast='float', errors='ignore')
+
     def process(self, data_map):
-        ras_df = pd.DataFrame(data_map['label_contact_r_a_s'])
-
-        ras_df = ras_df.astype({i: 'float32' for i in range(1, 5)})
-
-        ras_df.set_axis(['electrode_name', 'contact_number', 'x_coord', 'y_coord', 'z_coord'], axis=1, inplace=True)
+        ras_df = self.ras_to_frame(data_map[self.ras_key])
         ras_arr = ras_df[['x_coord', 'y_coord', 'x_coord']].values
         return dict(sensor_ras_df=ras_df, sensor_ras_coord_arr=ras_arr)
 
@@ -792,17 +800,18 @@ class SentenceAndWordStimFromRegionStartStopTimes(DictTrf):
         _word_df = data_map['word_start_stop_times'].copy()
         stim = data_map['stim']
         ix = stim.index
-        sentence_stim = pd.Series(0, index=ix)
-        word_stim = pd.Series(0, index=ix)
+        sentence_stim = pd.Series(0, index=ix, name='speaking_sentence_stim')
+        word_stim = pd.Series(0, index=ix, name='speaking_word_stim')
 
         # # #
         code_maps = list()
         # We'll immediately +1 this, so we won't actually use zero for a word code - it will be silence
         working_word_ix = 0
-        #code_col_output_name = f'{self.word_code_column}_code'
         for i, (gname, gdf) in enumerate(_word_df.groupby(self.sent_code_column)):
-            sent_start_t = gdf[self.start_t_column].min()
-            sent_stop_t = gdf[self.stop_t_column].max()
+            _stim = stim[stim == gname]
+            sent_start_t, sent_stop_t = _stim.index.min(), _stim.index.max()
+            #sent_start_t = gdf[self.start_t_column].min()
+            #sent_stop_t = gdf[self.stop_t_column].max()
 
             #  Use index.get_indexer([item], method=...)
             start_i, stop_i = sentence_stim.index.get_indexer([sent_start_t, sent_stop_t], method='nearest')

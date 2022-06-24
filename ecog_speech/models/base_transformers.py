@@ -268,8 +268,9 @@ class CoG2Vec(torch.nn.Module):
 
         self.ras_pos_encoding = ras_pos_encoding
         if self.ras_pos_encoding:
-            #_, _F, _T = self.t_feat_o.shape
             self.ras_positional_enc = torch.nn.Sequential(
+                # Dimensions of RAS are [-128, 128] (?)
+                #bmp.ScaleByConstant(128.),
                 torch.nn.Linear(3, 32),
                 torch.nn.LeakyReLU(),
                 torch.nn.Linear(32, self.C * self.T),
@@ -472,7 +473,8 @@ class CoG2Vec(torch.nn.Module):
         if self.positional_enc is not None or self.ras_positional_enc is not None:
             if self.ras_pos_encoding:
                 if 'sensor_ras_coord_arr' not in input_d:
-                    raise KeyError("'sensor_ras_coord_arr not in batch data - ras data must be included to use it as pos")
+                    raise KeyError("'sensor_ras_coord_arr' not in batch data"
+                                   " - to use as pos. emb., use datasets extra_output_keys='sensor_ras_coord_arr'")
                 ras_arr = input_d['sensor_ras_coord_arr']
                 _, cT, cC = in_to_context.shape
                 #in_to_context = (in_to_context.reshape(B, cC*cT) + self.ras_positional_enc(ras_arr)).reshape(B, cT, cC)
@@ -614,7 +616,7 @@ class MultiChannelCog2Vec(torch.nn.Module):
         if isinstance(hidden_encoder, torch.nn.Module):
             self.hidden_encoder = hidden_encoder
         elif hidden_encoder == 'linear':
-            self.lin_dim = 10
+            self.lin_dim = 30
             self.dropout_rate = 0.75
             self.hidden_encoder = torch.nn.Sequential(
                 torch.nn.Dropout(self.dropout_rate),

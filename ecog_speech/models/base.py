@@ -102,6 +102,15 @@ class Select(torch.nn.Module):
         return x
 
 
+class FactorByConstant(torch.nn.Module):
+    def __init__(self, scale):
+        super(FactorByConstant, self).__init__()
+        self.scale = scale
+
+    def forward(self, x):
+        return x * self.scale
+
+
 class CogAttn(torch.nn.Module):
     def __init__(self, trailing_dim, in_channels=64, pooling_size=50):
         print("Cog attn trailing dim (..., bands, time): " + str(trailing_dim))
