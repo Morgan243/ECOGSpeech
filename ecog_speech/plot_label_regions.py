@@ -9,7 +9,12 @@ import os
 
 
 
-def plot_ucsd_sentence_regions(data_map):
+def plot_ucsd_sentence_regions(data_map,
+                               listen_cols=('listening_region_start_t', 'listening_region_stop_t'),
+                               speaking_cols=('speaking_region_start_t', 'speaking_region_stop_t'),
+                               mouthing_cols=('mouthing_region_start_t', 'mouthing_region_start_t'),
+                               imagining_cols=('imagining_region_start_t', 'imagining_region_stop_t')
+                               ):
     import matplotlib
     from tqdm.auto import tqdm
     ds_audio = data_map['audio'].resample('0.001S').mean()
@@ -26,14 +31,16 @@ def plot_ucsd_sentence_regions(data_map):
         plt_word_df = word_df[word_df.stim_sentcode.eq(sent_code)]
 
         region_tuples = [
+            (plt_word_df[listen_cols[0]].min(), plt_word_df[listen_cols[1]].max(), 'listening_region', 0.9),
+            (plt_word_df[speaking_cols[0]].min(), plt_word_df[speaking_cols[1]].max(), 'speaking_region', 0.85),
+            (plt_word_df[mouthing_cols[0]].min(), plt_word_df[mouthing_cols[1]].max(), 'mouth_region', 0.8),
+            (plt_word_df[imagining_cols[0]].min(), plt_word_df[imagining_cols[1]].max(), 'imagine_region', 0.75),
 
-            (plt_word_df['listening_region_start_t'].min(), plt_word_df['listening_region_stop_t'].max(),
-             'listening_region', 0.9),
-            (plt_word_df['start_t'].min(), plt_word_df['stop_t'].max(), 'speaking_region', 0.85),
-            (plt_word_df['mouth_region_start_t'].min(), plt_word_df['mouth_stop_t'].max(), 'mouth_region', 0.8),
-            (plt_word_df['imagine_region_start_t'].min(), plt_word_df['imagine_stop_t'].max(), 'imagine_region', 0.75),
-
-            # (plt_word_df['listening_region_start_t'].min(), plt_word_df['imagine_stop_t'].max(), 'entire_region', 1),
+         #   (plt_word_df['listening_region_start_t'].min(), plt_word_df['listening_region_stop_t'].max(),
+         #    'listening_region', 0.9),
+         #   (plt_word_df['start_t'].min(), plt_word_df['stop_t'].max(), 'speaking_region', 0.85),
+         #   (plt_word_df['mouth_region_start_t'].min(), plt_word_df['mouth_stop_t'].max(), 'mouth_region', 0.8),
+         #   (plt_word_df['imagine_region_start_t'].min(), plt_word_df['imagine_stop_t'].max(), 'imagine_region', 0.75),
         ]
 
 

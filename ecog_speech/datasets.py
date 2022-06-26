@@ -1125,7 +1125,8 @@ class HarvardSentences(BaseASPEN):
 #                ]
 #            ),
 
-            'region_classification': Pipeline(parse_arr_steps + parse_input_steps + [('new_mtss', pipeline.NewMultiTaskStartStop()),
+            'region_classification': Pipeline(parse_arr_steps + parse_input_steps
+                                              + [('new_mtss', pipeline.NewNewMultiTaskStartStop()),
 
                                                                    ('speakinging_stim',
                                                                     pipeline.SentenceAndWordStimFromRegionStartStopTimes(
@@ -1594,6 +1595,7 @@ class HarvardSentencesDatasetOptions(DatasetOptions):
 
 if __name__ == """__main__""":
     hvs_tuples = HarvardSentences.make_tuples_from_sets_str('UCSD-28')
-    hvs = HarvardSentences(hvs_tuples, flatten_sensors_to_samples=False,
-                           pre_processing_pipeline='audio_gate_speaking_only')
+    hvs = HarvardSentences(hvs_tuples, #flatten_sensors_to_samples=False,
+                           extra_output_keys='sensor_ras_coord_arr',
+                           pre_processing_pipeline='region_classification')
     print(hvs[0])

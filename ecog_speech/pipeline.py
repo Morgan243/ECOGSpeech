@@ -476,6 +476,79 @@ class SentCodeFromStartStopWordTimes(DictTrf):
                     #word_stim=word_stim, sentence_stim=sentence_stim
                     )
 
+@with_logger
+@attr.s
+class NewNewMultiTaskStartStop(DictTrf):
+    def process(self, data_map):
+        wsst_df = data_map['word_start_stop_times'].copy()
+        stim = data_map['stim'].copy()
+
+        wsst_df['speaking_word_length_t'] = wsst_df.stop_t - wsst_df.start_t
+
+        sent_code_reffs_d = {sent_code: sent_df.start_t - sent_df.start_t.min()
+                             for sent_code, sent_df in wsst_df.groupby('stim_sentcode')}
+
+        offset_from_start_s = pd.concat(sent_code_reffs_d.values(), axis=0).rename('time_from_speaking_start')
+        wsst_df = wsst_df.join(offset_from_start_s)
+
+
+        listening_sent_stim_s = stim[stim.between(1, 50)]
+        trial_regions_l = list()
+        for sent_code, sent_s in listening_sent_stim_s.groupby(listening_sent_stim_s):
+            trial_start_t = sent_s.index.min()
+            future_listening_s = listening_sent_stim_s.loc[sent_s.index.max():]
+            future_ne_s = future_listening_s[future_listening_s.ne(sent_code)]
+            if len(future_ne_s) > 0:
+                start_of_next_t = future_ne_s.index.min()
+            else:
+                self.logger.warning(f"Sent code {sent_code} has no future sentence dodes in front of it")
+                future_s = stim.loc[sent_s.index.max():]
+                start_of_next_t = future_s.index.max()
+
+            #trial_end_t = listening_sent_stim_s.loc[:start_of_next_t].index[-1]
+            trial_end_t = stim.loc[:start_of_next_t].index[-1]
+            trial_regions_l.append(dict(stim_sentcode=sent_code, trial_start_t=trial_start_t, trial_end_t=trial_end_t))
+
+        trial_regions_df = pd.DataFrame(trial_regions_l)
+        regions_l = list()
+
+        def _work(s):
+            return {f'{s.name}_start_t': s.index.min(),
+                    f'{s.name}_end_t': s.index.max()}
+
+        for ix, r in trial_regions_df.iterrows():
+            _s = stim.loc[r.trial_start_t: r.trial_end_t]
+            regions_l.append(dict(
+                stim_sentcode=r.stim_sentcode,
+                **_s[_s.lt(51)].rename('listening_region').pipe(_work),
+                **_s[_s.eq(51)].rename('speaking_region').pipe(_work),
+                **_s[_s.eq(52)].rename('mouthing_region').pipe(_work),
+                **_s[_s.eq(53)].rename('imagining_region').pipe(_work),
+            ))
+
+        regions_df = pd.DataFrame(regions_l)
+
+        wsst_df = wsst_df.merge(trial_regions_df, on='stim_sentcode').merge(regions_df, on='stim_sentcode')  #
+
+        start_offs_s = wsst_df.time_from_speaking_start
+        stop_offs_s = wsst_df.time_from_speaking_start + wsst_df.speaking_word_length_t
+        wsst_df = wsst_df.assign(
+            listening_word_start_t=wsst_df.listening_region_start_t + start_offs_s,
+            listening_word_stop_t=wsst_df.listening_region_start_t + stop_offs_s,
+
+            speaking_word_start_t=wsst_df.speaking_region_start_t + start_offs_s,
+            speaking_word_stop_t=wsst_df.speaking_region_start_t + stop_offs_s,
+
+            mouthing_word_start_t=wsst_df.mouthing_region_start_t + start_offs_s,
+            mouthing_word_stop_t=wsst_df.mouthing_region_start_t + stop_offs_s,
+
+            imagining_word_start_t=wsst_df.imagining_region_start_t + start_offs_s,
+            imagining_word_stop_t=wsst_df.imagining_region_start_t + stop_offs_s,
+        )
+
+        return dict(word_start_stop_times=wsst_df.set_index('start_t', drop=False))
+        
+        
 @attr.s
 @with_logger
 class NewMultiTaskStartStop(DictTrf):
@@ -560,19 +633,30 @@ class NewMultiTaskStartStop(DictTrf):
         #            'mouthing_region': stim.eq(53),
         #        }
         #for region_name, region_mask in regions_d.items():
+
+        ######
+        # For every speaking stim (i.e. =51) location, find the locations nearest the listening stop time
         _is = stim[stim.eq(51)].index.get_indexer(word_m_df['listening_region_stop_t'].values,
                                                   method='nearest')
+        # The times in the stim are where speaking started
         word_m_df['speaking_region_start_t'] = stim[stim.eq(51)].iloc[_is].index
+        #__is = stim[stim.eq(51)].index.get_indexer(stim[stim.eq(53)].index, method='nearest')
+        #word_m_df['speaking_region_stop_t'] = stim[stim.eq(51)].iloc[__is].index
 
+        ######
         # Then mouthing is performed so reference speaking
         _is = stim[stim.eq(53)].index.get_indexer(word_m_df['speaking_region_start_t'].values,
                                                   method='nearest')
         word_m_df['mouthing_region_start_t'] = stim[stim.eq(53)].iloc[_is].index
+        #__is = stim[stim.eq(53)].index.get_indexer(stim[stim.eq(52)].index, method='nearest')
+        #word_m_df['mouthing_region_stop_t'] = stim[stim.eq(53)].iloc[__is].index
 
         # Imagine is performed last, reference the mouthing start before it
         _is = stim[stim.eq(52)].index.get_indexer(word_m_df['mouthing_region_start_t'].values,
                                                   method='nearest')
         word_m_df['imagining_region_start_t'] = stim[stim.eq(52)].iloc[_is].index
+        #__is = stim[stim.eq(52)].index.get_indexer(stim[stim.lt(51)].index, method='nearest')
+        #word_m_df['imagining_region_stop_t'] = stim[stim.eq(52)].iloc[__is].index
 
         start_offs_s = word_m_df.time_from_speaking_start
         stop_offs_s = word_m_df.time_from_speaking_start + word_m_df.speaking_length_t
