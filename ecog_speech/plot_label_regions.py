@@ -297,7 +297,7 @@ def plot_label_inspection_figures(data_map):
     wrd_code_len_s = pd.Series({wrd_cd: len(ixes)
                                 for wrd_cd, ixes in data_map['sample_index_map'].items()}, name='n_ixes')
     n_speak_wins = len(wrd_code_len_s)
-    hist_title = f'Hist of Word Codes\' N={n_speak_wins} label windows' \
+    hist_title = f'Hist of Word Codes\' N={n_speak_wins} label windows ' \
                  f'{len(wrd_code_len_s)} unique word codes'
     hist_title += f'\nLongest regions: {wrd_code_len_s.nlargest(5).to_dict()}'
     ax = wrd_code_len_s.drop(0).plot.hist(title=hist_title)
