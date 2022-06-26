@@ -12,7 +12,7 @@ import os
 def plot_ucsd_sentence_regions(data_map,
                                listen_cols=('listening_region_start_t', 'listening_region_stop_t'),
                                speaking_cols=('speaking_region_start_t', 'speaking_region_stop_t'),
-                               mouthing_cols=('mouthing_region_start_t', 'mouthing_region_start_t'),
+                               mouthing_cols=('mouthing_region_start_t', 'mouthing_region_stop_t'),
                                imagining_cols=('imagining_region_start_t', 'imagining_region_stop_t')
                                ):
     import matplotlib

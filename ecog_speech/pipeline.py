@@ -507,23 +507,24 @@ class NewNewMultiTaskStartStop(DictTrf):
 
             #trial_end_t = listening_sent_stim_s.loc[:start_of_next_t].index[-1]
             trial_end_t = stim.loc[:start_of_next_t].index[-1]
-            trial_regions_l.append(dict(stim_sentcode=sent_code, trial_start_t=trial_start_t, trial_end_t=trial_end_t))
+            trial_regions_l.append(dict(stim_sentcode=sent_code, trial_start_t=trial_start_t, trial_stop_t=trial_end_t))
 
         trial_regions_df = pd.DataFrame(trial_regions_l)
         regions_l = list()
 
         def _work(s):
             return {f'{s.name}_start_t': s.index.min(),
-                    f'{s.name}_end_t': s.index.max()}
+                    f'{s.name}_stop_t': s.index.max()}
 
         for ix, r in trial_regions_df.iterrows():
-            _s = stim.loc[r.trial_start_t: r.trial_end_t]
+            _s = stim.loc[r.trial_start_t: r.trial_stop_t]
+            _s = _s[_s.isin((r.stim_sentcode, 0, 51, 52, 53))]
             regions_l.append(dict(
                 stim_sentcode=r.stim_sentcode,
-                **_s[_s.lt(51)].rename('listening_region').pipe(_work),
+                **_s[_s.eq(r.stim_sentcode)].rename('listening_region').pipe(_work),
                 **_s[_s.eq(51)].rename('speaking_region').pipe(_work),
-                **_s[_s.eq(52)].rename('mouthing_region').pipe(_work),
-                **_s[_s.eq(53)].rename('imagining_region').pipe(_work),
+                **_s[_s.eq(52)].rename('imagining_region').pipe(_work),
+                **_s[_s.eq(53)].rename('mouthing_region').pipe(_work),
             ))
 
         regions_df = pd.DataFrame(regions_l)
@@ -546,7 +547,10 @@ class NewNewMultiTaskStartStop(DictTrf):
             imagining_word_stop_t=wsst_df.imagining_region_start_t + stop_offs_s,
         )
 
-        return dict(word_start_stop_times=wsst_df.set_index('start_t', drop=False))
+        wsst_df = wsst_df.set_index('start_t', drop=False)
+        wsst_df.index.name = 'stim_start_t'
+
+        return dict(word_start_stop_times=wsst_df)
         
         
 @attr.s
