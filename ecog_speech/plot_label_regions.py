@@ -182,7 +182,7 @@ def plot_grid_of_label_regions(data_map):
     from tqdm.auto import tqdm
     from matplotlib.dates import DateFormatter
 
-    n_to_plt = len(data_map['sample_index_map']) - 1  # skip 0
+    n_to_plt = len(data_map['sample_index_map'])# - 1  # skip 0
     n_cols = 5
     n_rows = int(np.ceil(n_to_plt / (n_cols)))
 
@@ -190,7 +190,8 @@ def plot_grid_of_label_regions(data_map):
     axs = axs.reshape(-1)
     plt_scale = data_map['audio'].abs().quantile(.999)
 
-    word_codes_to_plt = set(data_map['sample_index_map'].keys()) - set([0])
+    #word_codes_to_plt = set(data_map['sample_index_map'].keys()) - set([0])
+    word_codes_to_plt = set(data_map['sample_index_map'].keys())# - set([0])
 
     sample_ix = 0
     ds_audio = data_map['audio'].resample('0.001S').mean()
@@ -201,11 +202,20 @@ def plot_grid_of_label_regions(data_map):
         fig, ax, ax2 = viz.plot_region_over_signal(ds_audio, wrd_ix.min(), wrd_ix.max(),
                                                     region_plot_kwargs=dict(ls='--'),
                                                     padding_time=pd.Timedelta('1.5s'), ax=_ax)
-        fig, ax, _ = viz.plot_region_over_signal(ds_audio,
-                                                  data_map['sample_index_map'][word_code][0].min(),
-                                                  data_map['sample_index_map'][word_code][-1].max(),
-                                                  padding_time=pd.Timedelta('1.5s'),
-                                                  region_plot_kwargs=dict(ls='-', zorder=0), ax=ax2, plot_signal=False)
+
+        code_min_t = min(ix.min() for ix in data_map['sample_index_map'][word_code])
+        code_max_t = max(ix.max() for ix in data_map['sample_index_map'][word_code])
+        try:
+            fig, ax, _ = viz.plot_region_over_signal(ds_audio,
+                                                     code_min_t,
+                                                     code_max_t,
+                                                      #data_map['sample_index_map'][word_code][0].min(),
+                                                      #data_map['sample_index_map'][word_code][-1].max(),
+                                                      padding_time=pd.Timedelta('1.5s'),
+                                                      region_plot_kwargs=dict(ls='-', zorder=0), ax=ax2, plot_signal=False)
+        except ValueError as e:
+            print(e)
+            raise
 
         # ax.set_ylim(-plt_scale, plt_scale)
         _ax.grid(True)
@@ -248,16 +258,48 @@ def plot_grid_of_silent_regions(data_map):
     return fig
 
 
+def plot_grid_of_index_by_key(data_map, sample_index_key):
+    n_to_plt = 50
+    # n_to_plt = len(data_map['sample_index_map']) - 1 # skip 0
+    n_cols = 5
+    n_rows = int(np.ceil(n_to_plt / (n_cols)))
+    ixes = data_map['sample_index_map'][sample_index_key]
+    n_ixes = len(ixes)
+    ix_source = data_map.get('index_source_map', dict()).get(sample_index_key, 'no source in map')
+
+    i_to_plt = np.random.choice(list(range(len(ixes))), n_cols * n_rows, replace=False)
+    ixes_to_plt = [ixes[_i] for _i in i_to_plt]
+
+    # ixes_to_plt = [data_map['sample_index_map'][0][_i]
+    #               for _i in np.random.randint(0, len(data_map['sample_index_map'][0]), n_cols*n_rows)]
+
+    fig, axs = matplotlib.pyplot.subplots(nrows=n_rows, ncols=n_cols, figsize=(35, 3.9 * n_rows))
+    axs = axs.reshape(-1)
+    plt_scale = data_map['audio'].abs().quantile(.999)
+    ds_audio = data_map['audio'].resample('0.001S').mean()
+    for i, (ix_i, ix) in enumerate(zip(i_to_plt, ixes_to_plt)):
+        ax = axs[i]
+        viz.plot_region_over_signal(ds_audio, ix.min(), ix.max(),
+                                     region_plot_kwargs=dict(ls='--'), ax=ax, )
+        ax.set_ylim(-plt_scale, plt_scale)
+        ax.set_title(f"Silent index {ix_i} of {n_ixes}")
+        ax.grid(True)
+
+    fig.tight_layout()
+    fig.suptitle(f"Showing {n_to_plt} samples of {n_ixes} for key = {sample_index_key} (source: {ix_source})",
+                 fontsize=20, y=1.01)
+    return fig
+
+
 def plot_label_inspection_figures(data_map):
     output_fig_map = dict()
 
     wrd_code_len_s = pd.Series({wrd_cd: len(ixes)
                                 for wrd_cd, ixes in data_map['sample_index_map'].items()}, name='n_ixes')
-    n_speak_wins = len(wrd_code_len_s.drop(0))
+    n_speak_wins = len(wrd_code_len_s)
     hist_title = f'Hist of Word Codes\' N={n_speak_wins} label windows' \
-                 f'\nN={wrd_code_len_s.loc[0]} silence samples (not inc. histo)\n' \
                  f'{len(wrd_code_len_s)} unique word codes'
-    hist_title += f'\nLongest regions: {wrd_code_len_s.drop(0).nlargest(5).index.tolist()}'
+    hist_title += f'\nLongest regions: {wrd_code_len_s.nlargest(5).to_dict()}'
     ax = wrd_code_len_s.drop(0).plot.hist(title=hist_title)
     ax.set_xlabel('N Windows in label region')
     ax.set_ylabel('N Word codes')
@@ -266,11 +308,11 @@ def plot_label_inspection_figures(data_map):
     # fig.patches.
     fig.patch.set_facecolor('white')
     fig.tight_layout()
-    output_fig_map['silent_region_grid'] = plot_grid_of_silent_regions(data_map)
-    output_fig_map['label_region_grid'] = plot_grid_of_label_regions(data_map)
-
+    #output_fig_map['silent_region_grid'] = plot_grid_of_silent_regions(data_map)
+    #output_fig_map['label_region_grid'] = plot_grid_of_label_regions(data_map)
     output_fig_map['word_code_win_histo'] = fig
-
+    output_fig_map.update(**{f'sample_index_key_{k}': plot_grid_of_index_by_key(data_map, k)
+                             for k in data_map['sample_index_map'].keys()})
 
     return output_fig_map
 
@@ -299,10 +341,11 @@ if __name__ == """__main__""":
     dataset_cls = datasets.BaseDataset.get_dataset_by_name(plt_label_region_opts.dataset_name)
     pre_proc_pipeline = plt_label_region_opts.pre_proc_pipeline
 
+    force = True
     def run_one(pid, pt, ptuples):
         output_path = f'{psubset}-{pt[1]}-{pt[3]}_label_inspection_plots.pdf'
         output_path = os.path.join(plt_label_region_opts.output_dir, output_path)
-        if pathlib.Path(output_path).is_file():
+        if pathlib.Path(output_path).is_file() and not force:
             print("Skipping " + str(output_path))
             return
         print("LOADING NWW")
@@ -313,8 +356,9 @@ if __name__ == """__main__""":
         fig_map = plot_label_inspection_figures(data_map)
 
         if psubset == 'UCSD':# and pre_proc_pipeline == 'audio_gate_imagine':
-            fig, _ = plot_ucsd_word_regions(data_map, include_listen=False, include_speaking=True,
-                                            include_imagine=False, include_mouth=False)
+            fig, _ = plot_ucsd_word_regions2(data_map,# include_listen=False, include_speaking=True,
+                                            #include_imagine=False, include_mouth=False
+                                             )
             fig_map['UCSD_words'] = fig
 
             fig, _ = plot_ucsd_sentence_regions(data_map)
@@ -327,7 +371,7 @@ if __name__ == """__main__""":
         pdf = PdfPages(output_path)
 
         for fig_name, _fig in fig_map.items():
-            pdf.savefig(_fig)
+            pdf.savefig(_fig, bbox_inches='tight')
         plt.close('all')
         pdf.close()
         del dset

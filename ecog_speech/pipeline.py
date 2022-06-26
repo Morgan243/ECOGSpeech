@@ -1041,15 +1041,22 @@ class WindowSampleIndicesFromStim(DictTrf):
                                         target_offset_shift=self.target_offset_shift,
                                         max_target_region_size=self.max_target_region_size,
                                         existing_sample_indices_map=data_map.get('sample_index_map'),
-                                        stim_value_remap=self.stim_value_remap)
+                                        existing_indices_sources_map=data_map.get('index_source_map'),
+                                        stim_value_remap=self.stim_value_remap,
+                                        source_name=self.stim_key)
 
     @classmethod
     def make_sample_indices(cls, stim, fs, win_size, target_onset_ref, target_onset_shift,
                             target_offset_ref, target_offset_shift,
                             #silence_value, silence_samples, silent_window_scale,
-                            max_target_region_size, existing_sample_indices_map=None, stim_value_remap=None):
+                            max_target_region_size, existing_sample_indices_map=None,
+                            existing_indices_sources_map=None,
+                            stim_value_remap=None,
+                            source_name=None):
 
         existing_sample_indices_map = dict() if existing_sample_indices_map is None else existing_sample_indices_map
+        existing_indices_sources_map = dict() if existing_indices_sources_map is None else existing_indices_sources_map
+
         expected_window_samples = int(fs * win_size.total_seconds())
         #label_region_sample_size = int(fs * label_region_size.total_seconds())
         cls.logger.info((fs, win_size))
@@ -1058,6 +1065,7 @@ class WindowSampleIndicesFromStim(DictTrf):
         # Will map of codes to list of indices into the stim signal:
         # word_code->List[pd.Index, pd.Index, ...]
         sample_indices = dict()
+        indices_sources = dict()
 
         # TODO: This will not work for constant stim value (i.e. True/False, 1/0)?
         # TODO: Need to review UCSD data and how to write something that will work for its regions
@@ -1096,6 +1104,7 @@ class WindowSampleIndicesFromStim(DictTrf):
 
             stim_key = object_as_key_or_itself(stim_value, stim_value_remap)
             sample_indices[stim_key] = sample_indices.get(stim_key, list()) + target_indices
+            indices_sources[stim_key] = indices_sources.get(stim_key, source_name)
 
         # Go through all samples - make noise if sample size is off (or should throw error?)
         for k, _s in sample_indices.items():
@@ -1109,5 +1118,10 @@ class WindowSampleIndicesFromStim(DictTrf):
             existing_sample_indices_map.update(sample_indices)
             sample_indices = existing_sample_indices_map
 
-        return dict(sample_index_map=sample_indices, n_samples_per_window=expected_window_samples)
+        if existing_indices_sources_map is not None:
+            existing_indices_sources_map.update(indices_sources)
+            indices_sources = existing_indices_sources_map
+
+        return dict(sample_index_map=sample_indices, n_samples_per_window=expected_window_samples,
+                    index_source_map=indices_sources)
 
