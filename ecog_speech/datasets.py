@@ -1047,144 +1047,85 @@ class HarvardSentences(BaseASPEN):
                                                                       stim_value_remap=0
                                                                       ))]
 
-        p_map = {
-            # -----
-            # Directly from audio
-            'audio_gate': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
-                                   + audio_gate_steps + [('output', 'passthrough')]),
-            # ---
-            # Word level
-            'word_level': Pipeline(parse_arr_steps + parse_input_steps  + parse_stim_steps
-
-            # This stim will be used for silent indices
-              + [('stim_from_listening', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='listening_region_start_t',
-                                                                                              stop_t_column='listening_region_stop_t',
-                                                                                              word_stim_output_name='listening_word_stim',
-                                                                                              sentence_stim_output_name='listening_sentence_stim',
-                                                                                              set_as_word_stim=False)),
-                 # Target index extraction
-                 ('speaking_indices', pipeline.WindowSampleIndicesFromStim('word_stim',  # 'word_stim',
-                                                                           target_onset_shift=pd.Timedelta(-.5, 's'),
-                                                                           target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                           )),
-                 # Negative target index extraction
-                 ('silent_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',
-                                                                         target_onset_shift=pd.Timedelta(.5, 's'),
-                                                                         target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                         stim_value_remap=0)),
-                ('output', 'passthrough')
-              ]),
-            # --
-
-#            'region_classification': Pipeline(
-#                parse_arr_steps + parse_input_steps #+ parse_stim_steps
-#                + [
-#                    ('speakinging_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='start_t',
-#                                                                                              stop_t_column='stop_t',
-#                                                                                              word_stim_output_name='word_stim',
-#                                                                                              sentence_stim_output_name='sentence_stim',
-#                                                                                              set_as_word_stim=False)),
-#                    ('listening_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='listen_start_t',
-#                                                                                            stop_t_column='listen_stop_t',
-#                                                                                            word_stim_output_name='listening_word_stim',
-#                                                                                            sentence_stim_output_name='listening_sentence_stim',
-#                                                                                            set_as_word_stim=False)),
-#                    ('mouthing_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='mouth_start_t',
-#                                                                                           stop_t_column='mouth_stop_t',
-#                                                                                           word_stim_output_name='mouthing_word_stim',
-#                                                                                           sentence_stim_output_name='mouthing_sentence_stim',
-#                                                                                           set_as_word_stim=False)),
-#                    ('imagine_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='imagine_start_t',
-#                                                                                          stop_t_column='imagine_stop_t',
-#                                                                                          word_stim_output_name='imagining_word_stim',
-#                                                                                          sentence_stim_output_name='imagining_sentence_stim',
-#                                                                                          set_as_word_stim=False)),
-#
-#                    ('listening_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',
-#                                                                             target_onset_shift=pd.Timedelta(.5, 's'),
-#                                                                             target_offset_shift=pd.Timedelta(-0.5, 's'),
-#                                                                             stim_value_remap=0)),
-#
-#                    ('imagining_indices', pipeline.WindowSampleIndicesFromStim('imagining_word_stim',
-#                                                                             target_onset_shift=pd.Timedelta(.5, 's'),
-#                                                                             target_offset_shift=pd.Timedelta(-0.5, 's'),
-#                                                                             stim_value_remap=1)),
-#
-#                    ('mouthing_indices', pipeline.WindowSampleIndicesFromStim('mouthing_word_stim',
-#                                                                               target_onset_shift=pd.Timedelta(.5, 's'),
-#                                                                               target_offset_shift=pd.Timedelta(-0.5,'s'),
-#                                                                               stim_value_remap=2)),
-#
-#                    ('speaking_indices', pipeline.WindowSampleIndicesFromStim('word_stim',  # 'word_stim',
-#                                                                              target_onset_shift=pd.Timedelta(-.5, 's'),
-#                                                                              target_offset_shift=pd.Timedelta(-0.5, 's'),
-#                                                                              stim_value_remap=3
-#                                                                              )),
-#
-#                    ('output', 'passthrough')
-#                ]
-#            ),
-
-            'region_classification': Pipeline(parse_arr_steps + parse_input_steps
-                                              + [('new_mtss', pipeline.NewNewMultiTaskStartStop()),
-
-                                                                   ('speakinging_stim',
-                                                                    pipeline.SentenceAndWordStimFromRegionStartStopTimes(
+        start_stop_steps = [('new_mtss', pipeline.NewNewMultiTaskStartStop()),
+                                                 # Stims from Start-stop-times
+                                                 ('speakinging_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(
                                                                         start_t_column='start_t',
                                                                         stop_t_column='stop_t',
                                                                         word_stim_output_name='speaking_word_stim',
                                                                         sentence_stim_output_name='sentence_stim',
                                                                         set_as_word_stim=False)),
-                                                                   ('listening_stim',
-                                                                    pipeline.SentenceAndWordStimFromRegionStartStopTimes(
+                                                 ('listening_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(
                                                                         start_t_column='listening_word_start_t',
                                                                         stop_t_column='listening_word_stop_t',
                                                                         word_stim_output_name='listening_word_stim',
                                                                         sentence_stim_output_name='listening_sentence_stim',
                                                                         set_as_word_stim=False)),
-                                                                   ('mouthing_stim',
-                                                                    pipeline.SentenceAndWordStimFromRegionStartStopTimes(
+                                                 ('mouthing_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(
                                                                         start_t_column='mouthing_word_start_t',
                                                                         stop_t_column='mouthing_word_stop_t',
                                                                         word_stim_output_name='mouthing_word_stim',
                                                                         sentence_stim_output_name='mouthing_sentence_stim',
                                                                         set_as_word_stim=False)),
-                                                                   ('imagining_stim',
-                                                                    pipeline.SentenceAndWordStimFromRegionStartStopTimes(
+                                                ('imagining_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(
                                                                         start_t_column='imagining_word_start_t',
                                                                         stop_t_column='imagining_word_stop_t',
                                                                         word_stim_output_name='imagining_word_stim',
                                                                         sentence_stim_output_name='imagining_sentence_stim',
-                                                                        set_as_word_stim=False)),
+                                                                        set_as_word_stim=False))]
 
-                                                                   ('speaking_indices',
-                                                                    pipeline.WindowSampleIndicesFromStim('speaking_word_stim',
-                                                                                     # 'word_stim',
-                                                                                     target_onset_shift=pd.Timedelta(-.5, 's'),
-                                                                                     target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                                     stim_value_remap=0)),
+        p_map = {
+            # -----
+            # Directly from audio
+            'audio_gate': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
+                                   + audio_gate_steps + [('output', 'passthrough')]),
+#            # ---
+#            # Word level
+#            'word_level': Pipeline(parse_arr_steps + parse_input_steps  + parse_stim_steps
+#
+#            # This stim will be used for silent indices
+#              + [('stim_from_listening', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='listening_region_start_t',
+#                                                                                              stop_t_column='listening_region_stop_t',
+#                                                                                              word_stim_output_name='listening_word_stim',
+#                                                                                              sentence_stim_output_name='listening_sentence_stim',
+#                                                                                              set_as_word_stim=False)),
+#                 # Target index extraction
+#                 ('speaking_indices', pipeline.WindowSampleIndicesFromStim('word_stim',  # 'word_stim',
+#                                                                           target_onset_shift=pd.Timedelta(-.5, 's'),
+#                                                                           target_offset_shift=pd.Timedelta(-0.5, 's'),
+#                                                                           )),
+#                 # Negative target index extraction
+#                 ('silent_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',
+#                                                                         target_onset_shift=pd.Timedelta(.5, 's'),
+#                                                                         target_offset_shift=pd.Timedelta(-0.5, 's'),
+#                                                                         stim_value_remap=0)),
+#                ('output', 'passthrough')
+#              ]),
+            # --
 
-                                                                   ('listening_indices',
-                                                                    pipeline.WindowSampleIndicesFromStim(
+            'region_classification': Pipeline(parse_arr_steps + parse_input_steps + start_stop_steps
+                                              + [
+                                                # Indices from Stim - these populate the class labels
+                                                ('speaking_indices', pipeline.WindowSampleIndicesFromStim(
+                                                                        'speaking_word_stim',
+                                                                        target_onset_shift=pd.Timedelta(-.5, 's'),
+                                                                        target_offset_shift=pd.Timedelta(-0.5, 's'),
+                                                                        stim_value_remap=0)),
+                                                 ('listening_indices', pipeline.WindowSampleIndicesFromStim(
                                                                         'listening_word_stim',
                                                                         target_onset_shift=pd.Timedelta(-.5, 's'),
                                                                         target_offset_shift=pd.Timedelta(-0.5, 's'),
                                                                         stim_value_remap=1)),
-
-                                                                   ('mouthing_indices',
-                                                                    pipeline.WindowSampleIndicesFromStim(
+                                                 ('mouthing_indices', pipeline.WindowSampleIndicesFromStim(
                                                                         'mouthing_word_stim',
                                                                         target_onset_shift=pd.Timedelta(-.5, 's'),
                                                                         target_offset_shift=pd.Timedelta(-0.5, 's'),
                                                                         stim_value_remap=2)),
-
-                                                                   ('imagining_indices',
-                                                                    pipeline.WindowSampleIndicesFromStim(
+                                                 ('imagining_indices', pipeline.WindowSampleIndicesFromStim(
                                                                         'imagining_word_stim',
                                                                         target_onset_shift=pd.Timedelta(-.5, 's'),
                                                                         target_offset_shift=pd.Timedelta(-0.5, 's'),
                                                                         stim_value_remap=3)),
-
                                                                    ('output', 'passthrough')
                                                                    ]),
 
@@ -1192,32 +1133,32 @@ class HarvardSentences(BaseASPEN):
                                                  # Slice out the generation of the silence stim data - only speaking
                                                  + audio_gate_steps[:-1] + [('output', 'passthrough')]),
 
-            'audio_gate_imagine': Pipeline(parse_arr_steps + parse_input_steps + [
-                # Creates listening, imagine, mouth
-                #('multi_task_start_stop', pipeline.MultiTaskStartStop()),
-                # Creates the word_stim and sentence_stim from the start stop of imagine
-                ('stim_from_start_stop', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='imagine_start_t',
-                                                                                              stop_t_column='imagine_stop_t')),
-                # creat stim for listening (i.e. not speaking or active) that we'll use for silent
-                ('stim_from_listening', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='listening_region_start_t',
-                                                                                             stop_t_column='listening_region_stop_t',
-                                                                                             word_stim_output_name='listening_word_stim',
-                                                                                             sentence_stim_output_name='listening_sentence_stim',
-                                                                                             set_as_word_stim=False)),
-                # Target index extraction - word stim is the imagine stim extracted above
-                ('speaking_indices', pipeline.WindowSampleIndicesFromStim('word_stim',
-                                                                          target_onset_shift=pd.Timedelta(-.5, 's'),
-                                                                          target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                          )),
-                # Negative target index extraction - use listening regions for negatives
-                ('silent_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',
-                                                                        target_onset_shift=pd.Timedelta(.5, 's'),
-                                                                        target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                        stim_value_remap=0,
-                                                                        )),
-
-                ('output', 'passthrough')
-            ]),
+#            'audio_gate_imagine': Pipeline(parse_arr_steps + parse_input_steps + [
+#                # Creates listening, imagine, mouth
+#                #('multi_task_start_stop', pipeline.MultiTaskStartStop()),
+#                # Creates the word_stim and sentence_stim from the start stop of imagine
+#                ('stim_from_start_stop', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='imagine_start_t',
+#                                                                                              stop_t_column='imagine_stop_t')),
+#                # creat stim for listening (i.e. not speaking or active) that we'll use for silent
+#                ('stim_from_listening', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='listening_region_start_t',
+#                                                                                             stop_t_column='listening_region_stop_t',
+#                                                                                             word_stim_output_name='listening_word_stim',
+#                                                                                             sentence_stim_output_name='listening_sentence_stim',
+#                                                                                             set_as_word_stim=False)),
+#                # Target index extraction - word stim is the imagine stim extracted above
+#                ('speaking_indices', pipeline.WindowSampleIndicesFromStim('word_stim',
+#                                                                          target_onset_shift=pd.Timedelta(-.5, 's'),
+#                                                                          target_offset_shift=pd.Timedelta(-0.5, 's'),
+#                                                                          )),
+#                # Negative target index extraction - use listening regions for negatives
+#                ('silent_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',
+#                                                                        target_onset_shift=pd.Timedelta(.5, 's'),
+#                                                                        target_offset_shift=pd.Timedelta(-0.5, 's'),
+#                                                                        stim_value_remap=0,
+#                                                                        )),
+#
+#                ('output', 'passthrough')
+#            ]),
 
         }
         p_map['default'] = p_map[default]
