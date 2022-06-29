@@ -857,7 +857,8 @@ class NewStimFromRegionStartStopTimes(DictTrf):
     start_t_column = attr.ib('start_t')
     stop_t_column = attr.ib('stop_t')
     label_column = attr.ib('word')
-    code_column = attr.ib('word_code')
+    #code_column = attr.ib('word_code')
+    group_code_column = attr.ib('stim_sentcode')
 
     stim_output_name = attr.ib('word_stim')
 
@@ -869,8 +870,39 @@ class NewStimFromRegionStartStopTimes(DictTrf):
         _word_df = data_map[self.start_stop_time_input_name].copy()
         time_s = data_map[self.series_with_timestamp_index]
         ix = time_s.index
+        t_cols = [self.start_t_column, self.stop_t_column]
 
         output_stim = pd.Series(self.default_stim_value, index=ix, name=self.stim_output_name)
+
+        code_maps = list()
+        working_ix = 0
+        for i, (gname, gdf) in enumerate(_word_df.groupby(self.group_code_column)):
+            # Spoken is word is all caps string and other fields are replicated across all words
+            is_word_m = gdf.word.str.upper() == gdf.word
+            # Drop duplicates on the times - in case regions are selected, that have repeating values, we only want
+            # a single stim
+            dd_word_df = gdf[is_word_m].drop_duplicates(subset=t_cols).sort_values(self.start_t_column)
+
+            for ii, (ix, r) in enumerate(dd_word_df.iterrows()):
+                _label_val = r[self.label_column]
+                _start_t = r[self.start_t_column]
+                _stop_t = r[self.stop_t_column]
+
+                _start_i, _stop_i = output_stim.index.get_indexer([_start_t, _stop_t], method='nearest')
+
+                _code = (working_ix := working_ix + 1)
+                code_maps.append({self.group_code_column: gname,
+                                  self.label_column: _label_val,
+                                  #self.word_code_map_output_name: _code,
+                                  'start_t': _start_t})
+                output_stim.iloc[_start_i: _stop_i] = _code
+
+        out_d = {self.stim_output_name: output_stim.rename(self.stim_output_name),
+                 #self.sentence_stim_output_name: sentence_stim.rename(self.sentence_stim_output_name)
+                 }
+
+        return out_d
+
 
 @attr.s
 @with_logger
@@ -881,6 +913,7 @@ class SentenceAndWordStimFromRegionStartStopTimes(DictTrf):
     word_code_column = attr.ib('word')
     word_stim_output_name = attr.ib('word_stim')
     word_code_map_output_name = attr.ib('word_code')
+
     set_as_word_stim = attr.ib(True)
     sentence_stim_output_name = attr.ib('sentence_stim')
 
@@ -934,8 +967,8 @@ class SentenceAndWordStimFromRegionStartStopTimes(DictTrf):
                                   self.word_code_map_output_name: word_code, 'start_t': _start_t})
                 word_stim.iloc[_start_i: _stop_i] = word_code
 
-        out = {self.word_stim_output_name: word_stim,
-               self.sentence_stim_output_name: sentence_stim,
+        out = {self.word_stim_output_name: word_stim.rename(self.word_stim_output_name),
+               self.sentence_stim_output_name: sentence_stim.rename(self.sentence_stim_output_name),
                 #'wsst_df': wsst_df
                 }
 
@@ -1097,9 +1130,10 @@ class WindowSampleIndicesFromStim(DictTrf):
             assert s_ix.is_unique, f"Index between {target_start_t} and {target_stop_t} is not unique!"
             target_start_ixes = s_ix.tolist()#[:-expected_window_samples]
 
+            to_iter = target_start_ixes[:max_target_region_size] if max_target_region_size is not None else target_start_ixes
             # Go through the labeled region indices and pull a window of data
             target_indices = [stim.loc[offs:offs + win_size].iloc[:expected_window_samples].index
-                                for offs in target_start_ixes[:max_target_region_size]
+                                for offs in to_iter#target_start_ixes[:max_target_region_size]
                                     if len(stim.loc[offs:offs + win_size]) >= expected_window_samples]
 
             stim_key = object_as_key_or_itself(stim_value, stim_value_remap)
@@ -1107,10 +1141,15 @@ class WindowSampleIndicesFromStim(DictTrf):
             indices_sources[stim_key] = indices_sources.get(stim_key, source_name)
 
         # Go through all samples - make noise if sample size is off (or should throw error?)
+        size_d = dict()
         for k, _s in sample_indices.items():
+            size_d[k] = len(_s)
+            #cls.logger.info(f"Extracted {len(_s)} from stim_value={stim_value}")
             for i, _ixs in enumerate(_s):
                 if len(_ixs) != expected_window_samples:
                     cls.logger.warning(f"[{k}][{i}] ({len(_ixs)}): {_ixs}")
+
+        cls.logger.info(f"Number of samples keys in sample index: {pd.Series(size_d).value_counts().to_dict()}")
 
         # Debug code printing the unique lengths of each window for each word code
         #print({k : sorted(list(set(map(len, _s)))) for k, _s in sample_indices.items()})
