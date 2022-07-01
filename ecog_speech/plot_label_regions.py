@@ -8,7 +8,6 @@ import numpy as np
 import os
 
 
-
 def plot_ucsd_sentence_regions(data_map,
                                listen_cols=('listening_region_start_t', 'listening_region_stop_t'),
                                speaking_cols=('speaking_region_start_t', 'speaking_region_stop_t'),
@@ -50,8 +49,7 @@ def plot_ucsd_sentence_regions(data_map,
     return fig, axs
 
 
-def plot_ucsd_word_regions2(data_map, start_stop_label_tuples_l=(('speaking', 'start_t', 'stop_t', 'word'),),
-                            #include_listen=None, include_speaking=None, include_imagine=None, include_mouth=None,
+def plot_ucsd_word_regions(data_map, start_stop_label_tuples_l=(('speaking', 'start_t', 'stop_t', 'word'),),
                             legend_kws=None, code_col=None,
                             **region_plot_overrides):
     import matplotlib
@@ -117,9 +115,7 @@ def plot_ucsd_word_regions2(data_map, start_stop_label_tuples_l=(('speaking', 's
     return fig, axs
 
 
-
-
-def plot_ucsd_word_regions(data_map, include_listen=None, include_speaking=None,
+def plot_ucsd_word_regions_old(data_map, include_listen=None, include_speaking=None,
                            include_imagine=None, include_mouth=None,
                            legend_kws=None, code_col=None,
                            **region_plot_overrides):
@@ -282,11 +278,11 @@ def plot_grid_of_index_by_key(data_map, sample_index_key):
         viz.plot_region_over_signal(ds_audio, ix.min(), ix.max(),
                                      region_plot_kwargs=dict(ls='--'), ax=ax, )
         ax.set_ylim(-plt_scale, plt_scale)
-        ax.set_title(f"Silent index {ix_i} of {n_ixes}")
+        ax.set_title(f"{ix_source} index {ix_i} of {n_ixes}")
         ax.grid(True)
 
     fig.tight_layout()
-    fig.suptitle(f"Showing {n_to_plt} samples of {n_ixes} for key = {sample_index_key} (source: {ix_source})",
+    fig.suptitle(f"Showing random {n_to_plt} samples of {n_ixes} for key = {sample_index_key} (source: {ix_source})",
                  fontsize=20, y=1.01)
     return fig
 
