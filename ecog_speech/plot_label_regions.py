@@ -254,10 +254,7 @@ def plot_grid_of_silent_regions(data_map):
     return fig
 
 
-def plot_grid_of_index_by_key(data_map, sample_index_key):
-    n_to_plt = 50
-    # n_to_plt = len(data_map['sample_index_map']) - 1 # skip 0
-    n_cols = 5
+def plot_grid_of_index_by_key(data_map, sample_index_key, n_to_plt=50, n_cols=5):
     n_rows = int(np.ceil(n_to_plt / (n_cols)))
     ixes = data_map['sample_index_map'][sample_index_key]
     n_ixes = len(ixes)
