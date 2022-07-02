@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from ecog_speech import visuals as viz
 import pandas as pd
 import matplotlib
+from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 import os
 
@@ -314,9 +315,70 @@ def plot_label_inspection_figures(data_map):
 class PlotLabelRegionOptions:
     output_dir: str = './'
     dataset_name: str = 'hvs'
-    data_subset: str = 'UCSD'
+    dataset_location_subset: str = 'UCSD'
     pre_proc_pipeline: str = 'word_level'
     n_workers: int = 2
+    overwrite_existing: bool = False
+
+
+def run_plots_for_dataset(output_path, dataset_cls, patient_tuple, pre_processing_pipeline):
+    loc_subset = patient_tuple[0]
+    patient_tuples = [patient_tuple]
+
+    dset = dataset_cls(patient_tuples=patient_tuples, pre_processing_pipeline=pre_processing_pipeline)
+
+    data_map = dset.data_maps[patient_tuple]
+    fig_map = dict()
+    if loc_subset == 'UCSD':  # and pre_proc_pipeline == 'audio_gate_imagine':
+        fig, _ = plot_ucsd_sentence_regions(data_map)
+        fig.suptitle(f'Sentences for : {patient_tuple}', y=1., fontsize=20, ha='center', va='center')
+        fig_map['UCSD_sentence'] = fig
+
+        fig, _ = plot_ucsd_word_regions(data_map)
+        fig.suptitle(f'Words for : {patient_tuple}', y=1., fontsize=20, ha='center', va='center')
+        fig_map['UCSD_words'] = fig
+
+    inspect_fig_map = plot_label_inspection_figures(data_map)
+    fig_map.update(inspect_fig_map)
+
+    print("saving plots")
+    # create a PdfPages object
+    pdf = PdfPages(output_path)
+
+    for fig_name, _fig in fig_map.items():
+        pdf.savefig(_fig, bbox_inches='tight')
+    plt.close('all')
+    pdf.close()
+    del dset
+    del pdf
+    print("All done")
+
+
+def run(options: PlotLabelRegionOptions):
+    loc_subset = options.dataset_location_subset
+    dataset_cls = datasets.BaseDataset.get_dataset_by_name(options.dataset_name)
+    pre_proc_pipeline = options.pre_proc_pipeline
+
+    from multiprocessing import Pool
+    p = Pool(options.n_workers) if options.n_workers > 1 else None
+
+    for pid, ptuples in tqdm(dataset_cls.all_patient_maps[loc_subset].items()):
+        for pt in ptuples:
+            output_path = f'{loc_subset}-{pt[1]}-{pt[3]}_label_inspection_plots.pdf'
+            output_path = os.path.join(options.output_dir, output_path)
+            kwds = dict(output_path=output_path,
+                        dataset_cls=dataset_cls,
+                        patient_tuple=pt,
+                        pre_processing_pipeline=pre_proc_pipeline)
+
+            if p is not None:
+                p.apply_async(run_plots_for_dataset, kwds=kwds)
+            else:
+                run_plots_for_dataset(**kwds)
+
+    if p is not None:
+        p.close()
+        p.join()
 
 
 if __name__ == """__main__""":
@@ -329,58 +391,4 @@ if __name__ == """__main__""":
     parser.add_arguments(PlotLabelRegionOptions, dest='plt_label_region_opts')
     args = parser.parse_args()
     plt_label_region_opts: PlotLabelRegionOptions = args.plt_label_region_opts
-
-    psubset = plt_label_region_opts.data_subset
-    dataset_cls = datasets.BaseDataset.get_dataset_by_name(plt_label_region_opts.dataset_name)
-    pre_proc_pipeline = plt_label_region_opts.pre_proc_pipeline
-
-    force = True
-    def run_one(pid, pt, ptuples):
-        output_path = f'{psubset}-{pt[1]}-{pt[3]}_label_inspection_plots.pdf'
-        output_path = os.path.join(plt_label_region_opts.output_dir, output_path)
-        if pathlib.Path(output_path).is_file() and not force:
-            print("Skipping " + str(output_path))
-            return
-        print("LOADING NWW")
-        dset = dataset_cls(patient_tuples=[pt], pre_processing_pipeline=pre_proc_pipeline)
-        print("Getting data map")
-        data_map = dset.data_maps[pt]
-        print("Plotting")
-        fig_map = plot_label_inspection_figures(data_map)
-
-        if psubset == 'UCSD':# and pre_proc_pipeline == 'audio_gate_imagine':
-            fig, _ = plot_ucsd_word_regions(data_map,# include_listen=False, include_speaking=True,
-                                            #include_imagine=False, include_mouth=False
-                                             )
-            fig_map['UCSD_words'] = fig
-
-            fig, _ = plot_ucsd_sentence_regions(data_map)
-            fig_map['UCSD_sentence'] = fig
-
-        from matplotlib.backends.backend_pdf import PdfPages
-
-        print("saving plots")
-        # create a PdfPages object
-        pdf = PdfPages(output_path)
-
-        for fig_name, _fig in fig_map.items():
-            pdf.savefig(_fig, bbox_inches='tight')
-        plt.close('all')
-        pdf.close()
-        del dset
-        del pdf
-        print("All done")
-
-
-    from multiprocessing import Pool
-    p = Pool(plt_label_region_opts.n_workers) if plt_label_region_opts.n_workers > 1 else None
-    for pid, ptuples in tqdm(dataset_cls.all_patient_maps[psubset].items()):
-        for pt in ptuples:
-            if p is not None:
-                p.apply_async(run_one, kwds=dict(pid=pid, pt=pt, ptuples=ptuples))
-            else:
-                run_one(pid=pid, pt=pt, ptuples=ptuples)
-
-    if p is not None:
-        p.close()
-        p.join()
+    run(plt_label_region_opts)
