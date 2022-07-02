@@ -349,7 +349,7 @@ if __name__ == """__main__""":
         fig_map = plot_label_inspection_figures(data_map)
 
         if psubset == 'UCSD':# and pre_proc_pipeline == 'audio_gate_imagine':
-            fig, _ = plot_ucsd_word_regions2(data_map,# include_listen=False, include_speaking=True,
+            fig, _ = plot_ucsd_word_regions(data_map,# include_listen=False, include_speaking=True,
                                             #include_imagine=False, include_mouth=False
                                              )
             fig_map['UCSD_words'] = fig
