@@ -587,9 +587,9 @@ class BaseASPEN(BaseDataset):
                 ('output', 'passthrough')
             ]),
 
-            'minimal':
-                feature_processing.SubsampleECOG() >>
-                feature_processing.WordStopStartTimeMap() >> feature_processing.ChangSampleIndicesFromStim()
+            #'minimal':
+            #    feature_processing.SubsampleECOG() >>
+            #    feature_processing.WordStopStartTimeMap() >> feature_processing.ChangSampleIndicesFromStim()
         }
         p_map['default'] = p_map[default]
 
@@ -1029,7 +1029,7 @@ class HarvardSentences(BaseASPEN):
                                                   silence_quantile_threshold=0.05,
                                                   n_silence_windows=35000,
                                                   # silence_n_smallest=30000,
-                                                  stim_key='word_stim')),
+                                                  stim_key='speaking_region_stim')),
             ('speaking_indices', pipeline.WindowSampleIndicesFromStim('stim_pwrt',
                                                                       target_onset_shift=pd.Timedelta(-.5, 's'),
                                                                       # input are centers, and output is a window of
@@ -1137,7 +1137,7 @@ class HarvardSentences(BaseASPEN):
         p_map = {
             # -----
             # Directly from audio
-            'audio_gate': Pipeline(parse_arr_steps + parse_input_steps #+ parse_stim_steps
+            'audio_gate': Pipeline(parse_arr_steps + parse_input_steps  + start_stop_steps  #+ parse_stim_steps
                                    + audio_gate_steps + [('output', 'passthrough')]),
 
             'region_classification': Pipeline(parse_arr_steps + parse_input_steps + start_stop_steps

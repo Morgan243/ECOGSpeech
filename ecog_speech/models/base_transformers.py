@@ -174,7 +174,8 @@ from fairseq.modules import GradMultiply
 class CoG2Vec(torch.nn.Module):
     logit_temp = 0.1
 
-    def __init__(self, input_shape, feature_model, context_model, projection_model, dropout=0.1, feature_grad_mult=1,
+    def __init__(self, input_shape, feature_model, context_model, projection_model,
+                 dropout=0.1, feature_grad_mult=1,
                  negatives_from_everywhere=True, n_negatives=100,
                  cross_sample_negatives=0, codebook_negatives=0,
                  mask_length=2, mask_prob=0.2,
