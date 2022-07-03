@@ -324,6 +324,7 @@ class BaseASPEN(BaseDataset):
     # can save on memory and reading+parsing time
     data_from: 'BaseASPEN' = attr.ib(None)
 
+    initialize_data = attr.ib(True)
     selected_flat_keys = attr.ib(None, init=False)
 
     default_data_subset = 'Data'
@@ -337,6 +338,11 @@ class BaseASPEN(BaseDataset):
         # Build pipelines based on this NWW dataset state
         self.pipeline_map = self.make_pipeline_map()
         self.logger.debug(f"Available pipelines: {list(self.pipeline_map.keys())}")
+
+        if self.initialize_data:
+            self.initialize()
+
+    def initialize(self):
 
         # If nothing passed, use 'default' pipeline
         if self.pre_processing_pipeline is None:
@@ -1135,6 +1141,11 @@ class HarvardSentences(BaseASPEN):
             target_offset_shift=pd.Timedelta(-0.5, 's'),
         )
         p_map = {
+            'random_sample': Pipeline(parse_arr_steps + parse_input_steps
+            + [('rnd_stim', pipeline.RandomStim(10000)),
+               ('rnd_indices', pipeline.WindowSampleIndicesFromIndex(stim_key='random_stim'))]
+                                      + [('output', 'passthrough')]),
+
             # -----
             # Directly from audio
             'audio_gate': Pipeline(parse_arr_steps + parse_input_steps  + start_stop_steps  #+ parse_stim_steps

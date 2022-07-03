@@ -987,6 +987,29 @@ class SentenceAndWordStimFromRegionStartStopTimes(DictTrf):
         return out
 
 
+@attr.s
+@with_logger
+class RandomStim(DictTrf):
+    n = attr.ib()
+    replace = attr.ib(False)
+    index_source_stim_key = attr.ib('stim')
+    output_key = attr.ib('random_stim')
+
+    window_size = attr.ib(pd.Timedelta(0.5, 's'))
+
+    def process(self, data_map):
+        src_s = data_map[self.index_source_stim_key]
+
+        random_stim = pd.Series(0, index=src_s.index)
+
+        last_t = random_stim.index.max() - self.window_size
+        random_ix = random_stim.loc[:last_t].sample(n=self.n, replace=self.replace).index.unique()
+        self.logger.info(f"Sampled {len(random_ix)} times from {self.index_source_stim_key}")
+        random_stim.loc[random_ix] = 1
+        self.logger.info(f"Total random indices in output: {random_stim.sum()}")
+
+        return {self.output_key: random_stim}
+
 def object_as_key_or_itself(key_or_value, remap=None):
     """
     Returns a value from (in order):
