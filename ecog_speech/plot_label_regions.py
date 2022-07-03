@@ -82,83 +82,6 @@ def plot_ucsd_word_regions(data_map, start_stop_label_tuples_l=(('speaking', 'st
                 **{'v': 1, label_col: plt_word_df[label_col] + '_' + key}
             ).values.tolist()
 
-
-        #if include_speaking or ('word' in plt_word_df.columns and include_speaking is None):
-        #    sent_region_map['speaking'] = plt_word_df[['start_t', 'stop_t', 'word']].assign(v=1).values.tolist()
-
-        #if include_imagine or ('imagine_start_t' in plt_word_df.columns and include_imagine is None):
-        #    sent_region_map['imagining'] = (plt_word_df.assign(word=plt_word_df.word + '_img', v=1)
-        #                                    [['imagine_start_t', 'imagine_stop_t', 'word', 'v']]
-        #                                    .values.tolist())
-        #if include_mouth or ('mouth_start_t' in plt_word_df.columns and include_mouth is None):
-        #    sent_region_map['mouthing'] = (plt_word_df.assign(word=plt_word_df.word + '_mth', v=1)
-        #                                   [['mouth_start_t', 'mouth_stop_t', 'word', 'v']]
-        #                                   .values.tolist())
-
-        #if include_listen or ('listen_start_t' in plt_word_df.columns and include_listen is None):
-        #    sent_region_map['listen'] = (plt_word_df.assign(word=plt_word_df.word + '_lis', v=1)
-        #                                 [['listen_start_t', 'listen_stop_t', 'word', 'v']]
-        #                                 .values.tolist())
-
-
-        region_tuples = sum(sent_region_map.values(), list())  #speaking_regions_l + imagine_regions_l
-        region_plot_kwargs = dict(style='--', alpha=0.9, lw=4,
-                                  title=f"sentcode={sent_code}",
-                                  cmap='tab20')
-        region_plot_kwargs.update(region_plot_overrides)
-        fig, ax, ax2 = viz.plot_multi_region_over_signal(signal_s=ds_audio, region_min_max_tuples=region_tuples,
-                                                         region_plot_kwargs=region_plot_kwargs,
-                                                         ax=ax)
-        ax2.legend(ncol=len(sent_region_map), **legend_kws)
-
-    fig.tight_layout()
-
-    return fig, axs
-
-
-def plot_ucsd_word_regions_old(data_map, include_listen=None, include_speaking=None,
-                           include_imagine=None, include_mouth=None,
-                           legend_kws=None, code_col=None,
-                           **region_plot_overrides):
-    import matplotlib
-    from tqdm.auto import tqdm
-    legend_kws = dict(fontsize=6.5, loc='upper center') if legend_kws is None else legend_kws
-
-    ds_audio = data_map['audio'].resample('0.001S').mean()
-    word_df = data_map['word_start_stop_times']
-    plt_sent_codes = list(sorted(word_df.stim_sentcode.unique()))
-    n_sent_codes = len(plt_sent_codes)
-    n_rows = int(np.ceil(n_sent_codes / 2))
-    fig, axs = matplotlib.pyplot.subplots(nrows=n_rows, ncols=2, figsize=(27, n_rows * 3))
-    axs = axs.reshape(-1)
-
-    for i, sent_code in (enumerate(tqdm(plt_sent_codes, 'Processing by sentence'))):
-        # Map the region of the sentence to the word regions - e.g. spoken vs. imagine
-        sent_region_map = dict()
-        ax = axs[i]
-        plt_word_df = word_df[word_df.stim_sentcode.eq(sent_code) & (word_df.word.str.upper() == word_df.word)].copy()
-
-        if code_col is not None:
-            plt_word_df['word'] = plt_word_df['word'] + '(' + plt_word_df[code_col].astype(str) + ')'
-
-        if include_speaking or ('word' in plt_word_df.columns and include_speaking is None):
-            sent_region_map['speaking'] = plt_word_df[['start_t', 'stop_t', 'word']].assign(v=1).values.tolist()
-
-        if include_imagine or ('imagine_start_t' in plt_word_df.columns and include_imagine is None):
-            sent_region_map['imagining'] = (plt_word_df.assign(word=plt_word_df.word + '_img', v=1)
-                                            [['imagine_start_t', 'imagine_stop_t', 'word', 'v']]
-                                            .values.tolist())
-        if include_mouth or ('mouth_start_t' in plt_word_df.columns and include_mouth is None):
-            sent_region_map['mouthing'] = (plt_word_df.assign(word=plt_word_df.word + '_mth', v=1)
-                                           [['mouth_start_t', 'mouth_stop_t', 'word', 'v']]
-                                           .values.tolist())
-
-        if include_listen or ('listen_start_t' in plt_word_df.columns and include_listen is None):
-            sent_region_map['listen'] = (plt_word_df.assign(word=plt_word_df.word + '_lis', v=1)
-                                         [['listen_start_t', 'listen_stop_t', 'word', 'v']]
-                                         .values.tolist())
-
-
         region_tuples = sum(sent_region_map.values(), list())  #speaking_regions_l + imagine_regions_l
         region_plot_kwargs = dict(style='--', alpha=0.9, lw=4,
                                   title=f"sentcode={sent_code}",
@@ -294,7 +217,8 @@ def plot_label_inspection_figures(data_map):
     hist_title = f'Hist of Word Codes\' N={n_speak_wins} label windows ' \
                  f'{len(wrd_code_len_s)} unique word codes'
     hist_title += f'\nLongest regions: {wrd_code_len_s.nlargest(5).to_dict()}'
-    ax = wrd_code_len_s.drop(0).plot.hist(title=hist_title)
+    #ax = wrd_code_len_s.drop(0).plot.hist(title=hist_title)
+    ax = wrd_code_len_s.plot.hist(title=hist_title)
     ax.set_xlabel('N Windows in label region')
     ax.set_ylabel('N Word codes')
     #ax.set_xlim(0)
