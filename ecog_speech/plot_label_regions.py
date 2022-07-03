@@ -19,6 +19,11 @@ def plot_ucsd_sentence_regions(data_map,
     from tqdm.auto import tqdm
     ds_audio = data_map['audio'].resample('0.001S').mean()
     word_df = data_map['word_start_stop_times']
+    missing = {c for t in [listen_cols, speaking_cols, mouthing_cols, imagining_cols] for c in t} - set(word_df.columns.tolist())
+    if len(missing) > 0:
+        msg = f"Need all columsn specified in parameters present (forget start_stop_steps in pipeline?), " \
+              f"but missing: {missing}"
+        raise ValueError(msg)
 
     plt_sent_codes = list(sorted(word_df.stim_sentcode.unique()))
     n_sent_codes = len(plt_sent_codes)
