@@ -1127,19 +1127,19 @@ class WindowSampleIndicesFromStim(DictTrf):
             start_t = g_s.index.min()
             stop_t = g_s.index.max()
 
-            if self.target_onset_ref == 'rising':
+            if self.target_onset_reference == 'rising':
                 target_start_t = start_t + self.target_onset_shift
-            elif self.target_onset_ref == 'falling':
+            elif self.target_onset_reference == 'falling':
                 target_start_t = stop_t + self.target_onset_shift
             else:
-                raise ValueError(f"Dont understand {self.target_onset_ref}")
+                raise ValueError(f"Dont understand {self.target_onset_reference}")
 
-            if self.target_offset_ref == 'rising':
+            if self.target_offset_reference == 'rising':
                 target_stop_t = start_t + self.target_offset_shift
-            elif self.target_offset_ref == 'falling':
+            elif self.target_offset_reference == 'falling':
                 target_stop_t = stop_t + self.target_offset_shift
             else:
-                raise ValueError(f"Dont understand {self.target_offset_ref}")
+                raise ValueError(f"Dont understand {self.target_offset_reference}")
 
             # Get the window starting indices for each region of interest
             # Note on :-expected_window_samples
