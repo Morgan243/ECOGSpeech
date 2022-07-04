@@ -185,6 +185,7 @@ class CoG2Vec(torch.nn.Module):
                  feature_extractor_layers='[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(128, 3, 1)]',
                  feature_extractor_mode='layer_norm',
                  ras_pos_encoding=True, temporal_pos_encoding=True,
+                 positional_encoding_method='combined',
                  squeeze_first=True):
         super().__init__()
         self.input_shape = input_shape
@@ -197,6 +198,7 @@ class CoG2Vec(torch.nn.Module):
         self.codebook_negatives = codebook_negatives
 
         self.mask_length, self.mask_prob = mask_length, mask_prob
+        self.positional_encoding_method = positional_encoding_method
 
         # TODO: Don't assign test data as attribute? But it's so useful
         self.t_x = torch.rand((16, *self.input_shape))
@@ -269,7 +271,21 @@ class CoG2Vec(torch.nn.Module):
 
         self.ras_pos_encoding = ras_pos_encoding
         self.temporal_pos_encoding = temporal_pos_encoding
-        if self.ras_pos_encoding:
+        #self.combined_enc = None
+        if self.positional_encoding_method == 'combined':
+
+            self.ras_positional_enc = torch.nn.Sequential(
+                # Dimensions of RAS are [-128, 128] (?)
+                # bmp.ScaleByConstant(128.),
+                torch.nn.Linear(3, 32),
+                torch.nn.LeakyReLU(),
+                torch.nn.Linear(32, self.C * self.T),
+                #torch.nn.Linear(32, self.C),
+                torch.nn.LeakyReLU()
+            )
+            self.positional_enc = None
+
+        elif self.ras_pos_encoding:
             self.ras_positional_enc = torch.nn.Sequential(
                 # Dimensions of RAS are [-128, 128] (?)
                 #bmp.ScaleByConstant(128.),
@@ -284,7 +300,7 @@ class CoG2Vec(torch.nn.Module):
             self.positional_enc = PositionalEncoding(d_model=embed_dim)
             self.ras_pos_encoding = None
 
-        if self.temporal_pos_encoding:
+        if self.temporal_pos_encoding and self.positional_encoding_method != 'combined':
             self.temporal_position_enc = PositionalEncoding(d_model=self.T)
 
         # Init Context model (transformer encoder)
@@ -475,17 +491,25 @@ class CoG2Vec(torch.nn.Module):
             in_to_context = unmasked_features
             y = unmasked_features
 
-        if self.ras_pos_encoding:
+        if self.positional_encoding_method == 'combined':
+            if 'sensor_ras_coord_arr' not in input_d:
+                raise KeyError("'sensor_ras_coord_arr' not in batch data"
+                               " - to use as pos. emb., use datasets extra_output_keys='sensor_ras_coord_arr'")
+            ras_arr = input_d['sensor_ras_coord_arr']
+            # Combined will output enough values to populate along channel and time axis - so just reshap to expected
+            in_to_context = (in_to_context + self.ras_positional_enc(ras_arr).reshape(in_to_context.shape))
+        elif self.ras_pos_encoding:
             if 'sensor_ras_coord_arr' not in input_d:
                 raise KeyError("'sensor_ras_coord_arr' not in batch data"
                                " - to use as pos. emb., use datasets extra_output_keys='sensor_ras_coord_arr'")
             ras_arr = input_d['sensor_ras_coord_arr']
             ras_sqz_arr = ras_arr.squeeze()
             _, cT, cC = in_to_context.shape
+
             # RAS encode is constant across time (i.e. not temporally encoding) - outputs a dim with cardinality
-            # equal to channel dim i.e. the res output after unsqueeze that is added is shaped:
+            # equal to channel dim i.e. the res output after unsqueeze() that is added is shaped:
             #   (Batch, 1, channels)
-            # So will be broadcast along time dimension
+            # So will be broadcast along the time dimension
             #in_to_context = (in_to_context + self.ras_positional_enc(ras_arr).unsqueeze(1))
             ras_enc_arr = self.ras_positional_enc(ras_sqz_arr).reshape(B, *([1] * (in_to_context.dim() - 2)), cC)
             in_to_context = (in_to_context + ras_enc_arr)
@@ -494,9 +518,10 @@ class CoG2Vec(torch.nn.Module):
             # Otherwise, use 'normal'/absolute encoding through a module that will do the addition in it's forward pass
             in_to_context = self.positional_enc(in_to_context)
 
-        if self.temporal_pos_encoding:
+        # Independent temporal encoding if it wasn't already included in the above encoder
+        if self.temporal_pos_encoding and self.positional_encoding_method != 'combined':
             # Swap time dimension back to the last dim (dim 2) for temporal pos encoding, then swap result back
-            # This module adds the encoding in it's forward pass
+            # This module adds the encoding in its forward pass
             in_to_context = self.temporal_position_enc(in_to_context.transpose(1, 2)).transpose(1, 2)
 
         x = self.context_model(in_to_context)
