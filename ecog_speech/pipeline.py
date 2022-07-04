@@ -1039,33 +1039,40 @@ class WindowSampleIndicesFromIndex(DictTrf):
     index_shift = attr.ib(None)
     stim_target_value = attr.ib(1)
     window_size = attr.ib(pd.Timedelta(0.5, 's'))
+    sample_n = attr.ib(None)
     stim_value_remap = attr.ib(None)
     stim_pre_process_f = attr.ib(None)
 
     def process(self, data_map):
-        return self.make_sample_indices(data_map[self.stim_key], data_map[self.fs_key], win_size=self.window_size,
-                                        index_shift=self.index_shift,
-                                        stim_target_value=self.stim_target_value, stim_value_remap=self.stim_value_remap,
-                                        existing_sample_indices_map=data_map.get('sample_index_map'),
-                                        stim_pre_process_f=self.stim_pre_process_f if self.stim_pre_process_f is not None
-                                                            else lambda _stim: _stim)
+        stim = data_map[self.stim_key]
+        fs = data_map[self.fs_key]
+        existing_sample_indices_map = data_map.get('sample_index_map')
+        stim_pre_process_f = self.stim_pre_process_f if self.stim_pre_process_f is not None else lambda _stim: _stim
+        win_size = self.window_size
+        #return self.make_sample_indices(data_map[self.stim_key], data_map[self.fs_key], win_size=self.window_size,
+        #                                index_shift=self.index_shift,
+        #                                stim_target_value=self.stim_target_value, stim_value_remap=self.stim_value_remap,
+        #                                existing_sample_indices_map=data_map.get('sample_index_map'),
+        #                                stim_pre_process_f=self.stim_pre_process_f if self.stim_pre_process_f is not None
+        #                                                    else lambda _stim: _stim)
 
-    @classmethod
-    def make_sample_indices(cls, stim, fs, win_size,
-                            index_shift, stim_target_value, stim_value_remap,
-                            existing_sample_indices_map,
-                            stim_pre_process_f):
-        index_shift = pd.Timedelta(0, 's') if index_shift is None else index_shift
+#    @classmethod
+#    def make_sample_indices(cls, stim, fs, win_size,
+#                            index_shift, stim_target_value, stim_value_remap,
+#                            existing_sample_indices_map,
+#                            stim_pre_process_f):
+        index_shift = pd.Timedelta(0, 's') if self.index_shift is None else self.index_shift
         existing_sample_indices_map = dict() if existing_sample_indices_map is None else existing_sample_indices_map
         sample_indices = dict()
         expected_window_samples = int(fs * win_size.total_seconds())
 
-        target_indexes = (stim.pipe(stim_pre_process_f) == stim_target_value).pipe(lambda s: s[s].index.tolist())
+        target_indexes = (stim.pipe(stim_pre_process_f) == self.stim_target_value)\
+            .pipe(lambda s: s[s] if self.sample_n is None else s[s].sample(n=self.sample_n)).index.tolist()
         target_indices = [stim.loc[offs + index_shift:offs + win_size + index_shift].iloc[:expected_window_samples].index
                           for offs in target_indexes
                           if len(stim.loc[offs + index_shift:offs + win_size + index_shift]) >= expected_window_samples]
 
-        stim_key = object_as_key_or_itself(stim_target_value, stim_value_remap)
+        stim_key = object_as_key_or_itself(self.stim_target_value, self.stim_value_remap)
         sample_indices[stim_key] = sample_indices.get(stim_key, list()) + target_indices
 
         if existing_sample_indices_map is not None:
@@ -1088,38 +1095,25 @@ class WindowSampleIndicesFromStim(DictTrf):
     target_onset_shift = attr.ib(pd.Timedelta(-0.50, 's'))
     target_offset_shift = attr.ib(pd.Timedelta(0., 's'))
 
+    sample_n = attr.ib(None)
     max_target_region_size = attr.ib(600)
     stim_value_remap = attr.ib(None)
 
     def process(self, data_map):
-        return self.make_sample_indices(data_map[self.stim_key], data_map[self.fs_key],
-                                        win_size=self.window_size,
-                                        target_onset_ref=self.target_onset_reference,
-                                        target_onset_shift=self.target_onset_shift,
-                                        target_offset_ref=self.target_offset_reference,
-                                        target_offset_shift=self.target_offset_shift,
-                                        max_target_region_size=self.max_target_region_size,
-                                        existing_sample_indices_map=data_map.get('sample_index_map'),
-                                        existing_indices_sources_map=data_map.get('index_source_map'),
-                                        stim_value_remap=self.stim_value_remap,
-                                        source_name=self.stim_key)
 
-    @classmethod
-    def make_sample_indices(cls, stim, fs, win_size, target_onset_ref, target_onset_shift,
-                            target_offset_ref, target_offset_shift,
-                            #silence_value, silence_samples, silent_window_scale,
-                            max_target_region_size, existing_sample_indices_map=None,
-                            existing_indices_sources_map=None,
-                            stim_value_remap=None,
-                            source_name=None):
+        stim, fs = data_map[self.stim_key], data_map[self.fs_key]
+        existing_sample_indices_map = data_map.get('sample_index_map'),
+        existing_indices_sources_map = data_map.get('index_source_map'),
+
+        win_size = self.window_size
 
         existing_sample_indices_map = dict() if existing_sample_indices_map is None else existing_sample_indices_map
         existing_indices_sources_map = dict() if existing_indices_sources_map is None else existing_indices_sources_map
 
         expected_window_samples = int(fs * win_size.total_seconds())
         #label_region_sample_size = int(fs * label_region_size.total_seconds())
-        cls.logger.info((fs, win_size))
-        cls.logger.info("Samples per window: %d" % expected_window_samples)
+        self.logger.info((fs, win_size))
+        self.logger.info("Samples per window: %d" % expected_window_samples)
 
         # Will map of codes to list of indices into the stim signal:
         # word_code->List[pd.Index, pd.Index, ...]
@@ -1133,19 +1127,19 @@ class WindowSampleIndicesFromStim(DictTrf):
             start_t = g_s.index.min()
             stop_t = g_s.index.max()
 
-            if target_onset_ref == 'rising':
-                target_start_t = start_t + target_onset_shift
-            elif target_onset_ref == 'falling':
-                target_start_t = stop_t + target_onset_shift
+            if self.target_onset_ref == 'rising':
+                target_start_t = start_t + self.target_onset_shift
+            elif self.target_onset_ref == 'falling':
+                target_start_t = stop_t + self.target_onset_shift
             else:
-                raise ValueError(f"Dont understand {target_onset_ref}")
+                raise ValueError(f"Dont understand {self.target_onset_ref}")
 
-            if target_offset_ref == 'rising':
-                target_stop_t = start_t + target_offset_shift
-            elif target_offset_ref == 'falling':
-                target_stop_t = stop_t + target_offset_shift
+            if self.target_offset_ref == 'rising':
+                target_stop_t = start_t + self.target_offset_shift
+            elif self.target_offset_ref == 'falling':
+                target_stop_t = stop_t + self.target_offset_shift
             else:
-                raise ValueError(f"Dont understand {target_offset_ref}")
+                raise ValueError(f"Dont understand {self.target_offset_ref}")
 
             # Get the window starting indices for each region of interest
             # Note on :-expected_window_samples
@@ -1156,15 +1150,21 @@ class WindowSampleIndicesFromStim(DictTrf):
             assert s_ix.is_unique, f"Index between {target_start_t} and {target_stop_t} is not unique!"
             target_start_ixes = s_ix.tolist()#[:-expected_window_samples]
 
-            to_iter = target_start_ixes[:max_target_region_size] if max_target_region_size is not None else target_start_ixes
+            if self.sample_n:
+                to_iter = np.random.choice(target_start_ixes, self.sample_n, replace=False)
+            elif self.max_target_region_size is not None:
+                to_iter = target_start_ixes[:self.max_target_region_size]
+            else:
+                to_iter = target_start_ixes
+
             # Go through the labeled region indices and pull a window of data
             target_indices = [stim.loc[offs:offs + win_size].iloc[:expected_window_samples].index
                                 for offs in to_iter#target_start_ixes[:max_target_region_size]
                                     if len(stim.loc[offs:offs + win_size]) >= expected_window_samples]
 
-            stim_key = object_as_key_or_itself(stim_value, stim_value_remap)
+            stim_key = object_as_key_or_itself(stim_value, self.stim_value_remap)
             sample_indices[stim_key] = sample_indices.get(stim_key, list()) + target_indices
-            indices_sources[stim_key] = indices_sources.get(stim_key, source_name)
+            indices_sources[stim_key] = indices_sources.get(stim_key, self.stim_key)
 
         # Go through all samples - make noise if sample size is off (or should throw error?)
         size_d = dict()
@@ -1173,9 +1173,9 @@ class WindowSampleIndicesFromStim(DictTrf):
             #cls.logger.info(f"Extracted {len(_s)} from stim_value={stim_value}")
             for i, _ixs in enumerate(_s):
                 if len(_ixs) != expected_window_samples:
-                    cls.logger.warning(f"[{k}][{i}] ({len(_ixs)}): {_ixs}")
+                    self.logger.warning(f"[{k}][{i}] ({len(_ixs)}): {_ixs}")
 
-        cls.logger.info(f"Number of samples keys in sample index: {pd.Series(size_d).value_counts().to_dict()}")
+        self.logger.info(f"Number of samples keys in sample index: {pd.Series(size_d).value_counts().to_dict()}")
 
         # Debug code printing the unique lengths of each window for each word code
         #print({k : sorted(list(set(map(len, _s)))) for k, _s in sample_indices.items()})
