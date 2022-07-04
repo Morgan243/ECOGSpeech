@@ -1,7 +1,5 @@
 from ecog_speech import utils
 from dataclasses import dataclass, field
-import json
-from os.path import join as pjoin
 from ecog_speech.experiments import base as bxp
 from ecog_speech.models import base as bmp
 from ecog_speech import datasets
@@ -97,8 +95,6 @@ class SemiSupervisedExperiment(bxp.Experiment):
         self.save_results(model, name, result_output=self.result_output, uid=uid, res_dict=res_dict)
 
         return trainer, eval_res_map
-
-
 
 
 if __name__ == """__main__""":
