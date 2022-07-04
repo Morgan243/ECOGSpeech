@@ -873,6 +873,7 @@ class NewStimFromRegionStartStopTimes(DictTrf):
         t_cols = [self.start_t_column, self.stop_t_column]
 
         output_stim = pd.Series(self.default_stim_value, index=ix, name=self.stim_output_name)
+        output_mask = pd.Series(False, index=ix, name=self.stim_output_name + '_mask')
 
         code_maps = list()
         working_ix = 0
@@ -896,8 +897,10 @@ class NewStimFromRegionStartStopTimes(DictTrf):
                                   #self.word_code_map_output_name: _code,
                                   'start_t': _start_t})
                 output_stim.iloc[_start_i: _stop_i] = _code
+                output_mask.iloc[_start_i: _stop_i] = True
 
         out_d = {self.stim_output_name: output_stim.rename(self.stim_output_name),
+                 self.stim_output_name + '_mask': output_mask
                  #self.sentence_stim_output_name: sentence_stim.rename(self.sentence_stim_output_name)
                  }
 
