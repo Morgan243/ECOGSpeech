@@ -695,6 +695,9 @@ class BaseASPEN(BaseDataset):
         s: pd.Series = self.sample_ix_df[key]
         levels = s.unique()
         train, test = train_test_split(levels, **train_test_split_kws)
+        self.logger.info(f"{len(levels)} levels in {key} split into train/test")
+        self.logger.info(f"Train: {train}")
+        self.logger.info(f"Test : {test}")
 
         train_mask = s.isin(train)
         test_mask = s.isin(test)
@@ -1103,7 +1106,8 @@ class HarvardSentences(BaseASPEN):
         region_kws = dict(
             target_onset_shift=pd.Timedelta(0.1, 's'),
             target_offset_shift=pd.Timedelta(-0.1, 's'),
-            max_target_region_size=1200
+            sample_n=1000
+            #max_target_region_size=1200
         )
         region_from_word_kws = dict(
             target_onset_shift=pd.Timedelta(-.5, 's'),
@@ -1519,10 +1523,9 @@ class DatasetOptions(JsonSerializable):
                 sensor_columns=train_nww.selected_columns,
                 **cv_kws)
         elif dataset_cls == HarvardSentences:
+            logger.ingo("*" * 30)
             logger.info("Splitting on random key levels for harvard sentences (UCSD)")
-            print("*" * 30)
-            print("Splitting on random key levels for harvard sentences (UCSD)")
-            print("*" * 30)
+            logger.ingo("*" * 30)
             _train, _cv = train_nww.split_select_random_key_levels()
             dataset_map.update(dict(train=_train, cv=_cv))
         else:
