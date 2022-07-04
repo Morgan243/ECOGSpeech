@@ -480,12 +480,16 @@ class CoG2Vec(torch.nn.Module):
                 raise KeyError("'sensor_ras_coord_arr' not in batch data"
                                " - to use as pos. emb., use datasets extra_output_keys='sensor_ras_coord_arr'")
             ras_arr = input_d['sensor_ras_coord_arr']
+            ras_sqz_arr = ras_arr.squeeze()
             _, cT, cC = in_to_context.shape
             # RAS encode is constant across time (i.e. not temporally encoding) - outputs a dim with cardinality
             # equal to channel dim i.e. the res output after unsqueeze that is added is shaped:
             #   (Batch, 1, channels)
             # So will be broadcast along time dimension
-            in_to_context = (in_to_context + self.ras_positional_enc(ras_arr).unsqueeze(1))
+            #in_to_context = (in_to_context + self.ras_positional_enc(ras_arr).unsqueeze(1))
+            ras_enc_arr = self.ras_positional_enc(ras_sqz_arr).reshape(B, *([1] * (in_to_context.dim() - 2)), cC)
+            in_to_context = (in_to_context + ras_enc_arr)
+            #ras_enc_arr.reshape(128, *([1] * (t_ras_arr.dim() - 2)), 128)
         else:
             # Otherwise, use 'normal'/absolute encoding through a module that will do the addition in it's forward pass
             in_to_context = self.positional_enc(in_to_context)
