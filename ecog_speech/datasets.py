@@ -436,8 +436,10 @@ class BaseASPEN(BaseDataset):
                     raise ValueError("Unknown snsor columns argument: " + str(self.sensor_columns))
                 # print("Selected columns with -%s- method: %s"
                 #      % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
-                self.logger.info("Selected columns with -%s- method: %s"
-                                 % (self.sensor_columns, ", ".join(map(str, self.selected_columns))))
+                self.logger.info(f"Selected {len(self.selected_columns)} columns using {self.sensor_columns} method: "
+                                 f"{', '.join(map(str, self.selected_columns))}")
+                #self.logger.info("Selected columns with -%s- method: %s"
+                #                 % (self.sensor_columns, ", ".join(map(str, self.selected_columns))))
             else:
                 self.selected_columns = self.sensor_columns
 
@@ -1115,7 +1117,7 @@ class HarvardSentences(BaseASPEN):
         )
         p_map = {
             'random_sample': Pipeline(parse_arr_steps + parse_input_steps
-            + [('rnd_stim', pipeline.RandomStim(10000)),
+            + [('rnd_stim', pipeline.RandomStim(10_000)),
                ('rnd_indices', pipeline.WindowSampleIndicesFromIndex(stim_key='random_stim'))]
                                       + [('output', 'passthrough')]),
 
@@ -1488,9 +1490,7 @@ class DatasetOptions(JsonSerializable):
         dataset_map = dict()
         logger.info("Using dataset class: %s" % str(dataset_cls))
         # Setup train dataset
-        train_nww = dataset_cls(
-            sensor_columns=train_sensor_columns,
-            **train_kws)
+        train_nww = dataset_cls(sensor_columns=train_sensor_columns, **train_kws)
 
         roll_channels = getattr(self, 'roll_channels', False)
         shuffle_channels = getattr(self, 'shuffle_channels', False)
@@ -1519,13 +1519,11 @@ class DatasetOptions(JsonSerializable):
         if cv_kws['patient_tuples'] is not None:
             print("+" * 50)
             print(f"Using {cv_kws['patient_tuples']}")
-            dataset_map['cv'] = dataset_cls(  # power_q=options.power_q,
-                sensor_columns=train_nww.selected_columns,
-                **cv_kws)
+            dataset_map['cv'] = dataset_cls(sensor_columns=train_nww.selected_columns, **cv_kws)
         elif dataset_cls == HarvardSentences:
-            logger.ingo("*" * 30)
+            logger.info("*" * 30)
             logger.info("Splitting on random key levels for harvard sentences (UCSD)")
-            logger.ingo("*" * 30)
+            logger.info("*" * 30)
             _train, _cv = train_nww.split_select_random_key_levels()
             dataset_map.update(dict(train=_train, cv=_cv))
         else:
