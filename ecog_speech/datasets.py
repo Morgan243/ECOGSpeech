@@ -1035,7 +1035,9 @@ class HarvardSentences(BaseASPEN):
                                                   silence_quantile_threshold=0.05,
                                                   n_silence_windows=35000,
                                                   # silence_n_smallest=30000,
-                                                  stim_key='speaking_region_stim')),
+                                                  #stim_key='speaking_region_stim'
+                                                  stim_key='speaking_region_stim_mask'
+                                                  )),
             ('speaking_indices', pipeline.WindowSampleIndicesFromStim('stim_pwrt',
                                                                       target_onset_shift=pd.Timedelta(-.5, 's'),
                                                                       # input are centers, and output is a window of
@@ -1075,11 +1077,6 @@ class HarvardSentences(BaseASPEN):
                                                                         stim_output_name='imagining_word_stim',
                                                 )),
 
-                            # ['listening_region_start_t', 'listening_region_stop_t',
-                            #        'speaking_region_start_t', 'speaking_region_stop_t',
-                            #        'imagining_region_start_t', 'imagining_region_stop_t',
-                            #        'mouthing_region_start_t', 'mouthing_region_stop_t']
-
                             ('speaking_region_stim', pipeline.NewStimFromRegionStartStopTimes(
                                 start_t_column='speaking_region_start_t',
                                 stop_t_column='speaking_region_stop_t',
@@ -1102,34 +1099,6 @@ class HarvardSentences(BaseASPEN):
                             ))
                             ]
 
-
-        orig_start_stop_steps = [('new_mtss', pipeline.NewNewMultiTaskStartStop()),
-                                                 # Stims from Start-stop-times
-                                                 ('speakinging_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(
-                                                                        start_t_column='start_t',
-                                                                        stop_t_column='stop_t',
-                                                                        word_stim_output_name='speaking_word_stim',
-                                                                        sentence_stim_output_name='sentence_stim',
-                                                                        set_as_word_stim=False)),
-                                                 ('listening_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(
-                                                                        start_t_column='listening_word_start_t',
-                                                                        stop_t_column='listening_word_stop_t',
-                                                                        word_stim_output_name='listening_word_stim',
-                                                                        sentence_stim_output_name='listening_sentence_stim',
-                                                                        set_as_word_stim=False)),
-                                                 ('mouthing_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(
-                                                                        start_t_column='mouthing_word_start_t',
-                                                                        stop_t_column='mouthing_word_stop_t',
-                                                                        word_stim_output_name='mouthing_word_stim',
-                                                                        sentence_stim_output_name='mouthing_sentence_stim',
-                                                                        set_as_word_stim=False)),
-                                                ('imagining_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(
-                                                                        start_t_column='imagining_word_start_t',
-                                                                        stop_t_column='imagining_word_stop_t',
-                                                                        word_stim_output_name='imagining_word_stim',
-                                                                        sentence_stim_output_name='imagining_sentence_stim',
-                                                                        set_as_word_stim=False))
-                            ]
 
         region_kws = dict(
             target_onset_shift=pd.Timedelta(0.1, 's'),
@@ -1198,7 +1167,7 @@ class HarvardSentences(BaseASPEN):
                                                     **region_from_word_kws
                                                  )),('output', 'passthrough')]),
 
-            'audio_gate_speaking_only': Pipeline(parse_arr_steps + parse_input_steps #+ parse_stim_steps
+            'audio_gate_speaking_only': Pipeline(parse_arr_steps + parse_input_steps  + start_stop_steps
                                                  # Slice out the generation of the silence stim data - only speaking
                                                  + audio_gate_steps[:-1] + [('output', 'passthrough')]),
 
