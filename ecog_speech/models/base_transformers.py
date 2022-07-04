@@ -184,7 +184,7 @@ class CoG2Vec(torch.nn.Module):
                  quant_weight_proj_factor=2, quant_weight_proj_depth=1,
                  feature_extractor_layers='[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(128, 3, 1)]',
                  feature_extractor_mode='layer_norm',
-                 ras_pos_encoding=True,
+                 ras_pos_encoding=True, temporal_pos_encoding=True,
                  squeeze_first=True):
         super().__init__()
         self.input_shape = input_shape
@@ -268,13 +268,15 @@ class CoG2Vec(torch.nn.Module):
         )
 
         self.ras_pos_encoding = ras_pos_encoding
+        self.temporal_pos_encoding = temporal_pos_encoding
         if self.ras_pos_encoding:
             self.ras_positional_enc = torch.nn.Sequential(
                 # Dimensions of RAS are [-128, 128] (?)
                 #bmp.ScaleByConstant(128.),
                 torch.nn.Linear(3, 32),
                 torch.nn.LeakyReLU(),
-                torch.nn.Linear(32, self.C * self.T),
+                #torch.nn.Linear(32, self.C * self.T),
+                torch.nn.Linear(32, self.C ),
                 torch.nn.LeakyReLU()
             )
             self.positional_enc = None
@@ -282,7 +284,10 @@ class CoG2Vec(torch.nn.Module):
             self.positional_enc = PositionalEncoding(d_model=embed_dim)
             self.ras_pos_encoding = None
 
-        # TODO: Way to override positional part of transformer? Need to integrate xyz eventually
+        if self.temporal_pos_encoding:
+            self.temporal_position_enc = PositionalEncoding(d_model=self.T)
+
+        # Init Context model (transformer encoder)
         self.n_heads = n_encoder_heads
         self.num_encoder_layers = n_encoder_layers
         self.context_model = context_model
@@ -296,7 +301,7 @@ class CoG2Vec(torch.nn.Module):
         # Use existing Gumbel Quant
         import fairseq
         self.quantizer = fairseq.modules.GumbelVectorQuantizer(
-            # TODO: parameterize mor of these?
+            # TODO: parameterize more of these?
             dim=embed_dim, num_vars=quant_num_vars, temp=(2, 0.5, 0.999995),#temp=(1, 0.1, 0.9),
             groups=quant_num_groups, combine_groups=False, vq_dim=embed_dim,
             time_first=True,
@@ -434,8 +439,8 @@ class CoG2Vec(torch.nn.Module):
 
         # TODO: Wave2vec says normalize the raw waveform to zero mean and unit variance - maje sure this happening?
         # Extract features from signal
-        # Wave to vec in fair seq either does forward without gradient or with grad multiply - prob grad mult for pre-train
-
+        # Wave to vec in fair seq either does forward without gradient or with grad multiply
+        # - prob grad mult for pre-train
         X = X.squeeze() if self.squeeze_first else X
         X_f = self.feature_model(X)
         if self.feature_grad_mult != 1.0:
@@ -449,7 +454,7 @@ class CoG2Vec(torch.nn.Module):
         unmasked_features = self.feature_norm(unmasked_features)
 
         if mask:
-            # Create the mask
+            # Create the mask - what will be hidden from the context model
             mask_indices = _compute_mask_indices((B, T), padding_mask=None, mask_prob=self.mask_prob,
                                                  mask_length=self.mask_length, min_masks=1)
 
@@ -470,18 +475,25 @@ class CoG2Vec(torch.nn.Module):
             in_to_context = unmasked_features
             y = unmasked_features
 
-        # Optionally positionally encode
-        if self.positional_enc is not None or self.ras_positional_enc is not None:
-            if self.ras_pos_encoding:
-                if 'sensor_ras_coord_arr' not in input_d:
-                    raise KeyError("'sensor_ras_coord_arr' not in batch data"
-                                   " - to use as pos. emb., use datasets extra_output_keys='sensor_ras_coord_arr'")
-                ras_arr = input_d['sensor_ras_coord_arr']
-                _, cT, cC = in_to_context.shape
-                #in_to_context = (in_to_context.reshape(B, cC*cT) + self.ras_positional_enc(ras_arr)).reshape(B, cT, cC)
-                in_to_context = (in_to_context + self.ras_positional_enc(ras_arr).reshape(in_to_context.shape))
-            else:
-                in_to_context = self.positional_enc(in_to_context)
+        if self.ras_pos_encoding:
+            if 'sensor_ras_coord_arr' not in input_d:
+                raise KeyError("'sensor_ras_coord_arr' not in batch data"
+                               " - to use as pos. emb., use datasets extra_output_keys='sensor_ras_coord_arr'")
+            ras_arr = input_d['sensor_ras_coord_arr']
+            _, cT, cC = in_to_context.shape
+            # RAS encode is constant across time (i.e. not temporally encoding) - outputs a dim with cardinality
+            # equal to channel dim i.e. the res output after unsqueeze that is added is shaped:
+            #   (Batch, 1, channels)
+            # So will be broadcast along time dimension
+            in_to_context = (in_to_context + self.ras_positional_enc(ras_arr).unsqueeze(1))
+        else:
+            # Otherwise, use 'normal'/absolute encoding through a module that will do the addition in it's forward pass
+            in_to_context = self.positional_enc(in_to_context)
+
+        if self.temporal_pos_encoding:
+            # Swap time dimension back to the last dim (dim 2) for temporal pos encoding, then swap result back
+            # This module adds the encoding in it's forward pass
+            in_to_context = self.temporal_position_enc(in_to_context.transpose(1, 2)).transpose(1, 2)
 
         x = self.context_model(in_to_context)
 
@@ -504,11 +516,6 @@ class CoG2Vec(torch.nn.Module):
         features_pen = X_f.float().pow(2).mean()
 
         padding_count = 0
-        # Swap the original masked data back to C, T - contiguous call is due to limitation with view() or reshape()
-        # in torch tensors
-        #n_negatives = 100
-        #cross_sample_negatives = 20
-        #codebook_negatives = 20  # 100 # This doesn't work..
 
         if self.quantizer:
             if self.negatives_from_everywhere:
