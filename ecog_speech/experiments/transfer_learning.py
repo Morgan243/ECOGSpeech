@@ -59,7 +59,7 @@ class RegionDetectionFineTuningTask(bxp.TaskOptions):
     task_name: str = "region_classification_fine_tuning"
     dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='UCSD-22',
                                                                pre_processing_pipeline='region_classification')
-    method: str = '2d_transformers'
+    method: str = '2d_linear'
 
 
 @dataclass
@@ -110,10 +110,9 @@ class FineTuningExperiment(bxp.Experiment):
                                  dataset: datasets.BaseDataset = None,
                                  fine_tuning_target_shape=None, n_pretrained_input_channels=None,
                                  n_pretrained_input_samples=256,
+                                 freeze_pretrained_weights=True,
                                  classifier_head: torch.nn.Module = None):
         from ecog_speech.models import base
-        # n_pretrained_output_channels = n_pretrained_output_channels if pretrained_model is None else pretrained_model.C
-        # n_pretrained_output_samples = n_pretrained_output_samples if pretrained_model is None else pretrained_model.T
         n_pretrained_output_channels = pretrained_model.C if n_pretrained_output_channels is None else n_pretrained_output_samples
         n_pretrained_output_samples = pretrained_model.T if n_pretrained_output_samples is None else n_pretrained_output_samples
 
@@ -121,10 +120,16 @@ class FineTuningExperiment(bxp.Experiment):
         # n_pretrained_input_samples = n_pretrained_input_samples if dataset is None else dataset.get_target_shape()
         fine_tuning_target_shape = dataset.get_target_shape() if fine_tuning_target_shape is None else fine_tuning_target_shape
 
+        m = copy.deepcopy(pretrained_model)
+        m.quantizer.codebook_indices = None
+        if freeze_pretrained_weights:
+            for param in m.parameters():
+                param.requires_grad = False
+
         if fine_tuning_method == '1d_linear':
             # Very simple linear classifier head by default
             if classifier_head is None:
-                h_size = 1024
+                h_size = 32
                 classifier_head = torch.nn.Sequential(*[
                     base.Reshape((n_pretrained_output_channels * n_pretrained_output_samples,)),
                     torch.nn.Linear(n_pretrained_output_channels * n_pretrained_output_samples, h_size),
@@ -137,22 +142,20 @@ class FineTuningExperiment(bxp.Experiment):
                 ])
                 # nn.init.xavier_uniform_(classifier_head.weight)
 
-            m = copy.deepcopy(pretrained_model)
-            m.feature_model.requires_grad_(False)
-            m.quantizer.codebook_indices = None
-            m.context_model.requires_grad_(False)
-
             ft_model = base_ft.FineTuner(pre_trained_model=m, output_model=classifier_head,
                                          pre_trained_model_forward_kws=dict(features_only=True, mask=False),
-                                         pre_trained_model_output_key='x')
+                                         pre_trained_model_output_key='x',
+                                         freeze_pre_train_weights=freeze_pretrained_weights)
 
-        elif fine_tuning_method == '2d_transformers':
+        elif '2d_' in fine_tuning_method :
             if dataset is None:
-                raise ValueError(f"A dataset is required for '2d_transformers' method in order to see num sensors")
+                raise ValueError(f"A dataset is required for '2d_*' methods in order to see num sensors")
             from ecog_speech.models import base_transformers
 
+            hidden_enc = 'transformer' if fine_tuning_method == '2d_transformers' else 'linear'
             ft_model = base_transformers.MultiChannelCog2Vec((n_pretrained_input_channels, n_pretrained_input_samples),
-                                                             pretrained_model, outputs=dataset.get_target_shape())
+                                                             pretrained_model, outputs=dataset.get_target_shape(),
+                                                             hidden_encoder=hidden_enc)
         else:
             raise ValueError(f"Unknown ft_method '{fine_tuning_method}'")
 

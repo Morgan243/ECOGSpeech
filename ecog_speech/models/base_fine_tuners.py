@@ -50,16 +50,30 @@ class MultiChannelFineTuner(torch.nn.Module):
 
 class FineTuner(torch.nn.Module):
     def __init__(self, pre_trained_model, output_model, pre_trained_model_forward_kws,
-                 pre_trained_model_output_key):
+                 pre_trained_model_output_key, auto_eval_mode=True, freeze_pre_train_weights=True):
         super().__init__()
         self.pre_trained_model = pre_trained_model
         self.output_model = output_model
         self.pre_trained_model_output_key = pre_trained_model_output_key
         self.pre_trained_model_forward_kws = pre_trained_model_forward_kws
+        self.auto_eval_mode = auto_eval_mode
+        self.freeze_pre_train_weights = freeze_pre_train_weights
 
     def forward(self, x):
-        pt_out = self.pre_trained_model(x,
-                                        **(dict() if self.pre_trained_model_forward_kws is None
-                                           else self.pre_trained_model_forward_kws))
+        # Make sure train time processes are off - e.g. dropout, batchnorm stats collection
+        if self.auto_eval_mode:
+            self.pre_trained_model = self.pre_trained_model.eval()
+
+        # Not really necessary, but just another layer of turning off grad
+        if self.freeze_pre_train_weights:
+            with torch.no_grad():
+                pt_out = self.pre_trained_model(x,
+                                                **(dict() if self.pre_trained_model_forward_kws is None
+                                                   else self.pre_trained_model_forward_kws))
+        else:
+            pt_out = self.pre_trained_model(x,
+                                            **(dict() if self.pre_trained_model_forward_kws is None
+                                               else self.pre_trained_model_forward_kws))
+
         return self.output_model(pt_out[self.pre_trained_model_output_key])
 

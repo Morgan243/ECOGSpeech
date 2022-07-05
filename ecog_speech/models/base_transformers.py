@@ -292,7 +292,7 @@ class CoG2Vec(torch.nn.Module):
                 torch.nn.Linear(3, 32),
                 torch.nn.LeakyReLU(),
                 #torch.nn.Linear(32, self.C * self.T),
-                torch.nn.Linear(32, self.C ),
+                torch.nn.Linear(32, self.C),
                 torch.nn.LeakyReLU()
             )
             self.positional_enc = None
@@ -649,12 +649,12 @@ class MultiChannelCog2Vec(torch.nn.Module):
 
         #hidden_encoder = 'linear' if hidden_encoder is None else hidden_encoder
         self.hidden_encoder_input = hidden_encoder
+        self.dropout_rate = 0.5
 
         if isinstance(hidden_encoder, torch.nn.Module):
             self.hidden_encoder = hidden_encoder
         elif hidden_encoder == 'linear':
-            self.lin_dim = 30
-            self.dropout_rate = 0.75
+            self.lin_dim = 20
             self.hidden_encoder = torch.nn.Sequential(
                 torch.nn.Dropout(self.dropout_rate),
                 torch.nn.Linear(self.h_dim * self.T, self.lin_dim),
@@ -671,13 +671,15 @@ class MultiChannelCog2Vec(torch.nn.Module):
             )
             self.feat_arr_reshape = (-1, self.h_dim * self.T)
         elif hidden_encoder == 'transformer':
-            encoder_layer = torch.nn.TransformerEncoderLayer(d_model=self.h_dim,
+            encoder_layer = torch.nn.TransformerEncoderLayer(d_model=self.h_dim, dropout=self.dropout_rate,
                                                              nhead=2, batch_first=True,
                                                              activation="gelu")
 
             self.hidden_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=2)
             self.feat_arr_reshape = (-1, self.T, self.h_dim)
             self.lin_dim = self.h_dim * self.T
+        else:
+            raise ValueError(f"Don't understand hidden_encoder = '{hidden_encoder}'")
 
 
         #h_size = 32
