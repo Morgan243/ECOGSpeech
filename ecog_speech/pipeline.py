@@ -1102,8 +1102,8 @@ class WindowSampleIndicesFromStim(DictTrf):
     def process(self, data_map):
 
         stim, fs = data_map[self.stim_key], data_map[self.fs_key]
-        existing_sample_indices_map = data_map.get('sample_index_map'),
-        existing_indices_sources_map = data_map.get('index_source_map'),
+        existing_sample_indices_map = data_map.get('sample_index_map')
+        existing_indices_sources_map = data_map.get('index_source_map')
 
         win_size = self.window_size
 
