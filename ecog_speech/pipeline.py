@@ -1049,18 +1049,7 @@ class WindowSampleIndicesFromIndex(DictTrf):
         existing_sample_indices_map = data_map.get('sample_index_map')
         stim_pre_process_f = self.stim_pre_process_f if self.stim_pre_process_f is not None else lambda _stim: _stim
         win_size = self.window_size
-        #return self.make_sample_indices(data_map[self.stim_key], data_map[self.fs_key], win_size=self.window_size,
-        #                                index_shift=self.index_shift,
-        #                                stim_target_value=self.stim_target_value, stim_value_remap=self.stim_value_remap,
-        #                                existing_sample_indices_map=data_map.get('sample_index_map'),
-        #                                stim_pre_process_f=self.stim_pre_process_f if self.stim_pre_process_f is not None
-        #                                                    else lambda _stim: _stim)
 
-#    @classmethod
-#    def make_sample_indices(cls, stim, fs, win_size,
-#                            index_shift, stim_target_value, stim_value_remap,
-#                            existing_sample_indices_map,
-#                            stim_pre_process_f):
         index_shift = pd.Timedelta(0, 's') if self.index_shift is None else self.index_shift
         existing_sample_indices_map = dict() if existing_sample_indices_map is None else existing_sample_indices_map
         sample_indices = dict()
