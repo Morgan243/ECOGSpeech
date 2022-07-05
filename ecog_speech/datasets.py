@@ -1051,12 +1051,14 @@ class HarvardSentences(BaseASPEN):
                                                                       # sec window saddles the original center
                                                                       # target_offset_shift=pd.Timedelta(-0.25, 's')
                                                                       target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                      max_target_region_size=300
+                                                                      #max_target_region_size=300
+                                                                      sample_n=1000,
                                                                       )),
             ('silence_indices', pipeline.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
                                                                       # Center the extracted 0.5 second window
                                                                       index_shift=pd.Timedelta(-0.25, 's'),
-                                                                      stim_value_remap=0
+                                                                      stim_value_remap=0,
+                                                                      sample_n=10000,
                                                                       ))]
 
         start_stop_steps = [('new_mtss', pipeline.NewNewMultiTaskStartStop()),
