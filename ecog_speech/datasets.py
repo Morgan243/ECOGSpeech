@@ -785,8 +785,8 @@ class BaseASPEN(BaseDataset):
         trial = cls.default_trial if trial is None else trial
         sensor_columns = cls.default_sensor_columns if sensor_columns is None else sensor_columns
 
+        cls.logger.info(f"-----------Subset: {str(subset)}------------")
         cls.logger.info(f"---{patient}-{session}-{trial}-{location}---")
-        cls.logger.info("|--->Using Subset: " + str(subset))
 
         p = cls.get_data_path(patient, session, trial, location, base_path=base_path, subset=subset)
         cls.logger.debug(f"Path : {p}")
