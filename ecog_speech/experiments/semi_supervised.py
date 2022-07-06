@@ -84,7 +84,7 @@ class SemiSupervisedExperiment(bxp.Experiment):
             model_kws=model_kws,
             **eval_res_map,
             model_options=vars(self.model),
-            task_options=vars(self.dataset),
+            task_options=vars(self.task),
             dataset_options=vars(self.dataset),
             result_output_options=vars(self.result_output)
         )

@@ -776,10 +776,11 @@ default_option_kwargs = [
 ]
 
 from dataclasses import dataclass
+from simple_parsing.helpers import JsonSerializable
 from typing import Optional
 
 @dataclass
-class ResultParsingOptions:
+class ResultParsingOptions(JsonSerializable):
     result_file: str = None
     print_results: bool = False
     base_model_path: Optional[str] = None

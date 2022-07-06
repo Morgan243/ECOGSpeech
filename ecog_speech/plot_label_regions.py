@@ -223,7 +223,8 @@ def plot_label_inspection_figures(data_map):
                  f'{len(wrd_code_len_s)} unique word codes'
     hist_title += f'\nLongest regions: {wrd_code_len_s.nlargest(5).to_dict()}'
     #ax = wrd_code_len_s.drop(0).plot.hist(title=hist_title)
-    ax = wrd_code_len_s.plot.hist(title=hist_title)
+    fig, ax = matplotlib.pyplot.subplots()
+    ax = wrd_code_len_s.plot.hist(title=hist_title, ax=ax)
     ax.set_xlabel('N Windows in label region')
     ax.set_ylabel('N Word codes')
     #ax.set_xlim(0)
