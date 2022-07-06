@@ -33,7 +33,8 @@ class ResultOptions(JsonSerializable):
 
     def __post_init__(self):
         if self.save_model_path is None and self.result_dir is not None:
-            self.save_model_path = pjoin(self.result_dir, '/models/')
+            self.save_model_path = pjoin(self.result_dir, 'models')
+            print("Auto inferred save_model_path = " + self.save_model_path)
 
         if self.result_dir is not None:
             Path(self.result_dir).mkdir(parents=True, exist_ok=True)
@@ -84,7 +85,6 @@ class Experiment(JsonSerializable):
             elif utils.is_jsonable(v):
                 o[k] = v
         return o
-
 
     @classmethod
     def save_results(cls, model: torch.nn.Module,
