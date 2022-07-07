@@ -14,7 +14,11 @@ from torch.nn import Module, Parameter
 from ecog_speech.models.base import Trainer
 import attr
 from tqdm.auto import tqdm
-
+from fairseq.modules import (
+    Fp32GroupNorm,
+    Fp32LayerNorm,
+    TransposeLast,
+)
 
 # https://github.com/pytorch/audio/blob/a92ae3688afad51245d135a3f361fb7e20364d6d/torchaudio/models/wav2vec2/components.py#L718
 def _compute_mask_indices(
@@ -142,6 +146,86 @@ def _compute_mask_indices(
     return mask
 
 
+class ConvFeatureExtractionModel(nn.Module):
+    def __init__(
+        self,
+        conv_layers: List[Tuple[int, int, int]],
+        dropout: float = 0.0,
+        mode: str = "default",
+        conv_bias: bool = False,
+    ):
+        super().__init__()
+
+        assert mode in {"default", "layer_norm"}
+
+        def block(
+            n_in,
+            n_out,
+            k,
+            stride,
+            is_layer_norm=False,
+            is_group_norm=False,
+            conv_bias=False,
+        ):
+            def make_conv():
+                conv = nn.Conv1d(n_in, n_out, k, stride=stride, bias=conv_bias)
+                nn.init.kaiming_normal_(conv.weight)
+                return conv
+
+            assert (
+                is_layer_norm and is_group_norm
+            ) == False, "layer norm and group norm are exclusive"
+
+            if is_layer_norm:
+                return nn.Sequential(
+                    make_conv(),
+                    nn.Dropout(p=dropout),
+                    nn.Sequential(
+                        TransposeLast(),
+                        Fp32LayerNorm(dim, elementwise_affine=True),
+                        TransposeLast(),
+                    ),
+                    nn.GELU(),
+                )
+            elif is_group_norm:
+                return nn.Sequential(
+                    make_conv(),
+                    nn.Dropout(p=dropout),
+                    Fp32GroupNorm(dim, dim, affine=True),
+                    nn.GELU(),
+                )
+            else:
+                return nn.Sequential(make_conv(), nn.Dropout(p=dropout), nn.GELU())
+
+        in_d = 1
+        self.conv_layers = nn.ModuleList()
+        for i, cl in enumerate(conv_layers):
+            assert len(cl) == 3, "invalid conv definition: " + str(cl)
+            (dim, k, stride) = cl
+
+            self.conv_layers.append(
+                block(
+                    in_d,
+                    dim,
+                    k,
+                    stride,
+                    is_layer_norm=mode == "layer_norm",
+                    is_group_norm=mode == "default" and i == 0,
+                    conv_bias=conv_bias,
+                )
+            )
+            in_d = dim
+
+    def forward(self, x):
+
+        # BxT -> BxCxT
+        #x = x.unsqueeze(1)
+
+        for conv in self.conv_layers:
+            x = conv(x)
+
+        return x
+
 # https://pytorch.org/tutorials/beginner/transformer_tutorial.html
 class PositionalEncoding(nn.Module):
 
@@ -175,7 +259,7 @@ class CoG2Vec(torch.nn.Module):
     logit_temp = 0.1
 
     def __init__(self, input_shape, feature_model, context_model, projection_model,
-                 dropout=0.1, feature_grad_mult=1,
+                 feature_extractor_dropout=0.1, feature_grad_mult=1,
                  negatives_from_everywhere=True, n_negatives=100,
                  cross_sample_negatives=0, codebook_negatives=0,
                  mask_length=2, mask_prob=0.2,
@@ -183,10 +267,11 @@ class CoG2Vec(torch.nn.Module):
                  quant_num_vars=300, quant_num_groups=2,
                  quant_weight_proj_factor=2, quant_weight_proj_depth=1,
                  feature_extractor_layers='[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(128, 3, 1)]',
-                 feature_extractor_mode='layer_norm',
+                 feature_extractor_mode='default',
+                 context_encoder_dropout=0.,
                  ras_pos_encoding=True, temporal_pos_encoding=True,
                  positional_encoding_method='combined',
-                 squeeze_first=True):
+                 squeeze_first=False):
         super().__init__()
         self.input_shape = input_shape
         self.feature_model = feature_model
@@ -207,22 +292,25 @@ class CoG2Vec(torch.nn.Module):
         # ####
         # Feature extractor: typically CNN that downsamples/aggregates input for the context and quantize stages
         # Create a default feature exractor model if not provided
-        from fairseq.models.wav2vec import ConvFeatureExtractionModel
+        #from fairseq.models.wav2vec import ConvFeatureExtractionModel
         self.squeeze_first = squeeze_first
 
         if self.feature_model is None:
             conv_layers = (eval(feature_extractor_layers) if isinstance(feature_extractor_layers, str)
                            else feature_extractor_layers)
-            #h_channels = 256
             self.feature_model = ConvFeatureExtractionModel(
-                #conv_layers=[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(f_dim, 3, 1)],
                 conv_layers=conv_layers,
-                dropout=dropout,
+                dropout=feature_extractor_dropout,
                 mode=feature_extractor_mode,#'layer_norm',
                 # mode="default",#cfg.extractor_mode,
                 conv_bias=False,  # cfg.conv_bias,
                 #squeeze_first=True
             )
+            self.feature_model = torch.nn.Sequential(
+                torch.nn.BatchNorm1d(num_features=1),
+                self.feature_model
+            )
+
             #from fairseq
             # TODO: check on existing norm and GELU activation?
 #            self.feature_model = torch.nn.Sequential(
@@ -307,9 +395,10 @@ class CoG2Vec(torch.nn.Module):
         self.n_heads = n_encoder_heads
         self.num_encoder_layers = n_encoder_layers
         self.context_model = context_model
+        self.context_encoder_dropout = context_encoder_dropout
         if self.context_model is None:
             encoder_layer = torch.nn.TransformerEncoderLayer(d_model=embed_dim, nhead=self.n_heads, batch_first=True,
-                                                             activation="gelu")
+                                                             activation="gelu", dropout=self.context_encoder_dropout)
             transformer_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=self.num_encoder_layers)
             self.context_model = transformer_encoder
 
@@ -711,7 +800,7 @@ class MultiChannelCog2Vec(torch.nn.Module):
 @attr.s
 class Cog2VecTrainer(Trainer):
     input_key = attr.ib('signal_arr')
-    squeeze_first = True
+    squeeze_first = False  #True
     model_output_logits_key = 'preds'
     ppl_weight = 100.
 
@@ -943,7 +1032,7 @@ class Cog2VecTrainer(Trainer):
 @dataclass
 class Cog2VecOptions(bmp.ModelOptions):
     model_name: str = 'cog2vec'
-    dropout: float = 0.
+    feature_extractor_dropout: float = 0.
     feature_grad_mult: float = 1
     negatives_from_everywhere: bool = True
     n_negatives: int = 100
@@ -952,14 +1041,15 @@ class Cog2VecOptions(bmp.ModelOptions):
     mask_length: int = 2
     mask_prob: float = 0.2
     n_encoder_heads: int = 8
-    n_encoder_layers: int = 12
-    quant_num_vars: int = 300
+    n_encoder_layers: int = 7
+    quant_num_vars: int = 100
     quant_num_groups: int = 2
     quant_weight_proj_factor: int = 2
     quant_weight_proj_depth: int = 1
-    feature_extractor_layers: str = '[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(128, 3, 1)]'
+    feature_extractor_layers: str = '[(128, 7, 3)] + [(64, 3, 2)] * 2 + [(64, 3, 1)]'
     feature_extractor_mode: str = 'layer_norm'
     ras_pos_encoding: bool = True
+    positional_encoding_method: str = 'combined'
     squeeze_first: bool = True
 
     def make_model_kws(self, dataset=None, **kws):
@@ -967,20 +1057,22 @@ class Cog2VecOptions(bmp.ModelOptions):
             #input_shape=(1, 256),
             input_shape=(1, dataset.get_feature_shape()[-1]),
             feature_model=None, context_model=None, projection_model=None,
-            dropout=self.dropout, negatives_from_everywhere=self.negatives_from_everywhere,
+            feature_extractor_dropout=self.feature_extractor_dropout,
+            negatives_from_everywhere=self.negatives_from_everywhere,
             feature_grad_mult=self.feature_grad_mult,
             n_negatives=self.n_negatives, codebook_negatives=self.codebook_negatives,
             cross_sample_negatives=self.cross_sample_negatives,
             mask_length=self.mask_length, n_encoder_heads=self.n_encoder_heads,
             n_encoder_layers=self.n_encoder_layers,
             quant_num_vars=self.quant_num_vars, quant_num_groups=self.quant_num_groups,
-            feature_extractor_layers=self.feature_extractor_layers
+            feature_extractor_layers=self.feature_extractor_layers,
+            positional_encoding_method=self.positional_encoding_method
         )
 
     def make_model(self, dataset: Optional[datasets.BaseDataset],
                    in_channels=None, window_size=None):
         model_kws = self.make_model_kws(dataset)
-        return CoG2Vec(**model_kws), model_kws
+        return CoG2Vec(**model_kws, ), model_kws
 
 
 #if __name__ == """__main__""":

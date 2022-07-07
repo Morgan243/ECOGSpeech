@@ -13,7 +13,7 @@ logger = utils.get_logger('semi_supervised')
 @dataclass
 class SemisupervisedCodebookTaskOptions(bxp.TaskOptions):
     task_name: str = "semisupervised_codebook_training"
-    ppl_weight: float = 100.
+    ppl_weight: float = 1000.
 
 
 @dataclass

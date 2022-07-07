@@ -1013,6 +1013,7 @@ class HarvardSentences(BaseASPEN):
                                                                48000, reshape=-1)),
             ('parse_stim', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['stimcode'],
                                                               self.mat_d_keys['signal_fs'],
+                                                              # TODO: Check the default rate here - 1024?
                                                               1200, reshape=-1, output_key='stim')),
             ('parse_sensor_ras', pipeline.ParseSensorRAS()),
             ('extract_mfc', pipeline.ExtractMFCC())
@@ -1020,6 +1021,8 @@ class HarvardSentences(BaseASPEN):
 
         parse_input_steps = [
             ('sensor_selection', pipeline.IdentifyGoodAndBadSensors(sensor_selection=self.sensor_columns)),
+            # TODO: Wave2Vec2 standardizes like this
+            #  - but should we keep this in to match or should we batch norm at the top?
             ('rescale_signal', pipeline.StandardNormSignal()),
             ('subsample', pipeline.SubsampleSignal()),
             ('sent_from_start_stop', pipeline.SentCodeFromStartStopWordTimes()),
