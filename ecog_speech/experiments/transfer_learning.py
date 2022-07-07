@@ -242,6 +242,7 @@ class FineTuningExperiment(bxp.Experiment):
             #model_name=self.model.model_name,
             batch_losses=ft_results,
             train_selected_columns=dataset_map['train'].selected_columns,  # dataset_map['train'].selected_columns,
+            test_selected_flat_indices=dataset_map['test'].selected_flat_indices,
             best_model_epoch=ft_trainer.best_model_epoch,
             num_trainable_params=utils.number_of_model_params(fine_tune_model),
             num_params=utils.number_of_model_params(fine_tune_model, trainable_only=False),

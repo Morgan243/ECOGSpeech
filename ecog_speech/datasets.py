@@ -305,7 +305,7 @@ class BaseASPEN(BaseDataset):
 
     num_mfcc = attr.ib(13)
 
-    selected_word_indices = attr.ib(None)
+    selected_flat_indices = attr.ib(None)
     transform = attr.ib(None)
     transform_l = attr.ib(attr.Factory(list))
     target_transform = attr.ib(None)
@@ -549,7 +549,7 @@ class BaseASPEN(BaseDataset):
             self.extra_output_keys = self.data_from.extra_output_keys
             self.fs_signal = self.data_from.fs_signal
 
-        self.select(self.selected_word_indices)
+        self.select(self.selected_flat_indices)
 
     def make_pipeline_map(self, default='audio_gate'):
         """
@@ -673,7 +673,7 @@ class BaseASPEN(BaseDataset):
         # split_time = 0.75
         from tqdm.auto import tqdm
 
-        selected_keys_arr = self.flat_keys[self.selected_word_indices]
+        selected_keys_arr = self.flat_keys[self.selected_flat_indices]
         index_start_stop = [(self.flat_index_map[a[0]].min(), self.flat_index_map[a[0]].max())
                             for a in tqdm(selected_keys_arr)]
         split_time = max(a for a, b, in index_start_stop) * split_time if isinstance(split_time, float) else split_time
@@ -692,32 +692,34 @@ class BaseASPEN(BaseDataset):
 
         return left_dataset, right_dataset
 
-    def split_select_random_key_levels(self, key='sent_code', **train_test_split_kws):
+    def split_select_random_key_levels(self, keys=['sent_code'], **train_test_split_kws):
         from sklearn.model_selection import train_test_split
-        s: pd.Series = self.sample_ix_df[key]
-        levels = s.unique()
+        levels: pd.DataFrame = self.sample_ix_df[keys].drop_duplicates()
+        #levels = s.unique()
         train, test = train_test_split(levels, **train_test_split_kws)
-        self.logger.info(f"{len(levels)} levels in {key} split into train/test")
+        self.logger.info(f"{len(levels)} levels in {keys} split into train/test")
         self.logger.info(f"Train: {train}")
         self.logger.info(f"Test : {test}")
 
-        train_mask = s.isin(train)
-        test_mask = s.isin(test)
+        #train_mask = s.isin(train)
+        #test_mask = s.isin(test)
 
-        train_indices = self.sample_ix_df[train_mask].index.tolist()
-        test_indices = self.sample_ix_df[test_mask].index.tolist()
+        #train_indices = self.sample_ix_df[train_mask].index.tolist()
+        train_indices = self.sample_ix_df[keys].merge(train, on=keys, how='inner').index.tolist()
+        #test_indices = self.sample_ix_df[test_mask].index.tolist()
+        test_indices = self.sample_ix_df[keys].merge(test, on=keys, how='inner').index.tolist()
 
-        train_dataset = self.__class__(data_from=self, selected_word_indices=train_indices)
-        test_dataset = self.__class__(data_from=self, selected_word_indices=test_indices)
+        train_dataset = self.__class__(data_from=self, selected_flat_indices=train_indices)
+        test_dataset = self.__class__(data_from=self, selected_flat_indices=test_indices)
 
         return train_dataset, test_dataset
 
     def select(self, sample_indices):
         # select out specific samples from the flat_keys array if selection passed
         # - Useful if doing one-subject training and want to split data up among datasets for use
-        self.selected_word_indices = sample_indices
-        if self.selected_word_indices is not None:
-            self.selected_flat_keys = self.flat_keys[self.selected_word_indices]
+        self.selected_flat_indices = sample_indices
+        if self.selected_flat_indices is not None:
+            self.selected_flat_keys = self.flat_keys[self.selected_flat_indices]
         else:
             self.selected_flat_keys = self.flat_keys
 
