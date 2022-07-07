@@ -692,8 +692,9 @@ class BaseASPEN(BaseDataset):
 
         return left_dataset, right_dataset
 
-    def split_select_random_key_levels(self, keys=['sent_code'], **train_test_split_kws):
+    def split_select_random_key_levels(self, keys=('patient', 'sent_code'), **train_test_split_kws):
         from sklearn.model_selection import train_test_split
+        keys = list(keys) if isinstance(keys, tuple) else keys
         levels: pd.DataFrame = self.sample_ix_df[keys].drop_duplicates()
         #levels = s.unique()
         train, test = train_test_split(levels, **train_test_split_kws)
