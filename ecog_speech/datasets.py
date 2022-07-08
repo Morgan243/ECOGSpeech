@@ -463,7 +463,8 @@ class BaseASPEN(BaseDataset):
                                  for label_code, indices_l in index_map.items()
                                  for ix_i, _ix in enumerate(indices_l)]
 
-                p_ix_df = pd.DataFrame(patient_ixes, columns=cols, dtype=key_col_dtypes)
+                p_ix_df = pd.DataFrame(patient_ixes, columns=cols)
+                p_ix_df = p_ix_df.astype(key_col_dtypes)
 
                 # #TODO: Is this still necessary? Determining the sentence code for every window sample from scratch
                 if 'word_start_stop_times' in self.data_maps[l_p_s_t]:

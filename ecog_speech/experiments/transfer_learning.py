@@ -167,6 +167,7 @@ class FineTuningExperiment(bxp.Experiment):
         # Pretrained model already prepared, parse from its results output
         pretrained_model, pretraining_results = self.make_pretrained_model(self.pretrained_result_input.result_file,
                                                                            self.pretrained_result_input.model_base_path)
+        train_sets = None
         if self.task.dataset.train_sets == 'AUTO-REMAINING':
             # Literally could have just .replace('~'), but instead wrote '*' special case for some set math in case it
             # gets more complicated...
