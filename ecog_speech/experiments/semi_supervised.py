@@ -78,7 +78,7 @@ class SemiSupervisedExperiment(bxp.Experiment):
             model_name=self.model.model_name,
             batch_losses=losses,
             train_selected_columns=dataset_map['train'].selected_columns,
-            selected_flat_indices={k: d.selected_flat_indices for k, d in dataset_map.items()},
+            selected_flat_indices={k: d.selected_levels_df.to_json() for k, d in dataset_map.items()},
             best_model_epoch=trainer.best_model_epoch,
             num_trainable_params=utils.number_of_model_params(model),
             num_params=utils.number_of_model_params(model, trainable_only=False),

@@ -59,7 +59,7 @@ class SpeechDetectionFineTuningTask(bxp.TaskOptions):
 @dataclass
 class RegionDetectionFineTuningTask(bxp.TaskOptions):
     task_name: str = "region_classification_fine_tuning"
-    dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='UCSD-22',
+    dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='AUTO-REMAINING',
                                                                pre_processing_pipeline='region_classification')
     method: str = '2d_linear'
 
@@ -167,8 +167,15 @@ class FineTuningExperiment(bxp.Experiment):
         # Pretrained model already prepared, parse from its results output
         pretrained_model, pretraining_results = self.make_pretrained_model(self.pretrained_result_input.result_file,
                                                                            self.pretrained_result_input.model_base_path)
+        if self.task.dataset.train_sets == 'AUTO-REMAINING':
+            # Literally could have just .replace('~'), but instead wrote '*' special case for some set math in case it
+            # gets more complicated...
+            pretrained_set = pretraining_results['dataset_options']['train_sets']
+            train_sets = list(set(datasets.HarvardSentences.make_tuples_from_sets_str('*'))
+                              - set(datasets.HarvardSentences.make_tuples_from_sets_str(pretrained_set)))
+            logger.info(f"AUTO-REMAINING: pretrained on {pretrained_set}, so fine tuning on {train_sets}")
 
-        dataset_map, dl_map, eval_dl_map = self.task.dataset.make_datasets_and_loaders()
+        dataset_map, dl_map, eval_dl_map = self.task.dataset.make_datasets_and_loaders(train_p_tuples=train_sets)
 
         # Capture configurable kws separately, so they can be easily saved in the results at the end
         fine_tune_model_kws = dict(fine_tuning_method=self.task.method)
@@ -243,7 +250,8 @@ class FineTuningExperiment(bxp.Experiment):
             batch_losses=ft_results,
             train_selected_columns=dataset_map['train'].selected_columns,  # dataset_map['train'].selected_columns,
             #test_selected_flat_indices=dataset_map['test'].selected_flat_indices,
-            selected_flat_indices={k: d.selected_flat_indices for k, d in dataset_map.items()},
+            #selected_flat_indices={k: d.selected_flat_indices for k, d in dataset_map.items()},
+            selected_flat_indices={k: d.selected_levels_df.to_json() for k, d in dataset_map.items()},
             best_model_epoch=ft_trainer.best_model_epoch,
             num_trainable_params=utils.number_of_model_params(fine_tune_model),
             num_params=utils.number_of_model_params(fine_tune_model, trainable_only=False),

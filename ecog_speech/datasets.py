@@ -445,41 +445,14 @@ class BaseASPEN(BaseDataset):
 
             self.sensor_count = len(self.selected_columns)
 
-            #            if self.flatten_sensors_to_samples:
-            #                # Map full description (word label, window index, sensor,...trial key elements..}
-            #                # to the actual pandas index
-            #                self.logger.info("Flattening sensors to samples")
-            #                self.flat_index_map = {tuple([wrd_id, ix_i, s_i] + list(k_t)): ixes
-            #                                       for k_t, index_map in tqdm(self.sample_index_maps.items(),
-            #                                                                  desc="Creating sample indices")
-            #                                       for wrd_id, ix_list in index_map.items()
-            #                                       for ix_i, ixes in enumerate(ix_list)
-            #                                       for s_i, s in enumerate(self.selected_columns)}
-            #
-            #                # Enumerate all the keys across flat_index_map into one large list for index-style,
-            #                # has a len() and can be indexed into nicely (via np.ndarray)
-            #                self.flat_keys = np.array([(k, k[3:])
-            #                                           for i, k in enumerate(self.flat_index_map.keys())],
-            #                                          dtype='object')
-            #            else:
-            #                # Map full description (word label, window index,...trial key elements..}
-            #                # to the actual pandas index
-            #                self.flat_index_map = {tuple([wrd_id, ix_i] + list(k_t)): ixes
-            #                                       for k_t, index_map in tqdm(self.sample_index_maps.items(),
-            #                                                                  desc="Creating sample indices")
-            #                                       for wrd_id, ix_list in index_map.items()
-            #                                       for ix_i, ixes in enumerate(ix_list)}
-            #
-            #                # Enumerate all the keys across flat_index_map into one large list for index-style,
-            #                # has a len() and can be indexed into nicely (via np.ndarray)
-            #                self.flat_keys = np.array([(k, k[2:])
-            #                                           for i, k in enumerate(self.flat_index_map.keys())],
-            #                                          dtype='object')
-
             # ### New Version ###
             sample_ix_df_l = list()
-            key_cols = ['label', 'sample_ix', 'location', 'patient', 'session', 'trial']
+            key_col_dtypes = {'label': 'int8', 'sample_ix': 'int32', 'location': 'string',
+                             'patient': 'int8', 'session': 'int8', 'trial': 'int8'}
+            key_cols = list(key_col_dtypes.keys())
+
             for l_p_s_t, index_map in self.sample_index_maps.items():
+                self.logger.info(f"Creating participants index frame: {l_p_s_t}")
                 patient_ixes = list()
 
                 cols = key_cols + ['start_t', 'stop_t', 'indices']
@@ -490,29 +463,37 @@ class BaseASPEN(BaseDataset):
                                  for label_code, indices_l in index_map.items()
                                  for ix_i, _ix in enumerate(indices_l)]
 
-                p_ix_df = pd.DataFrame(patient_ixes, columns=cols)
+                p_ix_df = pd.DataFrame(patient_ixes, columns=cols, dtype=key_col_dtypes)
 
+                # #TODO: Is this still necessary? Determining the sentence code for every window sample from scratch
                 if 'word_start_stop_times' in self.data_maps[l_p_s_t]:
+                    self.logger.info(f"word_start_stop_times found aligning all index start times to a sentence code")
                     wsst_df = self.data_maps[l_p_s_t]['word_start_stop_times']
                     nearest_ixes = wsst_df.index.get_indexer(p_ix_df.start_t, method='nearest')
                     p_ix_df['sent_code'] = wsst_df.iloc[nearest_ixes].stim_sentcode.values
 
                 sample_ix_df_l.append(p_ix_df)
 
+            self.logger.info(f"Combining all of {len(sample_ix_df_l)} index frames")
             self.sample_ix_df = pd.concat(sample_ix_df_l).reset_index(drop=True)
             k_select_offset = 2
             if self.flatten_sensors_to_samples:
+                self.logger.info(f"flatten_sensors_to_samples selected - creating channel/sensor labels for samples")
                 self.sample_ix_df['channel'] = [self.selected_columns] * len(self.sample_ix_df)
+                #self.sample_ix_df['channel'] = self.sample_ix_df['channel'].astype('int16')
                 key_cols.insert(2, 'channel')
                 k_select_offset += 1
+                self.logger.debug("exploding sensor data - does this take a while?")
                 self.sample_ix_df = self.sample_ix_df.explode('channel')
 
             self.key_cols = key_cols
 
+            self.logger.info("Converting dataframe to a flat list of key variables (self.flat_keys)")
             key_df = self.sample_ix_df[self.key_cols]
             self.flat_keys = np.array(list(zip(key_df.to_records(index=False).tolist(),
                                                key_df.iloc[:, k_select_offset:].to_records(index=False).tolist())),
                                       dtype='object')
+            self.logger.info(f"Extracting ({key_cols})->indices mapping")
             self.flat_index_map = self.sample_ix_df.set_index(key_cols).indices.to_dict()
 
             # ## END NEW VERSION
@@ -711,7 +692,9 @@ class BaseASPEN(BaseDataset):
         test_indices = self.sample_ix_df[keys].merge(test, on=keys, how='inner').index.tolist()
 
         train_dataset = self.__class__(data_from=self, selected_flat_indices=train_indices)
+        train_dataset.selected_levels_df = train
         test_dataset = self.__class__(data_from=self, selected_flat_indices=test_indices)
+        test_dataset.selected_levels_df = test
 
         return train_dataset, test_dataset
 
@@ -806,6 +789,12 @@ class BaseASPEN(BaseDataset):
         """
         if sets_str is None:
             return None
+
+        # Select everything from all locations
+        if sets_str.strip() == '*':
+            return [t for loc, p_t_d in cls.all_patient_maps.items()
+                     for t_l in p_t_d.values()
+                     for t in t_l]
 
         # e.g. MC-19-0,MC-19-1
         if ',' in sets_str:
@@ -1420,6 +1409,7 @@ class DatasetOptions(JsonSerializable):
     def make_datasets_and_loaders(self, dataset_cls=None, base_data_kws=None,
                                   train_data_kws=None, cv_data_kws=None, test_data_kws=None,
                                   train_sets_str=None, cv_sets_str=None, test_sets_str=None,
+                                  train_p_tuples=None, cv_p_tuples=None, test_p_tuples=None,
                                   train_sensor_columns='valid',
                                   pre_processing_pipeline=None,
                                   additional_transforms=None,
@@ -1456,12 +1446,15 @@ class DatasetOptions(JsonSerializable):
         if dataset_cls is None:
             dataset_cls = BaseDataset.get_dataset_by_name(self.dataset_name)
 
-        train_p_tuples = dataset_cls.make_tuples_from_sets_str(self.train_sets if train_sets_str is None
-                                                               else train_sets_str)
-        cv_p_tuples = dataset_cls.make_tuples_from_sets_str(self.cv_sets if cv_sets_str is None
-                                                            else cv_sets_str)
-        test_p_tuples = dataset_cls.make_tuples_from_sets_str(self.test_sets if test_sets_str is None
-                                                              else test_sets_str)
+        if train_p_tuples is None:
+            train_p_tuples = dataset_cls.make_tuples_from_sets_str(self.train_sets if train_sets_str is None
+                                                                   else train_sets_str)
+        if cv_p_tuples is None:
+            cv_p_tuples = dataset_cls.make_tuples_from_sets_str(self.cv_sets if cv_sets_str is None
+                                                                else cv_sets_str)
+        if test_p_tuples is None:
+            test_p_tuples = dataset_cls.make_tuples_from_sets_str(self.test_sets if test_sets_str is None
+                                                                  else test_sets_str)
         logger.info("Train tuples: " + str(train_p_tuples))
         logger.info("CV tuples: " + str(cv_p_tuples))
         logger.info("Test tuples: " + str(test_p_tuples))
