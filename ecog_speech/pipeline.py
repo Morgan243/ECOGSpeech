@@ -1165,7 +1165,7 @@ class WindowSampleIndicesFromStim(DictTrf):
                     self.logger.warning(f"[{k}][{i}] ({len(_ixs)}): {_ixs}")
 
         self.logger.info(f"Number of samples keys in sample index: {pd.Series(size_d).value_counts().to_dict()}")
-        self.logger.info(f"Windows coded to (i.e. target value): {', '.join(sample_indices.keys())}")
+        self.logger.info(f"Windows coded to (i.e. target value): {', '.join(map(str, sample_indices.keys()))}")
 
         # Debug code printing the unique lengths of each window for each word code
         #print({k : sorted(list(set(map(len, _s)))) for k, _s in sample_indices.items()})

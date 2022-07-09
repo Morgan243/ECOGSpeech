@@ -105,6 +105,28 @@ class FineTuningExperiment(bxp.Experiment):
 
         return pretrained_model, result_json
 
+    @property
+    def pretrained_model(self):
+        if not hasattr(self, '_pretrained_model'):
+            self._pretrained_model, self._pretraining_results = self.make_pretrained_model(
+                self.pretrained_result_input.result_file,
+                self.pretrained_result_input.model_base_path)
+        return self._pretrained_model, self._pretraining_results
+
+    def make_fine_tuning_datasets_and_loaders(self, pretraining_sets=None):
+        train_sets = None
+        if self.task.dataset.train_sets == 'AUTO-REMAINING':
+            pretraining_sets = self.pretrained_model[1]['dataset_options']['train_sets'] if pretraining_sets is None else pretraining_sets
+            # Literally could have just .replace('~'), but instead wrote '*' special case for some set math in case it
+            # gets more complicated...
+            train_sets = list(set(datasets.HarvardSentences.make_tuples_from_sets_str('*'))
+                              - set(datasets.HarvardSentences.make_tuples_from_sets_str(pretraining_sets)))
+            logger.info(f"AUTO-REMAINING: pretrained on {pretraining_sets}, so fine tuning on {train_sets}")
+
+        return self.task.dataset.make_datasets_and_loaders(train_p_tuples=train_sets)
+
+
+
     @classmethod
     def create_fine_tuning_model(cls, pretrained_model,
                                  n_pretrained_output_channels=None, n_pretrained_output_samples=None,
@@ -165,18 +187,21 @@ class FineTuningExperiment(bxp.Experiment):
 
     def run(self):
         # Pretrained model already prepared, parse from its results output
-        pretrained_model, pretraining_results = self.make_pretrained_model(self.pretrained_result_input.result_file,
-                                                                           self.pretrained_result_input.model_base_path)
-        train_sets = None
-        if self.task.dataset.train_sets == 'AUTO-REMAINING':
-            # Literally could have just .replace('~'), but instead wrote '*' special case for some set math in case it
-            # gets more complicated...
-            pretrained_set = pretraining_results['dataset_options']['train_sets']
-            train_sets = list(set(datasets.HarvardSentences.make_tuples_from_sets_str('*'))
-                              - set(datasets.HarvardSentences.make_tuples_from_sets_str(pretrained_set)))
-            logger.info(f"AUTO-REMAINING: pretrained on {pretrained_set}, so fine tuning on {train_sets}")
+        pretrained_model, pretraining_results = self.pretrained_model
+        #pretrained_model, pretraining_results = self.make_pretrained_model(self.pretrained_result_input.result_file,
+        #                                                                   self.pretrained_result_input.model_base_path)
+        #train_sets = None
+        #if self.task.dataset.train_sets == 'AUTO-REMAINING':
+        #    # Literally could have just .replace('~'), but instead wrote '*' special case for some set math in case it
+        #    # gets more complicated...
+        #    pretrained_set = pretraining_results['dataset_options']['train_sets']
+        #    train_sets = list(set(datasets.HarvardSentences.make_tuples_from_sets_str('*'))
+        #                      - set(datasets.HarvardSentences.make_tuples_from_sets_str(pretrained_set)))
+        #    logger.info(f"AUTO-REMAINING: pretrained on {pretrained_set}, so fine tuning on {train_sets}")
 
-        dataset_map, dl_map, eval_dl_map = self.task.dataset.make_datasets_and_loaders(train_p_tuples=train_sets)
+        #dataset_map, dl_map, eval_dl_map = self.task.dataset.make_datasets_and_loaders(train_p_tuples=train_sets)
+
+        dataset_map, dl_map, eval_dl_map = self.make_fine_tuning_datasets_and_loaders()
 
         # Capture configurable kws separately, so they can be easily saved in the results at the end
         fine_tune_model_kws = dict(fine_tuning_method=self.task.method)

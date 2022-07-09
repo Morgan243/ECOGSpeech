@@ -393,11 +393,6 @@ class BaseASPEN(BaseDataset):
                 # self.fs_signal = getattr(self, 'fs_signal', res_dmap[self.mat_d_keys['signal_fs']])
                 self.fs_signal = res_dmap[self.mat_d_keys['signal_fs']] if self.fs_signal is None else self.fs_signal
 
-                # self.ecog_window_size = getattr(self, 'ecog_window_size',
-                #                                int(self.fs_signal * self.sample_ixer.window_size.total_seconds()))
-                # self.ecog_window_size = int(self.fs_signal * self.sample_ixer.window_size.total_seconds())
-
-                # self.n_samples_per_window = res_dmap['n_samples_per_window']
                 self.n_samples_per_window = getattr(self, 'n_samples_per_window', res_dmap['n_samples_per_window'])
                 self.logger.info(f"N samples per window: {self.n_samples_per_window}")
 
@@ -452,7 +447,8 @@ class BaseASPEN(BaseDataset):
             key_cols = list(key_col_dtypes.keys())
 
             for l_p_s_t, index_map in self.sample_index_maps.items():
-                self.logger.info(f"Creating participants index frame: {l_p_s_t}")
+                self.logger.info(f"Processing participant {l_p_s_t} index, having keys: {list(index_map.keys())}")
+                #self.logger.info(f"Creating participants index frame: {l_p_s_t}")
                 patient_ixes = list()
 
                 cols = key_cols + ['start_t', 'stop_t', 'indices']
@@ -494,7 +490,7 @@ class BaseASPEN(BaseDataset):
             self.flat_keys = np.array(list(zip(key_df.to_records(index=False).tolist(),
                                                key_df.iloc[:, k_select_offset:].to_records(index=False).tolist())),
                                       dtype='object')
-            self.logger.info(f"Extracting ({key_cols})->indices mapping")
+            self.logger.info(f"Extracting mapping of ({key_cols})->indices")
             self.flat_index_map = self.sample_ix_df.set_index(key_cols).indices.to_dict()
 
             # ## END NEW VERSION
@@ -688,9 +684,9 @@ class BaseASPEN(BaseDataset):
         #test_mask = s.isin(test)
 
         #train_indices = self.sample_ix_df[train_mask].index.tolist()
-        train_indices = self.sample_ix_df[keys].merge(train, on=keys, how='inner').index.tolist()
+        train_indices = self.sample_ix_df[keys].reset_index().merge(train, on=keys, how='inner').set_index('index').index.tolist()
         #test_indices = self.sample_ix_df[test_mask].index.tolist()
-        test_indices = self.sample_ix_df[keys].merge(test, on=keys, how='inner').index.tolist()
+        test_indices = self.sample_ix_df[keys].reset_index().merge(test, on=keys, how='inner').set_index('index').index.tolist()
 
         train_dataset = self.__class__(data_from=self, selected_flat_indices=train_indices)
         train_dataset.selected_levels_df = train
@@ -1487,7 +1483,10 @@ class DatasetOptions(JsonSerializable):
         print(f"DL Keyword arguments: {dl_kws}")
         eval_dl_kws = dict(num_workers=self.n_dl_eval_workers, batch_size=512,
                            batches_per_epoch=self.batches_per_epoch,
-                           shuffle=False, random_sample=False if self.batches_per_epoch is None else True)
+                           shuffle=self.batches_per_epoch is None,
+                           random_sample=self.batches_per_epoch is not None)
+                           #shuffle=False if self.batches_per_epoch is None else True,
+                           #random_sample=False if self.batches_per_epoch is None else True)
 
         dataset_map = dict()
         logger.info("Using dataset class: %s" % str(dataset_cls))
