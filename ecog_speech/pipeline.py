@@ -1112,7 +1112,7 @@ class WindowSampleIndicesFromStim(DictTrf):
         # TODO: This will not work for constant stim value (i.e. True/False, 1/0)?
         # TODO: Need to review UCSD data and how to write something that will work for its regions
         s_grp = stim[stim > 0].pipe(lambda _s: _s.groupby(_s))
-        for stim_value, g_s in tqdm(s_grp, desc=f"Processing stim regions"):
+        for stim_value, g_s in tqdm(s_grp, desc=f"Processing stim regions from '{self.stim_key}'"):
             start_t = g_s.index.min()
             stop_t = g_s.index.max()
 
@@ -1165,6 +1165,7 @@ class WindowSampleIndicesFromStim(DictTrf):
                     self.logger.warning(f"[{k}][{i}] ({len(_ixs)}): {_ixs}")
 
         self.logger.info(f"Number of samples keys in sample index: {pd.Series(size_d).value_counts().to_dict()}")
+        self.logger.info(f"Windows coded to (i.e. target value): {', '.join(sample_indices.keys())}")
 
         # Debug code printing the unique lengths of each window for each word code
         #print({k : sorted(list(set(map(len, _s)))) for k, _s in sample_indices.items()})

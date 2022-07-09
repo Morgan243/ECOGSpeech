@@ -1016,7 +1016,7 @@ class HarvardSentences(BaseASPEN):
             ('sensor_selection', pipeline.IdentifyGoodAndBadSensors(sensor_selection=self.sensor_columns)),
             # TODO: Wave2Vec2 standardizes like this
             #  - but should we keep this in to match or should we batch norm at the top?
-            ('rescale_signal', pipeline.StandardNormSignal()),
+            #('rescale_signal', pipeline.StandardNormSignal()),
             ('subsample', pipeline.SubsampleSignal()),
             ('sent_from_start_stop', pipeline.SentCodeFromStartStopWordTimes()),
 

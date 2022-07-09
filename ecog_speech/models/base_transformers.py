@@ -259,10 +259,10 @@ class CoG2Vec(torch.nn.Module):
     logit_temp = 0.1
 
     def __init__(self, input_shape, feature_model, context_model, projection_model,
-                 feature_extractor_dropout=0.1, feature_grad_mult=1,
+                 feature_extractor_dropout=0.0, feature_grad_mult=1,
                  negatives_from_everywhere=True, n_negatives=100,
                  cross_sample_negatives=0, codebook_negatives=0,
-                 mask_length=2, mask_prob=0.2,
+                 mask_length=3, mask_prob=0.3,
                  n_encoder_heads=8, n_encoder_layers=12,
                  quant_num_vars=300, quant_num_groups=2,
                  quant_weight_proj_factor=2, quant_weight_proj_depth=1,
@@ -306,8 +306,10 @@ class CoG2Vec(torch.nn.Module):
                 conv_bias=False,  # cfg.conv_bias,
                 #squeeze_first=True
             )
+
             self.feature_model = torch.nn.Sequential(
-                torch.nn.BatchNorm1d(num_features=1),
+                #torch.nn.BatchNorm1d(num_features=1),
+                torch.nn.LazyInstanceNorm1d(affine=True),
                 self.feature_model
             )
 
