@@ -497,12 +497,8 @@ class BaseASPEN(BaseDataset):
 
             self.logger.info(f"Length of flat index map: {len(self.flat_index_map)}")
 
-            # Finish processing the data mapping loaded from the mat data files
-            # self.data_maps = {l_p_s_t_tuple: self.parse_mat_arr_dict(mat_d, self.selected_columns)
-            #                  for l_p_s_t_tuple, mat_d in tqdm(mat_data_maps.items(), desc='Parsing data')}
             ###-----
             assert self.sensor_count == len(self.selected_columns)
-            # print(f"Selected {len(self.selected_columns)} sensors")
             self.logger.info(f"Selected {len(self.selected_columns)} sensors")
             ###-----
 
@@ -674,18 +670,13 @@ class BaseASPEN(BaseDataset):
         from sklearn.model_selection import train_test_split
         keys = list(keys) if isinstance(keys, tuple) else keys
         levels: pd.DataFrame = self.sample_ix_df[keys].drop_duplicates()
-        #levels = s.unique()
+
         train, test = train_test_split(levels, **train_test_split_kws)
         self.logger.info(f"{len(levels)} levels in {keys} split into train/test")
         self.logger.info(f"Train: {train}")
         self.logger.info(f"Test : {test}")
 
-        #train_mask = s.isin(train)
-        #test_mask = s.isin(test)
-
-        #train_indices = self.sample_ix_df[train_mask].index.tolist()
         train_indices = self.sample_ix_df[keys].reset_index().merge(train, on=keys, how='inner').set_index('index').index.tolist()
-        #test_indices = self.sample_ix_df[test_mask].index.tolist()
         test_indices = self.sample_ix_df[keys].reset_index().merge(test, on=keys, how='inner').set_index('index').index.tolist()
 
         train_dataset = self.__class__(data_from=self, selected_flat_indices=train_indices)
