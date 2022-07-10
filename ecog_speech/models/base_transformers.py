@@ -746,17 +746,17 @@ class MultiChannelCog2Vec(torch.nn.Module):
         if isinstance(hidden_encoder, torch.nn.Module):
             self.hidden_encoder = hidden_encoder
         elif hidden_encoder == 'linear':
-            self.lin_dim = 20
+            self.lin_dim = 30
             self.hidden_encoder = torch.nn.Sequential(
                 torch.nn.Dropout(self.dropout_rate),
                 torch.nn.Linear(self.h_dim * self.T, self.lin_dim),
                 torch.nn.LeakyReLU(),
-                torch.nn.Dropout(self.dropout_rate),
-                torch.nn.Linear(self.lin_dim, self.lin_dim),
-                torch.nn.LeakyReLU(),
-                torch.nn.Dropout(self.dropout_rate),
-                torch.nn.Linear(self.lin_dim, self.lin_dim),
-                torch.nn.LeakyReLU(),
+                #torch.nn.Dropout(self.dropout_rate),
+                #torch.nn.Linear(self.lin_dim, self.lin_dim),
+                #torch.nn.LeakyReLU(),
+                #torch.nn.Dropout(self.dropout_rate),
+                #torch.nn.Linear(self.lin_dim, self.lin_dim),
+                #torch.nn.LeakyReLU(),
                 #torch.nn.Dropout(self.dropout_rate),
                 #torch.nn.Linear(self.lin_dim, self.lin_dim),
                 #torch.nn.LeakyReLU(),
@@ -1041,15 +1041,15 @@ class Cog2VecOptions(bmp.ModelOptions):
     n_negatives: int = 100
     cross_sample_negatives: int = 0
     codebook_negatives: int = 0
-    mask_length: int = 2
-    mask_prob: float = 0.2
-    n_encoder_heads: int = 8
-    n_encoder_layers: int = 7
+    mask_length: int = 3
+    mask_prob: float = 0.3
+    n_encoder_heads: int = 4
+    n_encoder_layers: int = 5
     quant_num_vars: int = 100
     quant_num_groups: int = 2
     quant_weight_proj_factor: int = 2
     quant_weight_proj_depth: int = 1
-    feature_extractor_layers: str = '[(128, 7, 3)] + [(64, 3, 2)] * 2 + [(64, 3, 1)]'
+    feature_extractor_layers: str = '[(128, 7, 3)] + [(64, 3, 2)] * 2 + [(32, 3, 1)]'
     feature_extractor_mode: str = 'layer_norm'
     ras_pos_encoding: bool = True
     positional_encoding_method: str = 'combined'

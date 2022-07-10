@@ -825,6 +825,10 @@ class BaseASPEN(BaseDataset):
                             start=list())
         return remaining_t_l
 
+    @classmethod
+    def make_remaining_tuples_from_selected(cls, sets_str):
+        return list(set(cls.make_tuples_from_sets_str('*')) - set(cls.make_tuples_from_sets_str(sets_str)))
+
     @staticmethod
     def get_features(data_map, ix, label=None, transform=None, index_loc=False, signal_key='signal',
                      channel_select=None, extra_output_keys=None):
@@ -1472,7 +1476,7 @@ class DatasetOptions(JsonSerializable):
                       batches_per_epoch=self.batches_per_epoch,
                       shuffle=False, random_sample=True)
         print(f"DL Keyword arguments: {dl_kws}")
-        eval_dl_kws = dict(num_workers=self.n_dl_eval_workers, batch_size=512,
+        eval_dl_kws = dict(num_workers=self.n_dl_eval_workers, batch_size=self.batch_size,
                            batches_per_epoch=self.batches_per_epoch,
                            shuffle=self.batches_per_epoch is None,
                            random_sample=self.batches_per_epoch is not None)

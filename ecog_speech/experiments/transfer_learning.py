@@ -115,11 +115,14 @@ class FineTuningExperiment(bxp.Experiment):
     def make_fine_tuning_datasets_and_loaders(self, pretraining_sets=None):
         train_sets = None
         if self.task.dataset.train_sets == 'AUTO-REMAINING':
+            dataset_cls = datasets.BaseDataset.get_dataset_by_name(self.task.dataset.dataset_name)
             pretraining_sets = self.pretraining_results['dataset_options']['train_sets'] if pretraining_sets is None else pretraining_sets
+            train_sets = dataset_cls.make_remaining_tuples_from_selected(pretraining_sets)
+
             # Literally could have just .replace('~'), but instead wrote '*' special case for some set math in case it
             # gets more complicated...
-            train_sets = list(set(datasets.HarvardSentences.make_tuples_from_sets_str('*'))
-                              - set(datasets.HarvardSentences.make_tuples_from_sets_str(pretraining_sets)))
+            #train_sets = list(set(datasets.BaseASPEN.make_tuples_from_sets_str('*'))
+            #                  - set(datasets.BaseASPEN.make_tuples_from_sets_str(pretraining_sets)))
             logger.info(f"AUTO-REMAINING: pretrained on {pretraining_sets}, so fine tuning on {train_sets}")
 
         return self.task.dataset.make_datasets_and_loaders(train_p_tuples=train_sets)
