@@ -309,7 +309,8 @@ class CoG2Vec(torch.nn.Module):
 
             self.feature_model = torch.nn.Sequential(
                 #torch.nn.BatchNorm1d(num_features=1),
-                torch.nn.LazyInstanceNorm1d(affine=True),
+                #torch.nn.LazyInstanceNorm1d(affine=True),
+                bmp.StandardizeOnLastDim(),
                 self.feature_model
             )
 

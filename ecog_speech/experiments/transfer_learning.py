@@ -10,6 +10,7 @@ from ecog_speech.models import base
 from typing import List, Optional
 from tqdm.auto import tqdm
 import numpy as np
+from typing import ClassVar
 
 import attr
 
@@ -19,28 +20,11 @@ from ecog_speech.models import base_fine_tuners as base_ft
 from ecog_speech import datasets
 from dataclasses import dataclass
 import json
-
-logger = utils.get_logger(__name__)
-
-
-#@dataclass
-#class TransferLearningOptions(bmp.DNNModelOptions, bxp.MultiSensorOptions, Serializable):
-#    model_name: Optional[str] = None
-#    dataset: Optional[str] = 'hvs'
-#    train_sets: Optional[str] = None
-#
-#    pretrained_result_input_path: Optional[str] = None
-#    pretrained_result_model_base_path: Optional[str] = None
-#
-#    pre_train_sets: Optional[str] = None
-#    pre_cv_sets: Optional[str] = None
-#    pre_test_sets: Optional[str] = None
-#
-#    # 1d_linear, 2d_transformers
-#    fine_tuning_method: str = '1d_linear'
-
 from simple_parsing import subgroups
 from ecog_speech import result_parsing
+
+
+logger = utils.get_logger(__name__)
 
 # Override to make the result parsing options optional in this script
 @dataclass
@@ -54,14 +38,29 @@ class SpeechDetectionFineTuningTask(bxp.TaskOptions):
     task_name: str = "speech_classification_fine_tuning"
     dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='UCSD-22')
     method: str = '2d_transformers'
+    squeeze_target: ClassVar[bool] = False
+
+    def make_criteria_and_target_key(self):
+        pos_weight = torch.FloatTensor([0.5]).to(self.device)
+        criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        target_key = 'target_arr'
+        return criterion, target_key
 
 
 @dataclass
 class RegionDetectionFineTuningTask(bxp.TaskOptions):
     task_name: str = "region_classification_fine_tuning"
-    dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='AUTO-REMAINING',
-                                                               pre_processing_pipeline='region_classification')
+    dataset: datasets.DatasetOptions = datasets.HarvardSentencesDatasetOptions(train_sets='AUTO-REMAINING',
+                                                                               flatten_sensors_to_samples=False,
+                                                                               pre_processing_pipeline='region_classification')
     method: str = '2d_linear'
+
+    squeeze_target: ClassVar[bool] = True
+
+    def make_criteria_and_target_key(self):
+        criterion = torch.nn.CrossEntropyLoss()
+        target_key = 'target_arr'
+        return criterion, target_key
 
 
 @dataclass
@@ -81,7 +80,7 @@ class FineTuningExperiment(bxp.Experiment):
     #)
 
     @classmethod
-    def make_pretrained_model(cls,
+    def load_pretrained_model_results(cls,
                               pretrained_result_input_path: str = None,
                               pretrained_result_model_base_path: str = None):
         #pretrained_result_model_base_path = pretrained_result_model_base_path if options is None else options.pretrained_result_model_base_path
@@ -105,18 +104,18 @@ class FineTuningExperiment(bxp.Experiment):
 
         return pretrained_model, result_json
 
-    @property
-    def pretrained_model(self):
-        if not hasattr(self, '_pretrained_model'):
-            self._pretrained_model, self._pretraining_results = self.make_pretrained_model(
+    #@property
+    def make_pretrained_model(self):
+        if not hasattr(self, 'pretrained_model'):
+            self.pretrained_model, self.pretraining_results = self.load_pretrained_model_results(
                 self.pretrained_result_input.result_file,
                 self.pretrained_result_input.model_base_path)
-        return self._pretrained_model, self._pretraining_results
+        return self.pretrained_model, self.pretraining_results
 
     def make_fine_tuning_datasets_and_loaders(self, pretraining_sets=None):
         train_sets = None
         if self.task.dataset.train_sets == 'AUTO-REMAINING':
-            pretraining_sets = self.pretrained_model[1]['dataset_options']['train_sets'] if pretraining_sets is None else pretraining_sets
+            pretraining_sets = self.pretraining_results['dataset_options']['train_sets'] if pretraining_sets is None else pretraining_sets
             # Literally could have just .replace('~'), but instead wrote '*' special case for some set math in case it
             # gets more complicated...
             train_sets = list(set(datasets.HarvardSentences.make_tuples_from_sets_str('*'))
@@ -124,8 +123,6 @@ class FineTuningExperiment(bxp.Experiment):
             logger.info(f"AUTO-REMAINING: pretrained on {pretraining_sets}, so fine tuning on {train_sets}")
 
         return self.task.dataset.make_datasets_and_loaders(train_p_tuples=train_sets)
-
-
 
     @classmethod
     def create_fine_tuning_model(cls, pretrained_model,
@@ -185,78 +182,75 @@ class FineTuningExperiment(bxp.Experiment):
 
         return ft_model
 
-    def run(self):
+    def initialize(self):
+        if getattr(self, 'initialized', False):
+            return self
+
         # Pretrained model already prepared, parse from its results output
-        pretrained_model, pretraining_results = self.pretrained_model
-        #pretrained_model, pretraining_results = self.make_pretrained_model(self.pretrained_result_input.result_file,
-        #                                                                   self.pretrained_result_input.model_base_path)
-        #train_sets = None
-        #if self.task.dataset.train_sets == 'AUTO-REMAINING':
-        #    # Literally could have just .replace('~'), but instead wrote '*' special case for some set math in case it
-        #    # gets more complicated...
-        #    pretrained_set = pretraining_results['dataset_options']['train_sets']
-        #    train_sets = list(set(datasets.HarvardSentences.make_tuples_from_sets_str('*'))
-        #                      - set(datasets.HarvardSentences.make_tuples_from_sets_str(pretrained_set)))
-        #    logger.info(f"AUTO-REMAINING: pretrained on {pretrained_set}, so fine tuning on {train_sets}")
-
-        #dataset_map, dl_map, eval_dl_map = self.task.dataset.make_datasets_and_loaders(train_p_tuples=train_sets)
-
-        dataset_map, dl_map, eval_dl_map = self.make_fine_tuning_datasets_and_loaders()
+        self.pretrained_model, self.pretraining_results = self.make_pretrained_model()
+        self.dataset_map, self.dl_map, self.eval_dl_map = self.make_fine_tuning_datasets_and_loaders()
 
         # Capture configurable kws separately, so they can be easily saved in the results at the end
-        fine_tune_model_kws = dict(fine_tuning_method=self.task.method)
-        fine_tune_model = self.create_fine_tuning_model(pretrained_model, dataset=dataset_map['train'],
-                                                        **fine_tune_model_kws)
+        self.fine_tune_model_kws = dict(fine_tuning_method=self.task.method)
+        self.fine_tune_model = self.create_fine_tuning_model(self.pretrained_model,
+                                                             dataset=self.dataset_map['train'],
+                                                             **self.fine_tune_model_kws)
 
         # Decide how to setup the loss depending on the dataset and task - TODO: should clean this up?
-        dset_name = self.task.dataset.dataset_name
-        squeeze_target = False
-        if dset_name == 'hvsmfc':
-            criterion = torch.nn.MSELoss()
-            target_key = 'target'
-        elif self.task.task_name == 'speech_classification_fine_tuning':
-            pos_weight = torch.FloatTensor([0.5]).to(self.task.device)
-            criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-            target_key = 'target_arr'
-        elif self.task.task_name == 'region_classification_fine_tuning':
-            #criterion = torch.nn.BCEWithLogitsLoss()
-            criterion = torch.nn.CrossEntropyLoss()
-            target_key = 'target_arr'
-            squeeze_target = True
-        else:
-            raise ValueError(f"Don't understand {dset_name} and {self.task.task_name}")
+        #        dset_name = self.task.dataset.dataset_name
+        #        squeeze_target = False
+        #        if dset_name == 'hvsmfc':
+        #            criterion = torch.nn.MSELoss()
+        #            target_key = 'target'
+        #        elif self.task.task_name == 'speech_classification_fine_tuning':
+        #            pos_weight = torch.FloatTensor([0.5]).to(self.task.device)
+        #            criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        #            target_key = 'target_arr'
+        #        elif self.task.task_name == 'region_classification_fine_tuning':
+        #            #criterion = torch.nn.BCEWithLogitsLoss()
+        #            criterion = torch.nn.CrossEntropyLoss()
+        #            target_key = 'target_arr'
+        #            squeeze_target = True
+        #        else:
+        #            raise ValueError(f"Don't understand {dset_name} and {self.task.task_name}")
+
+        criterion, target_key = self.task.make_criteria_and_target_key()
 
         logger.info(f"Criterion for {self.task.task_name}: {criterion} on {target_key}")
 
         trainer_cls = TLTrainer
-        ft_trainer = trainer_cls(model_map=dict(model=fine_tune_model), opt_map=dict(),
-                                  train_data_gen=dl_map['train'],
-                                  cv_data_gen=eval_dl_map.get('cv'),
-                                  input_key='signal_arr',
-                                  learning_rate=self.task.learning_rate,
-                                  early_stopping_patience=self.task.early_stopping_patience,
-                                  target_key=target_key,
-                                  criterion=criterion,
-                                  device=self.task.device,
-                                 squeeze_target=squeeze_target
-                                  )
+        self.trainer = trainer_cls(model_map=dict(model=self.fine_tune_model), opt_map=dict(),
+                                   train_data_gen=self.dl_map['train'],
+                                   cv_data_gen=self.eval_dl_map.get('cv'),
+                                   input_key='signal_arr',
+                                   learning_rate=self.task.learning_rate,
+                                   early_stopping_patience=self.task.early_stopping_patience,
+                                   target_key=target_key,
+                                   criterion=criterion,
+                                   device=self.task.device,
+                                   squeeze_target=self.task.squeeze_target
+                                   )
+        self.initialized = True
+        return self
 
-        #with torch.no_grad():
-        #    _outputs_map = ft_trainer.generate_outputs(train=eval_dl_map['train'])
-        #    _clf_str_map = utils.make_classification_reports(_outputs_map)
+    def train(self):
+        if getattr(self, 'trained', False):
+            return self
 
-        ft_results = ft_trainer.train(self.task.n_epochs)
+        self.initialize()
+        self.fine_tuning_results = self.trainer.train(self.task.n_epochs)
+        self.fine_tune_model.load_state_dict(self.trainer.get_best_state())
+        self.fine_tune_model.eval()
 
-        fine_tune_model.load_state_dict(ft_trainer.get_best_state())
+        self.trained = True
+        return self
 
-        fine_tune_model.eval()
-        outputs_map = ft_trainer.generate_outputs(**eval_dl_map)
+    def eval(self):
+        outputs_map = self.trainer.generate_outputs(**self.eval_dl_map)
 
         performance_map = dict()
-        if dset_name == 'hvsmfc':
-            pass
-        elif dset_name == 'hvs':
-            target_shape = dataset_map['train'].get_target_shape()
+        if self.task.dataset.dataset_name == 'hvs':
+            target_shape = self.dataset_map['train'].get_target_shape()
             #eval_res_map = {k: ft_trainer.eval_on(_dl).to_dict(orient='list') for k, _dl in eval_dl_map.items()}
             kws = dict(threshold=(0.5 if target_shape == 1 else None))
             clf_str_map = utils.make_classification_reports(outputs_map, **kws)
@@ -268,20 +262,29 @@ class FineTuningExperiment(bxp.Experiment):
                 performance_map = {part_name: utils.multiclass_performance(outputs_d['actuals'],
                                                                            outputs_d['preds'].argmax(1))
                                    for part_name, outputs_d in outputs_map.items()}
+        return performance_map
+
+    def run(self):
+        self.train()
+        performance_map = self.eval()
+        #self.initialize()
+        #ft_results = self.trainer.train(self.task.n_epochs)
+        #self.fine_tune_model.load_state_dict(self.trainer.get_best_state())
+        #self.fine_tune_model.eval()
 
         #####
         # Prep a results structure for saving - everything must be json serializable (no array objects)
         res_dict = self.create_result_dictionary(
             #model_name=self.model.model_name,
-            batch_losses=ft_results,
-            train_selected_columns=dataset_map['train'].selected_columns,  # dataset_map['train'].selected_columns,
+            batch_losses=self.fine_tuning_results,
+            train_selected_columns=self.dataset_map['train'].selected_columns,  # dataset_map['train'].selected_columns,
             #test_selected_flat_indices=dataset_map['test'].selected_flat_indices,
             #selected_flat_indices={k: d.selected_flat_indices for k, d in dataset_map.items()},
-            selected_flat_indices={k: d.selected_levels_df.to_json() for k, d in dataset_map.items()},
-            best_model_epoch=ft_trainer.best_model_epoch,
-            num_trainable_params=utils.number_of_model_params(fine_tune_model),
-            num_params=utils.number_of_model_params(fine_tune_model, trainable_only=False),
-            model_kws=fine_tune_model_kws,
+            selected_flat_indices={k: d.selected_levels_df.to_json() for k, d in self.dataset_map.items()},
+            best_model_epoch=self.trainer.best_model_epoch,
+            num_trainable_params=utils.number_of_model_params(self.fine_tune_model),
+            num_params=utils.number_of_model_params(self.fine_tune_model, trainable_only=False),
+            model_kws=self.fine_tune_model_kws,
             **performance_map,
             #**eval_res_map,
             pretrained_result_input=vars(self.pretrained_result_input),
@@ -292,52 +295,10 @@ class FineTuningExperiment(bxp.Experiment):
         uid = res_dict['uid']
         name = res_dict['name']
 
-        self.save_results(fine_tune_model, name, result_output=self.result_output, uid=uid, res_dict=res_dict)
+        self.save_results(self.fine_tune_model, name, result_output=self.result_output, uid=uid, res_dict=res_dict)
 
-        return ft_trainer, performance_map
+        return self.trainer, performance_map
 
-
-        #uid = str(uuid.uuid4())
-        #t = int(time.time())
-        #name = "%d_%s_TL.json" % (t, uid)
-        #res_dict = dict(  # path=path,
-        #    name=name,
-        #    datetime=str(datetime.now()), uid=uid,
-        #    pretraining_results=pretraining_results,
-        #    # batch_losses=list(losses),
-        #    batch_losses=ft_results,
-        #    train_selected_columns=dataset_map['train'].selected_columns,#dataset_map['train'].selected_columns,
-        #    best_model_epoch=ft_trainer.best_model_epoch,
-        #    num_trainable_params=utils.number_of_model_params(fine_tune_model),
-        #    num_params=utils.number_of_model_params(fine_tune_model, trainable_only=False),
-        #    fine_tune_model_kws=fine_tune_model_kws,
-        #    options=self.dumps_json(),
-        #    #model_kws=model_kws,
-        #    #**eval_res_map,
-        #    #clf_reports=clf_str_map,
-        #    #**{'train_' + k: v for k, v in train_perf_map.items()},
-        #    #**{'cv_' + k: v for k, v in cv_perf_map.items()},
-        #    #**test_perf_map,
-        #    # evaluation_perf_map=perf_maps,
-        #    # **pretrain_res,
-        #    # **perf_map,
-        #    **vars(self))
-
-        #if self.result_output.save_model_path is not None:
-        #    import os
-        #    p = self.result_output.save_model_path
-        #    if os.path.isdir(p):
-        #        p = os.path.join(p, uid + '.torch')
-        #    logger.info("Saving model to " + p)
-        #    torch.save(fine_tune_model.cpu().state_dict(), p)
-        #    res_dict['save_model_path'] = p
-
-        #if self.result_output.result_dir is not None:
-        #    path = pjoin(self.result_output.result_dir, name)
-        #    logger.info(path)
-        #    res_dict['path'] = path
-        #    with open(path, 'w') as f:
-        #        json.dump(res_dict, f)
 
 
 @attr.s

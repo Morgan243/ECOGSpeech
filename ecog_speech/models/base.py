@@ -84,6 +84,16 @@ class Reshape(torch.nn.Module):
         return x.reshape(x.shape[0], *self.shape)
 
 
+class StandardizeOnLastDim(torch.nn.Module):
+    def __init__(self):
+        super(StandardizeOnLastDim, self).__init__()
+
+    def forward(self, x):
+        t_mu = x.mean(-1, keepdim=True)
+        t_var = x.std(-1, keepdim=True)
+        o_x = (x - t_mu) / t_var
+        return o_x
+
 class Select(torch.nn.Module):
     def __init__(self, dim=1, index='random', keep_dim=True):
         super(Select, self).__init__()
