@@ -85,13 +85,15 @@ class Reshape(torch.nn.Module):
 
 
 class StandardizeOnLastDim(torch.nn.Module):
+    eps = 1e-05
+
     def __init__(self):
         super(StandardizeOnLastDim, self).__init__()
 
     def forward(self, x):
         t_mu = x.mean(-1, keepdim=True)
         t_var = x.std(-1, keepdim=True)
-        o_x = (x - t_mu) / t_var
+        o_x = (x - t_mu) / (t_var + self.eps)
         return o_x
 
 class Select(torch.nn.Module):
