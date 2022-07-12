@@ -741,18 +741,24 @@ class MultiChannelCog2Vec(torch.nn.Module):
 
         #hidden_encoder = 'linear' if hidden_encoder is None else hidden_encoder
         self.hidden_encoder_input = hidden_encoder
-        self.dropout_rate = 0.5
+        self.dropout_rate = 0.75
+
 
         if isinstance(hidden_encoder, torch.nn.Module):
             self.hidden_encoder = hidden_encoder
         elif hidden_encoder == 'linear':
-            self.lin_dim = 30
+            self.lin_dim = self.outputs
             self.hidden_encoder = torch.nn.Sequential(
+                torch.nn.LazyBatchNorm1d(momentum=0.2, track_running_stats=False, affine=False),
                 torch.nn.Dropout(self.dropout_rate),
-                torch.nn.Linear(self.h_dim * self.T, self.lin_dim),
-                torch.nn.LeakyReLU(),
+                #torch.nn.LazyLinear(5),
+                #torch.nn.LeakyReLU(),
+                torch.nn.LazyLinear(self.outputs),
+
+                # torch.nn.BatchNorm1d(self.lin_dim, momentum=0.2, track_running_stats=False),
                 #torch.nn.Dropout(self.dropout_rate),
                 #torch.nn.Linear(self.lin_dim, self.lin_dim),
+                #torch.nn.BatchNorm1d(self.lin_dim),
                 #torch.nn.LeakyReLU(),
                 #torch.nn.Dropout(self.dropout_rate),
                 #torch.nn.Linear(self.lin_dim, self.lin_dim),
@@ -762,6 +768,7 @@ class MultiChannelCog2Vec(torch.nn.Module):
                 #torch.nn.LeakyReLU(),
             )
             self.feat_arr_reshape = (-1, self.h_dim * self.T)
+            self.classifier_head = torch.nn.Sequential(torch.nn.Identity())
         elif hidden_encoder == 'transformer':
             encoder_layer = torch.nn.TransformerEncoderLayer(d_model=self.h_dim, dropout=self.dropout_rate,
                                                              nhead=2, batch_first=True,
@@ -770,21 +777,21 @@ class MultiChannelCog2Vec(torch.nn.Module):
             self.hidden_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=2)
             self.feat_arr_reshape = (-1, self.T, self.h_dim)
             self.lin_dim = self.h_dim * self.T
+
+            # h_size = 32
+            self.classifier_head = torch.nn.Sequential(*[
+                # base.Reshape((self.C * self.T,)),
+                # torch.nn.Linear(self.lin_dim, h_size),
+                # torch.nn.BatchNorm1d(h_size),
+                # torch.nn.LeakyReLU(),
+                # torch.nn.Linear(h_size, h_size),
+                # torch.nn.LeakyReLU(),
+                torch.nn.Linear(self.lin_dim, self.outputs),
+                # torch.nn.Sigmoid()
+            ])
         else:
             raise ValueError(f"Don't understand hidden_encoder = '{hidden_encoder}'")
 
-
-        #h_size = 32
-        self.classifier_head = torch.nn.Sequential(*[
-            # base.Reshape((self.C * self.T,)),
-            #torch.nn.Linear(self.lin_dim, h_size),
-            # torch.nn.BatchNorm1d(h_size),
-            #torch.nn.LeakyReLU(),
-            #torch.nn.Linear(h_size, h_size),
-            #torch.nn.LeakyReLU(),
-            torch.nn.Linear(self.lin_dim, self.outputs),
-            # torch.nn.Sigmoid()
-        ])
 
     def forward(self, input_d: dict):
         feat_d = self.mc_from_1d(input_d)
@@ -1044,12 +1051,12 @@ class Cog2VecOptions(bmp.ModelOptions):
     mask_length: int = 3
     mask_prob: float = 0.3
     n_encoder_heads: int = 4
-    n_encoder_layers: int = 5
-    quant_num_vars: int = 100
+    n_encoder_layers: int = 4
+    quant_num_vars: int = 50
     quant_num_groups: int = 2
     quant_weight_proj_factor: int = 2
     quant_weight_proj_depth: int = 1
-    feature_extractor_layers: str = '[(128, 7, 3)] + [(64, 3, 2)] * 2 + [(32, 3, 1)]'
+    feature_extractor_layers: str = '[(128, 7, 3)] + [(64, 3, 2)] * 2 + [(64, 3, 1)]'
     feature_extractor_mode: str = 'layer_norm'
     ras_pos_encoding: bool = True
     positional_encoding_method: str = 'combined'
