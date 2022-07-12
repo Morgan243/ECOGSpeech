@@ -1,4 +1,5 @@
 import uuid
+import os
 import copy
 import time
 from datetime import datetime
@@ -92,15 +93,21 @@ class FineTuningExperiment(bxp.Experiment):
         result_json = None
         from ecog_speech.result_parsing import load_model_from_results
 
-        result_path = pretrained_result_input_path
-        model_base_path = pretrained_result_model_base_path
+        if pretrained_result_model_base_path is None:
+            pretrained_result_model_base_path = os.path.join(
+                os.path.split(pretrained_result_input_path)[0], 'models')
 
-        print(f"Loading pretrained model from results in {result_path} (base path = {model_base_path})")
-        with open(result_path, 'r') as f:
+        #result_path = pretrained_result_input_path
+        #model_base_path = pretrained_result_model_base_path
+
+
+        print(f"Loading pretrained model from results in {pretrained_result_input_path}"
+              f" (base path = {pretrained_result_model_base_path})")
+        with open(pretrained_result_input_path, 'r') as f:
             result_json = json.load(f)
 
         print(f"\tKEYS: {list(sorted(result_json.keys()))}")
-        pretrained_model = load_model_from_results(result_json, base_model_path=model_base_path)
+        pretrained_model = load_model_from_results(result_json, base_model_path=pretrained_result_model_base_path)
 
         return pretrained_model, result_json
 
