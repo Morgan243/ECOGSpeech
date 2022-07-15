@@ -749,10 +749,13 @@ class MultiChannelCog2Vec(torch.nn.Module):
         elif hidden_encoder == 'linear':
             self.lin_dim = self.outputs
             self.hidden_encoder = torch.nn.Sequential(
-                torch.nn.LazyBatchNorm1d(momentum=0.2, track_running_stats=False, affine=False),
+                torch.nn.LazyBatchNorm1d(momentum=0.2, track_running_stats=False, affine=True),
                 torch.nn.Dropout(self.dropout_rate),
-                #torch.nn.LazyLinear(5),
-                #torch.nn.LeakyReLU(),
+                torch.nn.LazyLinear(self.outputs * 4),
+                torch.nn.LeakyReLU(),
+                torch.nn.Dropout(self.dropout_rate),
+                torch.nn.LazyLinear(self.outputs * 2),
+                torch.nn.LeakyReLU(),
                 torch.nn.LazyLinear(self.outputs),
 
                 # torch.nn.BatchNorm1d(self.lin_dim, momentum=0.2, track_running_stats=False),
@@ -791,7 +794,6 @@ class MultiChannelCog2Vec(torch.nn.Module):
             ])
         else:
             raise ValueError(f"Don't understand hidden_encoder = '{hidden_encoder}'")
-
 
     def forward(self, input_d: dict):
         feat_d = self.mc_from_1d(input_d)
@@ -1042,7 +1044,7 @@ class Cog2VecTrainer(Trainer):
 @dataclass
 class Cog2VecOptions(bmp.ModelOptions):
     model_name: str = 'cog2vec'
-    feature_extractor_dropout: float = 0.
+    feature_extractor_dropout: float = 0.25
     feature_grad_mult: float = 1
     negatives_from_everywhere: bool = True
     n_negatives: int = 100
@@ -1051,9 +1053,10 @@ class Cog2VecOptions(bmp.ModelOptions):
     mask_length: int = 3
     mask_prob: float = 0.3
     n_encoder_heads: int = 4
-    n_encoder_layers: int = 4
-    quant_num_vars: int = 50
-    quant_num_groups: int = 2
+    n_encoder_layers: int = 6
+    encoder_dropout: float = 0.25
+    quant_num_vars: int = 40
+    quant_num_groups: int = 4
     quant_weight_proj_factor: int = 2
     quant_weight_proj_depth: int = 1
     feature_extractor_layers: str = '[(128, 7, 3)] + [(64, 3, 2)] * 2 + [(64, 3, 1)]'
@@ -1073,6 +1076,7 @@ class Cog2VecOptions(bmp.ModelOptions):
             n_negatives=self.n_negatives, codebook_negatives=self.codebook_negatives,
             cross_sample_negatives=self.cross_sample_negatives,
             mask_length=self.mask_length, n_encoder_heads=self.n_encoder_heads,
+            context_encoder_dropout=self.encoder_dropout,
             n_encoder_layers=self.n_encoder_layers,
             quant_num_vars=self.quant_num_vars, quant_num_groups=self.quant_num_groups,
             feature_extractor_layers=self.feature_extractor_layers,

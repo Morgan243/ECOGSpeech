@@ -408,7 +408,6 @@ class TLTrainer(base.Trainer):
         model = model.eval()
         return res_d
 
-
     def generate_outputs_from_model_inner_step(self, model, data_batch, criterion=None,
                                                input_key='signal_arr', target_key='text_arr', device=None,
                                                ):
