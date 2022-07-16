@@ -4,7 +4,7 @@ setup(name='ECOGSpeech',
       description='Processing ECOG+Voice recordings',
       author='Morgan Stuart & Srdjan Lesaja',
       packages=['ecog_speech'],
-      requires=[
+      install_requires=[
             'torch',  # Probably make sure installed using torch website instructions for the platform
             'torchaudio',
             'tqdm',
