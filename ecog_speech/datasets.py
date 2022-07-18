@@ -521,6 +521,7 @@ class BaseASPEN(BaseDataset):
             self.logger.warning("Warning: using naive shared-referencing across objects - only use when feeling lazy")
             # self.mfcc_m = self.data_from.mfcc_m
             self.data_maps = self.data_from.data_maps
+            self.n_samples_per_window = self.data_from.n_samples_per_window
             self.sample_index_maps = self.data_from.sample_index_maps
             self.flat_index_map = self.data_from.flat_index_map
             self.flat_ix_map = self.data_from.flat_ix_map
