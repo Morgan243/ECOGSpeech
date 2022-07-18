@@ -448,6 +448,8 @@ class BaseASPEN(BaseDataset):
 
             for l_p_s_t, index_map in self.sample_index_maps.items():
                 self.logger.info(f"Processing participant {l_p_s_t} index, having keys: {list(index_map.keys())}")
+                _data_map = self.data_maps[l_p_s_t]
+
                 #self.logger.info(f"Creating participants index frame: {l_p_s_t}")
                 patient_ixes = list()
 
@@ -461,6 +463,10 @@ class BaseASPEN(BaseDataset):
 
                 p_ix_df = pd.DataFrame(patient_ixes, columns=cols)
                 p_ix_df = p_ix_df.astype(key_col_dtypes)
+                # Store a numeric index into underlying numpy array for faster indexing
+                if 'signal' in _data_map:
+                    signal_df = _data_map['signal']
+                    p_ix_df['start_ix'] = signal_df.index.get_indexer(p_ix_df.start_t)
 
                 # #TODO: Is this still necessary? Determining the sentence code for every window sample from scratch
                 if 'word_start_stop_times' in self.data_maps[l_p_s_t]:
@@ -473,25 +479,28 @@ class BaseASPEN(BaseDataset):
 
             self.logger.info(f"Combining all of {len(sample_ix_df_l)} index frames")
             self.sample_ix_df = pd.concat(sample_ix_df_l).reset_index(drop=True)
-            k_select_offset = 2
+            self.k_select_offset = 2
             if self.flatten_sensors_to_samples:
                 self.logger.info(f"flatten_sensors_to_samples selected - creating channel/sensor labels for samples")
                 self.sample_ix_df['channel'] = [self.selected_columns] * len(self.sample_ix_df)
                 #self.sample_ix_df['channel'] = self.sample_ix_df['channel'].astype('int16')
                 key_cols.insert(2, 'channel')
-                k_select_offset += 1
+                self.k_select_offset += 1
                 self.logger.debug("exploding sensor data - does this take a while?")
                 self.sample_ix_df = self.sample_ix_df.explode('channel')
 
             self.key_cols = key_cols
 
             self.logger.info("Converting dataframe to a flat list of key variables (self.flat_keys)")
-            key_df = self.sample_ix_df[self.key_cols]
-            self.flat_keys = np.array(list(zip(key_df.to_records(index=False).tolist(),
-                                               key_df.iloc[:, k_select_offset:].to_records(index=False).tolist())),
-                                      dtype='object')
+            self.ixed_sample_ix_df = self.sample_ix_df.set_index(key_cols).sort_index()
+            #key_df = self.sample_ix_df[self.key_cols]
+            self.flat_keys = self.ixed_sample_ix_df.index
+            #self.flat_keys = np.array(list(zip(key_df.to_records(index=False).tolist(),
+            #                                   key_df.iloc[:, k_select_offset:].to_records(index=False).tolist())),
+            #                          dtype='object')
             self.logger.info(f"Extracting mapping of ({key_cols})->indices")
-            self.flat_index_map = self.sample_ix_df.set_index(key_cols).indices.to_dict()
+            self.flat_index_map = self.ixed_sample_ix_df.indices#.to_dict()
+            self.flat_ix_map = self.ixed_sample_ix_df.start_ix
 
             # ## END NEW VERSION
 
@@ -514,8 +523,10 @@ class BaseASPEN(BaseDataset):
             self.data_maps = self.data_from.data_maps
             self.sample_index_maps = self.data_from.sample_index_maps
             self.flat_index_map = self.data_from.flat_index_map
+            self.flat_ix_map = self.data_from.flat_ix_map
             self.flat_keys = self.data_from.flat_keys
             self.key_cols = self.data_from.key_cols
+            self.k_select_offset = self.data_from.k_select_offset
             # self.logger.info("Copying over sample ix dataframe")
             self.sample_ix_df = self.data_from.sample_ix_df.copy()
             self.selected_columns = self.data_from.selected_columns
@@ -614,7 +625,9 @@ class BaseASPEN(BaseDataset):
     def __getitem__(self, item):
         # ix_k includes the class and window id, and possibly sensor id if flattened
         # data_k specifies subject dataset in data_map (less granular than ix_k)
-        ix_k, data_k = self.selected_flat_keys[item]
+        #ix_k, data_k = self.selected_flat_keys[item]
+        ix_k = self.selected_flat_keys[item]
+        data_k = ix_k[self.k_select_offset:]
         data_d = self.data_maps[data_k]
 
         selected_channels = None
@@ -623,15 +636,19 @@ class BaseASPEN(BaseDataset):
 
         so = dict()
 
+        #ix = self.flat_index_map.at[ix_k]
+        ix = self.flat_ix_map.at[ix_k]
+        ix = range(ix, ix+self.n_samples_per_window)
         so.update(
-            self.get_features(data_d, self.flat_index_map[ix_k],
+            self.get_features(data_d, ix,
                               ix_k, transform=self.transform,
                               channel_select=selected_channels,
+                              index_loc=True,
                               extra_output_keys=self.extra_output_keys)
         )
 
         so.update(
-            self.get_targets(data_d, self.flat_index_map[ix_k], ix_k, target_transform=self.target_transform)
+            self.get_targets(data_d, ix, ix_k, target_transform=self.target_transform)
         )
 
         if self.post_processing_func is not None:
@@ -648,7 +665,7 @@ class BaseASPEN(BaseDataset):
         from tqdm.auto import tqdm
 
         selected_keys_arr = self.flat_keys[self.selected_flat_indices]
-        index_start_stop = [(self.flat_index_map[a[0]].min(), self.flat_index_map[a[0]].max())
+        index_start_stop = [(self.flat_index_map.at[a[0]].min(), self.flat_index_map.at[a[0]].max())
                             for a in tqdm(selected_keys_arr)]
         split_time = max(a for a, b, in index_start_stop) * split_time if isinstance(split_time, float) else split_time
         left_side_indices, right_side_indices = list(), list()
@@ -836,10 +853,11 @@ class BaseASPEN(BaseDataset):
         signal_df = data_map[signal_key]
 
         kws = dict()
-        kws['signal'] = signal_df.loc[ix] if not index_loc else signal_df.iloc[ix]
+        kws['signal'] = signal_df.loc[ix].values if not index_loc else signal_df.values[ix]
 
         # Transpose to keep time as last index for torch
-        np_ecog_arr = kws['signal'].values.T
+        #np_ecog_arr = kws['signal'].values.T
+        np_ecog_arr = kws['signal'].T
 
         # if self.flatten_sensors_to_samples:
         # Always pass a list/array for channels, even if only 1, to maintain the dimension
@@ -899,7 +917,7 @@ class BaseASPEN(BaseDataset):
         # offs = pd.Timedelta(offset_seconds)
         # t_word_ix = self.word_index[self.word_index == i].index
         ix_k, data_k = self.selected_flat_keys[i]
-        t_word_ix = self.flat_index_map[ix_k]
+        t_word_ix = self.flat_index_map.at[ix_k]
         offs_td = pd.Timedelta(offset_seconds, 's')
         t_word_slice = slice(t_word_ix.min() - offs_td, t_word_ix.max() + offs_td)
         display(t_word_slice)
@@ -1378,8 +1396,10 @@ class DatasetOptions(JsonSerializable):
     dataset_name: str = None
 
     batch_size: int = 256
+    batch_size_eval: Optional[int] = None
     batches_per_epoch: Optional[int] = None
     """If set, only does this many batches in an epoch - otherwise, will do enough batches to equal dataset size"""
+    batches_per_eval_epoch: Optional[int] = None
 
     pre_processing_pipeline: str = 'default'
 
@@ -1451,12 +1471,11 @@ class DatasetOptions(JsonSerializable):
         logger.info("CV tuples: " + str(cv_p_tuples))
         logger.info("Test tuples: " + str(test_p_tuples))
 
-        base_kws = dict(pre_processing_pipeline=self.pre_processing_pipeline
-        if pre_processing_pipeline is None
-        else pre_processing_pipeline,
+        base_kws = dict(pre_processing_pipeline=self.pre_processing_pipeline if pre_processing_pipeline is None
+                                                else pre_processing_pipeline,
                         data_subset=self.data_subset,
-                        extra_output_keys=self.extra_output_keys.split(
-                            ',') if self.extra_output_keys is not None else None,
+                        extra_output_keys=self.extra_output_keys.split(',') if self.extra_output_keys is not None
+                                          else None,
                         flatten_sensors_to_samples=self.flatten_sensors_to_samples)
 
         base_kws.update(base_data_kws)
@@ -1476,10 +1495,11 @@ class DatasetOptions(JsonSerializable):
                       batches_per_epoch=self.batches_per_epoch,
                       shuffle=False, random_sample=True)
         print(f"DL Keyword arguments: {dl_kws}")
-        eval_dl_kws = dict(num_workers=self.n_dl_eval_workers, batch_size=self.batch_size,
-                           batches_per_epoch=self.batches_per_epoch,
-                           shuffle=self.batches_per_epoch is None,
-                           random_sample=self.batches_per_epoch is not None)
+        eval_dl_kws = dict(num_workers=self.n_dl_eval_workers,
+                           batch_size=self.batch_size if self.batch_size_eval is None else self.batch_size_eval,
+                           batches_per_epoch=self.batches_per_eval_epoch,
+                           shuffle=self.batches_per_eval_epoch is None,
+                           random_sample=self.batches_per_eval_epoch is not None)
                            #shuffle=False if self.batches_per_epoch is None else True,
                            #random_sample=False if self.batches_per_epoch is None else True)
 

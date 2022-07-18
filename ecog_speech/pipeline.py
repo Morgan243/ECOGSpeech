@@ -65,9 +65,9 @@ class ParseTimeSeriesArrToFrame(DictTrf):
 
         ix = pd.TimedeltaIndex(pd.RangeIndex(0, arr.shape[0]) / fs, unit='s')
         if arr.ndim == 1:
-            arr_df = pd.Series(arr, index=ix, dtype=self.dtype, name=arr_key)
+            arr_df = pd.Series(arr, index=ix, dtype=self.dtype, name=arr_key).sort_index()
         else:
-            arr_df = pd.DataFrame(arr, index=ix, dtype=self.dtype)
+            arr_df = pd.DataFrame(arr, index=ix, dtype=self.dtype).sort_index()
         self.logger.info(f"{self.array_key}@{fs}, shape: {arr_df.shape}, [{arr_df.index[0], arr_df.index[-1]}]")
         assert arr_df.index.is_unique, f"NON UNIQUE TIME SERIES INDEX FOR KEY {self.array_key}"
 
