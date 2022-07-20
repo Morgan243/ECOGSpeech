@@ -13,4 +13,5 @@ setup(name='ECOGSpeech',
             'attrs',
             'simple-parsing',
             'python_speech_features',
+            'mat73',
       ])
