@@ -530,6 +530,7 @@ class BaseASPEN(BaseDataset):
             self.k_select_offset = self.data_from.k_select_offset
             # self.logger.info("Copying over sample ix dataframe")
             self.sample_ix_df = self.data_from.sample_ix_df.copy()
+            self.ixed_sample_ix_df = self.data_from.ixed_sample_ix_df.copy()
             self.selected_columns = self.data_from.selected_columns
             self.flatten_sensors_to_samples = self.data_from.flatten_sensors_to_samples
             self.extra_output_keys = self.data_from.extra_output_keys
@@ -687,16 +688,23 @@ class BaseASPEN(BaseDataset):
     def split_select_random_key_levels(self, keys=('patient', 'sent_code'), **train_test_split_kws):
         from sklearn.model_selection import train_test_split
         keys = list(keys) if isinstance(keys, tuple) else keys
-        levels: pd.DataFrame = self.sample_ix_df[keys].drop_duplicates()
+        # In case we have already split - check for existing selected indices
+        if getattr(self, 'selected_flat_indices') is None:
+            self.selected_flat_indices = range(0, self.sample_ix_df.shape[0] - 1)
 
+        # Init the unique levels
+        levels: pd.DataFrame = self.sample_ix_df.iloc[self.selected_flat_indices][keys].drop_duplicates()
+        # Split on the unique levels
         train, test = train_test_split(levels, **train_test_split_kws)
         self.logger.info(f"{len(levels)} levels in {keys} split into train/test")
         self.logger.info(f"Train: {train}")
         self.logger.info(f"Test : {test}")
 
+        # Merge back to the original full sample_ix_df to determine the original index into the sample data
         train_indices = self.sample_ix_df[keys].reset_index().merge(train, on=keys, how='inner').set_index('index').index.tolist()
         test_indices = self.sample_ix_df[keys].reset_index().merge(test, on=keys, how='inner').set_index('index').index.tolist()
 
+        # Create new train and test datsets - tack on the levels df for debugging, probably don't depend on them?
         train_dataset = self.__class__(data_from=self, selected_flat_indices=train_indices)
         train_dataset.selected_levels_df = train
         test_dataset = self.__class__(data_from=self, selected_flat_indices=test_indices)
