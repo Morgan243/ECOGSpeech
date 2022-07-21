@@ -1542,17 +1542,21 @@ class DatasetOptions(JsonSerializable):
         dataset_map['train'] = train_nww
 
         if cv_kws['patient_tuples'] is not None:
-            print("+" * 50)
-            print(f"Using {cv_kws['patient_tuples']}")
+            logger.info("+" * 50)
+            logger.info(f"Using {cv_kws['patient_tuples']}")
             dataset_map['cv'] = dataset_cls(sensor_columns=train_nww.selected_columns, **cv_kws)
         elif dataset_cls == HarvardSentences:
             logger.info("*" * 30)
             logger.info("Splitting on random key levels for harvard sentences (UCSD)")
             logger.info("*" * 30)
-            _train, _cv = train_nww.split_select_random_key_levels()
-            dataset_map.update(dict(train=_train, cv=_cv))
+            _train, _test = train_nww.split_select_random_key_levels()
+            logger.info("Splitting out a test set")
+            _cv, _test = _test.split_select_random_key_levels()
+            dataset_map.update(dict(train=_train, cv=_cv, test=_test))
         else:
-            print("~" * 100)
+            logger.info("~" * 30)
+            logger.info("Performing naive split at window level - expected for NWW datasets")
+            logger.info("~" * 30)
             from sklearn.model_selection import train_test_split
             train_ixs, cv_ixes = train_test_split(range(len(train_nww)))
             cv_nww = dataset_cls(data_from=train_nww, **cv_kws).select(cv_ixes)
