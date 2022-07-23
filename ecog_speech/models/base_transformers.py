@@ -771,13 +771,14 @@ class MultiChannelCog2Vec(torch.nn.Module):
                 #torch.nn.LeakyReLU(),
             )
             self.feat_arr_reshape = (-1, self.h_dim * self.T)
-            self.classifier_head = torch.nn.Sequential(torch.nn.Identity())
+            self.classifier_head = torch.nn.Sequential(torch.nn.Sigmoid() if self.outputs == 1
+                                                       else torch.nn.Identity())
         elif hidden_encoder == 'transformer':
             encoder_layer = torch.nn.TransformerEncoderLayer(d_model=self.h_dim, dropout=self.dropout_rate,
                                                              nhead=2, batch_first=True,
                                                              activation="gelu")
 
-            self.hidden_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=2)
+            self.hidden_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=1)
             self.feat_arr_reshape = (-1, self.T, self.h_dim)
             self.lin_dim = self.h_dim * self.T
 
