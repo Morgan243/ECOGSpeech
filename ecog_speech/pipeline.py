@@ -288,7 +288,7 @@ class PowerThreshold(DictTrf):
         if speaking_quantile_threshold is not None:
             cls.logger.info(f"Using speaking quantile {speaking_quantile_threshold}")
             speaking_quantile_threshold = float(speaking_quantile_threshold)
-            thresholded_speaking_pwr = rolling_pwr.pipe(lambda s: s > s.quantile(speaking_quantile_threshold))
+            thresholded_speaking_pwr = rolling_pwr.pipe(lambda s: s > s[s > 0].quantile(speaking_quantile_threshold))
         else:
             thresholded_speaking_pwr = (rolling_pwr > speaking_threshold)
 
@@ -1056,7 +1056,8 @@ class WindowSampleIndicesFromIndex(DictTrf):
         expected_window_samples = int(fs * win_size.total_seconds())
 
         target_indexes = (stim.pipe(stim_pre_process_f) == self.stim_target_value)\
-            .pipe(lambda s: s[s] if self.sample_n is None else s[s].sample(n=self.sample_n)).index.tolist()
+            .pipe(lambda s: s[s] if self.sample_n is None else (
+            s[s].sample(n=self.sample_n) if len(s[s]) > self.sample_n else s[s])).index.tolist()
         target_indices = [stim.loc[offs + index_shift:offs + win_size + index_shift].iloc[:expected_window_samples].index
                           for offs in target_indexes
                           if len(stim.loc[offs + index_shift:offs + win_size + index_shift]) >= expected_window_samples]
