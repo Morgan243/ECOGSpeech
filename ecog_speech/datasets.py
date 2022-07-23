@@ -976,7 +976,8 @@ class BaseASPEN(BaseDataset):
         return axs
 
     def get_target_shape(self):#, target_key='target_arr'):
-        return self.sample_ix_df.label.nunique()
+        n_targets = self.sample_ix_df.label.nunique()
+        return 1 if n_targets == 2 else n_targets
 
 
 @attr.s
@@ -1049,7 +1050,7 @@ class HarvardSentences(BaseASPEN):
         audio_gate_steps = [
             ('Threshold', pipeline.PowerThreshold(speaking_window_samples=48000 // 16,
                                                   silence_window_samples=int(48000 * 1.5),
-                                                  speaking_quantile_threshold=0.9,
+                                                  speaking_quantile_threshold=0.85,
                                                   # silence_threshold=0.001,
                                                   silence_quantile_threshold=0.05,
                                                   n_silence_windows=35000,
@@ -1057,23 +1058,30 @@ class HarvardSentences(BaseASPEN):
                                                   #stim_key='speaking_region_stim'
                                                   stim_key='speaking_region_stim_mask'
                                                   )),
-            ('speaking_indices', pipeline.WindowSampleIndicesFromStim('stim_pwrt',
-                                                                      target_onset_shift=pd.Timedelta(-.5, 's'),
-                                                                      # input are centers, and output is a window of
-                                                                      # .5 sec so to center it, move the point (
-                                                                      # center) back .25 secods so that extracted 0.5
-                                                                      # sec window saddles the original center
-                                                                      # target_offset_shift=pd.Timedelta(-0.25, 's')
-                                                                      target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                      #max_target_region_size=300
-                                                                      sample_n=1000,
+#            ('speaking_indices', pipeline.WindowSampleIndicesFromStim('stim_pwrt',
+#                                                                      target_onset_shift=pd.Timedelta(-.5, 's'),
+#                                                                      # input are centers, and output is a window of
+#                                                                      # .5 sec so to center it, move the point (
+#                                                                      # center) back .25 secods so that extracted 0.5
+#                                                                      # sec window saddles the original center
+#                                                                      # target_offset_shift=pd.Timedelta(-0.25, 's')
+#                                                                      target_offset_shift=pd.Timedelta(-0.5, 's'),
+#                                                                      #max_target_region_size=300
+#                                                                      sample_n=20000,
+#                                                                      )),
+            ('speaking_indices', pipeline.WindowSampleIndicesFromIndex('stim_pwrt',
+                                                                      # Center the extracted 0.5 second window
+                                                                      index_shift=pd.Timedelta(-0.25, 's'),
+                                                                      stim_value_remap=1,
+                                                                      sample_n=10000,
                                                                       )),
             ('silence_indices', pipeline.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
                                                                       # Center the extracted 0.5 second window
                                                                       index_shift=pd.Timedelta(-0.25, 's'),
                                                                       stim_value_remap=0,
                                                                       sample_n=10000,
-                                                                      ))]
+                                                                      ))
+        ]
 
         start_stop_steps = [('new_mtss', pipeline.NewNewMultiTaskStartStop()),
                                                  # Stims from Start-stop-times
