@@ -37,12 +37,14 @@ class TransferLearningResultParsingOptions(result_parsing.ResultParsingOptions):
 @dataclass
 class SpeechDetectionFineTuningTask(bxp.TaskOptions):
     task_name: str = "speech_classification_fine_tuning"
-    dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='UCSD-22')
-    method: str = '2d_transformers'
+    dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='UCSD-22',
+                                                               flatten_sensors_to_samples=False,
+                                                               pre_processing_pipeline='audio_gate')
+    method: str = '2d_linear'
     squeeze_target: ClassVar[bool] = False
 
     def make_criteria_and_target_key(self):
-        pos_weight = torch.FloatTensor([0.5]).to(self.device)
+        pos_weight = torch.FloatTensor([1.0]).to(self.device)
         criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
         target_key = 'target_arr'
         return criterion, target_key
@@ -277,10 +279,6 @@ class FineTuningExperiment(bxp.Experiment):
     def run(self):
         self.train()
         performance_map = self.eval()
-        #self.initialize()
-        #ft_results = self.trainer.train(self.task.n_epochs)
-        #self.fine_tune_model.load_state_dict(self.trainer.get_best_state())
-        #self.fine_tune_model.eval()
 
         #####
         # Prep a results structure for saving - everything must be json serializable (no array objects)
@@ -318,9 +316,13 @@ class TLTrainer(base.Trainer):
     squeeze_first = True
 
     def loss(self, model_output_d, input_d, as_tensor=True):
-        crit_loss = self.criterion(model_output_d,
-                                   input_d[self.target_key].squeeze() if self.squeeze_target
+        target = (input_d[self.target_key].squeeze() if self.squeeze_target
                                    else input_d[self.target_key])
+        if isinstance(self.criterion, torch.nn.BCEWithLogitsLoss):
+            target = target.float()
+
+        crit_loss = self.criterion(model_output_d.float() if isinstance(self.criterion, torch.nn.BCEWithLogitsLoss) else model_output_d,
+                                   target)
         return crit_loss
 
     def _eval(self, epoch_i, dataloader, model_key='model'):
