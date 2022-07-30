@@ -1047,12 +1047,17 @@ class WindowSampleIndicesFromIndex(DictTrf):
         stim = data_map[self.stim_key]
         fs = data_map[self.fs_key]
         existing_sample_indices_map = data_map.get('sample_index_map')
+        existing_indices_sources_map = data_map.get('index_source_map')
+
+        existing_sample_indices_map = dict() if existing_sample_indices_map is None else existing_sample_indices_map
+        existing_indices_sources_map = dict() if existing_indices_sources_map is None else existing_indices_sources_map
+        sample_indices = dict()
+        indices_sources = dict()
+
         stim_pre_process_f = self.stim_pre_process_f if self.stim_pre_process_f is not None else lambda _stim: _stim
         win_size = self.window_size
 
         index_shift = pd.Timedelta(0, 's') if self.index_shift is None else self.index_shift
-        existing_sample_indices_map = dict() if existing_sample_indices_map is None else existing_sample_indices_map
-        sample_indices = dict()
         expected_window_samples = int(fs * win_size.total_seconds())
 
         target_indexes = (stim.pipe(stim_pre_process_f) == self.stim_target_value)\
@@ -1064,11 +1069,18 @@ class WindowSampleIndicesFromIndex(DictTrf):
 
         stim_key = object_as_key_or_itself(self.stim_target_value, self.stim_value_remap)
         sample_indices[stim_key] = sample_indices.get(stim_key, list()) + target_indices
+        indices_sources[stim_key] = indices_sources.get(stim_key, self.stim_key)
 
         if existing_sample_indices_map is not None:
             existing_sample_indices_map.update(sample_indices)
             sample_indices = existing_sample_indices_map
-        return dict(sample_index_map=sample_indices, n_samples_per_window=expected_window_samples)
+
+        if existing_indices_sources_map is not None:
+            existing_indices_sources_map.update(indices_sources)
+            indices_sources = existing_indices_sources_map
+
+        return dict(sample_index_map=sample_indices, n_samples_per_window=expected_window_samples,
+                    index_source_map=indices_sources)
 
 
 @attr.s
@@ -1141,7 +1153,11 @@ class WindowSampleIndicesFromStim(DictTrf):
             target_start_ixes = s_ix.tolist()#[:-expected_window_samples]
 
             if self.sample_n:
-                to_iter = np.random.choice(target_start_ixes, self.sample_n, replace=False)
+                if self.sample_n > len(target_start_ixes):
+                    print(f"Warning: tried to sample {self.sample_n}, but only {len(target_start_ixes)} start ixes present")
+                    to_iter = target_start_ixes
+                else:
+                    to_iter = np.random.choice(target_start_ixes, self.sample_n, replace=False)
             elif self.max_target_region_size is not None:
                 to_iter = target_start_ixes[:self.max_target_region_size]
             else:
