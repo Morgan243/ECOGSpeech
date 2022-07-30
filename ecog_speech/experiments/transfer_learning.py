@@ -44,8 +44,9 @@ class SpeechDetectionFineTuningTask(bxp.TaskOptions):
     squeeze_target: ClassVar[bool] = False
 
     def make_criteria_and_target_key(self):
-        pos_weight = torch.FloatTensor([1.0]).to(self.device)
-        criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        #pos_weight = torch.FloatTensor([1.0]).to(self.device)
+        #criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        criterion = torch.nn.BCELoss()
         target_key = 'target_arr'
         return criterion, target_key
 
@@ -65,6 +66,79 @@ class RegionDetectionFineTuningTask(bxp.TaskOptions):
         target_key = 'target_arr'
         return criterion, target_key
 
+from ecog_speech.models import base as bmp
+from typing import Union
+@dataclass
+class FineTuningModel(bmp.DNNModelOptions):
+    fine_tuning_method: str = '2d_linear'
+    freeze_pretrained_weights: bool = True
+    linear_hidden_n: int = 16
+    n_layers: int = 1
+
+    classifier_head: Optional[Union[torch.nn.Module, str]] = None
+
+
+    def create_fine_tuning_model(self, pretrained_model,
+                                 n_pretrained_output_channels=None, n_pretrained_output_samples=None,
+                                 #fine_tuning_method='1d_linear',
+                                 dataset: datasets.BaseDataset = None,
+                                 fine_tuning_target_shape=None, n_pretrained_input_channels=None,
+                                 n_pretrained_input_samples=256,
+                                 #freeze_pretrained_weights=True,
+                                 #classifier_head: torch.nn.Module = None
+                                 ):
+        from ecog_speech.models import base
+        n_pretrained_output_channels = pretrained_model.C if n_pretrained_output_channels is None else n_pretrained_output_samples
+        n_pretrained_output_samples = pretrained_model.T if n_pretrained_output_samples is None else n_pretrained_output_samples
+
+        n_pretrained_input_channels = n_pretrained_input_channels if dataset is None else len(dataset.selected_columns)
+        # n_pretrained_input_samples = n_pretrained_input_samples if dataset is None else dataset.get_target_shape()
+        fine_tuning_target_shape = dataset.get_target_shape() if fine_tuning_target_shape is None else fine_tuning_target_shape
+
+
+        m = copy.deepcopy(pretrained_model)
+        m.quantizer.codebook_indices = None
+        if self.freeze_pretrained_weights:
+            for param in m.parameters():
+                param.requires_grad = False
+
+        if self.fine_tuning_method == '1d_linear':
+            # Very simple linear classifier head by default
+            if self.classifier_head is None:
+                h_size = 32
+                classifier_head = torch.nn.Sequential(*[
+                    base.Reshape((n_pretrained_output_channels * n_pretrained_output_samples,)),
+                    torch.nn.Linear(n_pretrained_output_channels * n_pretrained_output_samples, h_size),
+                    # torch.nn.BatchNorm1d(h_size),
+                    torch.nn.LeakyReLU(),
+                    torch.nn.Linear(h_size, h_size),
+                    torch.nn.LeakyReLU(),
+                    torch.nn.Linear(h_size, fine_tuning_target_shape),
+                    # torch.nn.Sigmoid()
+                ])
+                # nn.init.xavier_uniform_(classifier_head.weight)
+
+            ft_model = base_ft.FineTuner(pre_trained_model=m, output_model=classifier_head,
+                                         pre_trained_model_forward_kws=dict(features_only=True, mask=False),
+                                         pre_trained_model_output_key='x',
+                                         freeze_pre_train_weights=self.freeze_pretrained_weights)
+
+        elif '2d_' in self.fine_tuning_method:
+            if dataset is None:
+                raise ValueError(f"A dataset is required for '2d_*' methods in order to see num sensors")
+            from ecog_speech.models import base_transformers
+
+            hidden_enc = 'transformer' if self.fine_tuning_method == '2d_transformers' else 'linear'
+            ft_model = base_transformers.MultiChannelCog2Vec((n_pretrained_input_channels, n_pretrained_input_samples),
+                                                             pretrained_model, outputs=dataset.get_target_shape(),
+                                                             hidden_encoder=hidden_enc,
+                                                             dropout=self.dropout, batch_norm=self.batch_norm,
+                                                             linear_hidden_n=self.linear_hidden_n, n_layers=self.n_layers)
+        else:
+            raise ValueError(f"Unknown ft_method '{self.fine_tuning_method}'")
+
+        return ft_model
+
 
 @dataclass
 class FineTuningExperiment(bxp.Experiment):
@@ -73,6 +147,7 @@ class FineTuningExperiment(bxp.Experiment):
         {'speech_detection': SpeechDetectionFineTuningTask(),
          'region_detection': RegionDetectionFineTuningTask()},
         default=RegionDetectionFineTuningTask())
+    model: FineTuningModel = FineTuningModel()
     # Don't need model options directly
     # TODO: make a fine tuning model options to capture at elast 'method' in task above
     #model: bmp.ModelOptions = subgroups(
@@ -134,65 +209,66 @@ class FineTuningExperiment(bxp.Experiment):
             #                  - set(datasets.BaseASPEN.make_tuples_from_sets_str(pretraining_sets)))
             logger.info(f"AUTO-REMAINING: pretrained on {pretraining_sets}, so fine tuning on {train_sets}")
 
-        return self.task.dataset.make_datasets_and_loaders(train_p_tuples=train_sets)
+        return self.task.dataset.make_datasets_and_loaders(train_p_tuples=train_sets,
+                                                           test_split_kws=dict(test_size=0.5))
 
-    @classmethod
-    def create_fine_tuning_model(cls, pretrained_model,
-                                 n_pretrained_output_channels=None, n_pretrained_output_samples=None,
-                                 fine_tuning_method='1d_linear',
-                                 dataset: datasets.BaseDataset = None,
-                                 fine_tuning_target_shape=None, n_pretrained_input_channels=None,
-                                 n_pretrained_input_samples=256,
-                                 freeze_pretrained_weights=True,
-                                 classifier_head: torch.nn.Module = None):
-        from ecog_speech.models import base
-        n_pretrained_output_channels = pretrained_model.C if n_pretrained_output_channels is None else n_pretrained_output_samples
-        n_pretrained_output_samples = pretrained_model.T if n_pretrained_output_samples is None else n_pretrained_output_samples
-
-        n_pretrained_input_channels = n_pretrained_input_channels if dataset is None else len(dataset.selected_columns)
-        # n_pretrained_input_samples = n_pretrained_input_samples if dataset is None else dataset.get_target_shape()
-        fine_tuning_target_shape = dataset.get_target_shape() if fine_tuning_target_shape is None else fine_tuning_target_shape
-
-        m = copy.deepcopy(pretrained_model)
-        m.quantizer.codebook_indices = None
-        if freeze_pretrained_weights:
-            for param in m.parameters():
-                param.requires_grad = False
-
-        if fine_tuning_method == '1d_linear':
-            # Very simple linear classifier head by default
-            if classifier_head is None:
-                h_size = 32
-                classifier_head = torch.nn.Sequential(*[
-                    base.Reshape((n_pretrained_output_channels * n_pretrained_output_samples,)),
-                    torch.nn.Linear(n_pretrained_output_channels * n_pretrained_output_samples, h_size),
-                    # torch.nn.BatchNorm1d(h_size),
-                    torch.nn.LeakyReLU(),
-                    torch.nn.Linear(h_size, h_size),
-                    torch.nn.LeakyReLU(),
-                    torch.nn.Linear(h_size, fine_tuning_target_shape),
-                    # torch.nn.Sigmoid()
-                ])
-                # nn.init.xavier_uniform_(classifier_head.weight)
-
-            ft_model = base_ft.FineTuner(pre_trained_model=m, output_model=classifier_head,
-                                         pre_trained_model_forward_kws=dict(features_only=True, mask=False),
-                                         pre_trained_model_output_key='x',
-                                         freeze_pre_train_weights=freeze_pretrained_weights)
-
-        elif '2d_' in fine_tuning_method :
-            if dataset is None:
-                raise ValueError(f"A dataset is required for '2d_*' methods in order to see num sensors")
-            from ecog_speech.models import base_transformers
-
-            hidden_enc = 'transformer' if fine_tuning_method == '2d_transformers' else 'linear'
-            ft_model = base_transformers.MultiChannelCog2Vec((n_pretrained_input_channels, n_pretrained_input_samples),
-                                                             pretrained_model, outputs=dataset.get_target_shape(),
-                                                             hidden_encoder=hidden_enc)
-        else:
-            raise ValueError(f"Unknown ft_method '{fine_tuning_method}'")
-
-        return ft_model
+#    @classmethod
+#    def create_fine_tuning_model(cls, pretrained_model,
+#                                 n_pretrained_output_channels=None, n_pretrained_output_samples=None,
+#                                 fine_tuning_method='1d_linear',
+#                                 dataset: datasets.BaseDataset = None,
+#                                 fine_tuning_target_shape=None, n_pretrained_input_channels=None,
+#                                 n_pretrained_input_samples=256,
+#                                 freeze_pretrained_weights=True,
+#                                 classifier_head: torch.nn.Module = None):
+#        from ecog_speech.models import base
+#        n_pretrained_output_channels = pretrained_model.C if n_pretrained_output_channels is None else n_pretrained_output_samples
+#        n_pretrained_output_samples = pretrained_model.T if n_pretrained_output_samples is None else n_pretrained_output_samples
+#
+#        n_pretrained_input_channels = n_pretrained_input_channels if dataset is None else len(dataset.selected_columns)
+#        # n_pretrained_input_samples = n_pretrained_input_samples if dataset is None else dataset.get_target_shape()
+#        fine_tuning_target_shape = dataset.get_target_shape() if fine_tuning_target_shape is None else fine_tuning_target_shape
+#
+#        m = copy.deepcopy(pretrained_model)
+#        m.quantizer.codebook_indices = None
+#        if freeze_pretrained_weights:
+#            for param in m.parameters():
+#                param.requires_grad = False
+#
+#        if fine_tuning_method == '1d_linear':
+#            # Very simple linear classifier head by default
+#            if classifier_head is None:
+#                h_size = 32
+#                classifier_head = torch.nn.Sequential(*[
+#                    base.Reshape((n_pretrained_output_channels * n_pretrained_output_samples,)),
+#                    torch.nn.Linear(n_pretrained_output_channels * n_pretrained_output_samples, h_size),
+#                    # torch.nn.BatchNorm1d(h_size),
+#                    torch.nn.LeakyReLU(),
+#                    torch.nn.Linear(h_size, h_size),
+#                    torch.nn.LeakyReLU(),
+#                    torch.nn.Linear(h_size, fine_tuning_target_shape),
+#                    # torch.nn.Sigmoid()
+#                ])
+#                # nn.init.xavier_uniform_(classifier_head.weight)
+#
+#            ft_model = base_ft.FineTuner(pre_trained_model=m, output_model=classifier_head,
+#                                         pre_trained_model_forward_kws=dict(features_only=True, mask=False),
+#                                         pre_trained_model_output_key='x',
+#                                         freeze_pre_train_weights=freeze_pretrained_weights)
+#
+#        elif '2d_' in fine_tuning_method :
+#            if dataset is None:
+#                raise ValueError(f"A dataset is required for '2d_*' methods in order to see num sensors")
+#            from ecog_speech.models import base_transformers
+#
+#            hidden_enc = 'transformer' if fine_tuning_method == '2d_transformers' else 'linear'
+#            ft_model = base_transformers.MultiChannelCog2Vec((n_pretrained_input_channels, n_pretrained_input_samples),
+#                                                             pretrained_model, outputs=dataset.get_target_shape(),
+#                                                             hidden_encoder=hidden_enc)
+#        else:
+#            raise ValueError(f"Unknown ft_method '{fine_tuning_method}'")
+#
+#        return ft_model
 
     def initialize(self):
         if getattr(self, 'initialized', False):
@@ -203,10 +279,13 @@ class FineTuningExperiment(bxp.Experiment):
         self.dataset_map, self.dl_map, self.eval_dl_map = self.make_fine_tuning_datasets_and_loaders()
 
         # Capture configurable kws separately, so they can be easily saved in the results at the end
-        self.fine_tune_model_kws = dict(fine_tuning_method=self.task.method)
-        self.fine_tune_model = self.create_fine_tuning_model(self.pretrained_model,
-                                                             dataset=self.dataset_map['train'],
-                                                             **self.fine_tune_model_kws)
+        self.fine_tune_model_kws = dict()#dict(fine_tuning_method=self.task.method)
+        self.fine_tune_model = self.model.create_fine_tuning_model(self.pretrained_model,
+                                                                   dataset=self.dataset_map['train'],
+                                                                   **self.fine_tune_model_kws)
+        #self.fine_tune_model = self.create_fine_tuning_model(self.pretrained_model,
+        #                                                     dataset=self.dataset_map['train'],
+        #                                                     **self.fine_tune_model_kws)
 
         # Decide how to setup the loss depending on the dataset and task - TODO: should clean this up?
         #        dset_name = self.task.dataset.dataset_name
@@ -237,6 +316,9 @@ class FineTuningExperiment(bxp.Experiment):
                                    input_key='signal_arr',
                                    learning_rate=self.task.learning_rate,
                                    early_stopping_patience=self.task.early_stopping_patience,
+                                   lr_adjust_on_cv_loss=self.task.lr_adjust_patience is not None,
+                                   lr_adjust_on_plateau_kws=dict(patience=self.task.lr_adjust_patience,
+                                                                 factor=self.task.lr_adjust_factor),
                                    target_key=target_key,
                                    criterion=criterion,
                                    device=self.task.device,
@@ -284,7 +366,7 @@ class FineTuningExperiment(bxp.Experiment):
         # Prep a results structure for saving - everything must be json serializable (no array objects)
         res_dict = self.create_result_dictionary(
             #model_name=self.model.model_name,
-            batch_losses=self.fine_tuning_results,
+            epoch_outputs=self.fine_tuning_results,
             train_selected_columns=self.dataset_map['train'].selected_columns,  # dataset_map['train'].selected_columns,
             #test_selected_flat_indices=dataset_map['test'].selected_flat_indices,
             #selected_flat_indices={k: d.selected_flat_indices for k, d in dataset_map.items()},
@@ -297,6 +379,7 @@ class FineTuningExperiment(bxp.Experiment):
             #**eval_res_map,
             pretrained_result_input=vars(self.pretrained_result_input),
             task_options=vars(self.task),
+            dataset_options=vars(self.task.dataset),
             #dataset_options=vars(self.dataset),
             result_output_options=vars(self.result_output)
         )
@@ -318,7 +401,7 @@ class TLTrainer(base.Trainer):
     def loss(self, model_output_d, input_d, as_tensor=True):
         target = (input_d[self.target_key].squeeze() if self.squeeze_target
                                    else input_d[self.target_key])
-        if isinstance(self.criterion, torch.nn.BCEWithLogitsLoss):
+        if isinstance(self.criterion, (torch.nn.BCEWithLogitsLoss, torch.nn.BCELoss)):
             target = target.float()
 
         crit_loss = self.criterion(model_output_d.float() if isinstance(self.criterion, torch.nn.BCEWithLogitsLoss) else model_output_d,
