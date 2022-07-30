@@ -13,7 +13,7 @@ logger = utils.get_logger('semi_supervised')
 @dataclass
 class SemisupervisedCodebookTaskOptions(bxp.TaskOptions):
     task_name: str = "semisupervised_codebook_training"
-    ppl_weight: float = 1000.
+    ppl_weight: float = 100.
 
 
 @dataclass
@@ -33,7 +33,7 @@ class SemiSupervisedExperiment(bxp.Experiment):
         default=SemisupervisedCodebookTaskOptions())
 
     def run(self):
-        dataset_map, dl_map, eval_dl_map = self.dataset.make_datasets_and_loaders()
+        dataset_map, dl_map, eval_dl_map = self.dataset.make_datasets_and_loaders(train_split_kws=dict(test_size=0.2))
         model, model_kws = self.model.make_model(dataset_map['train'])
 
         # Shake out any forward pass errors now by running example data through model
@@ -45,7 +45,8 @@ class SemiSupervisedExperiment(bxp.Experiment):
         if self.task.lr_adjust_patience is not None:
             print("Configuring LR scheduler for model")
             lr_schedule_kws = dict(patience=self.task.lr_adjust_patience, factor=self.task.lr_adjust_factor,
-                                   verbose=True)
+                                   #verbose=True
+                                   )
             trainer_kws.update(dict(lr_adjust_on_plateau_kws=lr_schedule_kws,
                                     lr_adjust_on_cv_loss=True,
                                     model_name_to_lr_adjust='model'))
@@ -76,7 +77,7 @@ class SemiSupervisedExperiment(bxp.Experiment):
 
         res_dict = self.create_result_dictionary(
             model_name=self.model.model_name,
-            batch_losses=losses,
+            epoch_outputs=losses,
             train_selected_columns=dataset_map['train'].selected_columns,
             selected_flat_indices={k: d.selected_levels_df.to_json() for k, d in dataset_map.items()},
             best_model_epoch=trainer.best_model_epoch,
