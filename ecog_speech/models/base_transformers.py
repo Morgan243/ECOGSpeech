@@ -264,6 +264,7 @@ class CoG2Vec(torch.nn.Module):
                  cross_sample_negatives=0, codebook_negatives=0,
                  mask_length=3, mask_prob=0.3,
                  n_encoder_heads=8, n_encoder_layers=12,
+                 encoder_dim_feedforward=2048,
                  quant_num_vars=300, quant_num_groups=2,
                  quant_weight_proj_factor=2, quant_weight_proj_depth=1,
                  feature_extractor_layers='[(128, 7, 3)] + [(128, 3, 2)] * 2 + [(128, 3, 1)]',
@@ -399,9 +400,11 @@ class CoG2Vec(torch.nn.Module):
         self.num_encoder_layers = n_encoder_layers
         self.context_model = context_model
         self.context_encoder_dropout = context_encoder_dropout
+        self.encoder_dim_feedforward = encoder_dim_feedforward
         if self.context_model is None:
             encoder_layer = torch.nn.TransformerEncoderLayer(d_model=embed_dim, nhead=self.n_heads, batch_first=True,
-                                                             activation="gelu", dropout=self.context_encoder_dropout)
+                                                             activation="gelu", dropout=self.context_encoder_dropout,
+                                                             dim_feedforward=encoder_dim_feedforward)
             transformer_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=self.num_encoder_layers)
             self.context_model = transformer_encoder
 
@@ -723,11 +726,14 @@ class CoG2Vec(torch.nn.Module):
 
 class MultiChannelCog2Vec(torch.nn.Module):
     def __init__(self, input_shape, c2v_m: CoG2Vec, hidden_encoder='linear',
+                 dropout=0., batch_norm=False, linear_hidden_n=16, n_layers=2,
                  outputs=1):
         super().__init__()
         self.input_shape = input_shape
         self.c2v_m = c2v_m
         self.outputs = outputs
+        self.dropout_rate = dropout
+        self.batch_norm = batch_norm
 
         self.mc_from_1d = base_ft.MultiChannelFromSingleChannel(self.input_shape, self.c2v_m)
 
@@ -735,44 +741,68 @@ class MultiChannelCog2Vec(torch.nn.Module):
         self.T, self.C = self.c2v_m.T, self.c2v_m.C
         self.h_dim = self.S * self.C
 
+
         #B, T, S, C = output_arr.shape
 
         #output_arr_t = output_arr.reshape(B, T, -1)
 
         #hidden_encoder = 'linear' if hidden_encoder is None else hidden_encoder
         self.hidden_encoder_input = hidden_encoder
-        self.dropout_rate = 0.75
 
+        self.classifier_head = torch.nn.Identity()
+
+        def make_linear(outputs, regularize=True, activation=torch.nn.LeakyReLU):
+            l = list()
+            if regularize and self.dropout_rate > 0.:
+                l.append(torch.nn.Dropout(self.dropout_rate))
+
+            l.append(torch.nn.LazyLinear(outputs))
+            #torch.nn.init.xavier_uniform_(l[-1].weight)
+
+            if regularize and self.batch_norm:
+                l.append(torch.nn.LazyBatchNorm1d(momentum=0.2, track_running_stats=True, affine=True))
+
+            if activation is not None:
+                l.append(activation())
+
+            return torch.nn.Sequential(*l)
 
         if isinstance(hidden_encoder, torch.nn.Module):
             self.hidden_encoder = hidden_encoder
         elif hidden_encoder == 'linear':
             self.lin_dim = self.outputs
             self.hidden_encoder = torch.nn.Sequential(
-                torch.nn.LazyBatchNorm1d(momentum=0.2, track_running_stats=False, affine=True),
-                torch.nn.Dropout(self.dropout_rate),
-                torch.nn.LazyLinear(self.outputs * 4),
-                torch.nn.LeakyReLU(),
-                torch.nn.Dropout(self.dropout_rate),
-                torch.nn.LazyLinear(self.outputs * 2),
-                torch.nn.LeakyReLU(),
-                torch.nn.LazyLinear(self.outputs),
-
-                # torch.nn.BatchNorm1d(self.lin_dim, momentum=0.2, track_running_stats=False),
-                #torch.nn.Dropout(self.dropout_rate),
-                #torch.nn.Linear(self.lin_dim, self.lin_dim),
-                #torch.nn.BatchNorm1d(self.lin_dim),
-                #torch.nn.LeakyReLU(),
-                #torch.nn.Dropout(self.dropout_rate),
-                #torch.nn.Linear(self.lin_dim, self.lin_dim),
-                #torch.nn.LeakyReLU(),
-                #torch.nn.Dropout(self.dropout_rate),
-                #torch.nn.Linear(self.lin_dim, self.lin_dim),
-                #torch.nn.LeakyReLU(),
+                *[make_linear(linear_hidden_n) for i in range(n_layers - 1)],
+                *make_linear(self.outputs, regularize=False, activation=None)
             )
+            if self.outputs == 1:
+                self.classifier_head = torch.nn.Sequential(torch.nn.Sigmoid())
+#            self.hidden_encoder = torch.nn.Sequential(
+#                torch.nn.LazyBatchNorm1d(momentum=0.2, track_running_stats=False, affine=True),
+#                torch.nn.Dropout(self.dropout_rate),
+#                torch.nn.LazyLinear(self.outputs * 4),
+#                torch.nn.LeakyReLU(),
+#                torch.nn.LazyBatchNorm1d(momentum=0.2, track_running_stats=False, affine=True),
+#                torch.nn.Dropout(self.dropout_rate),
+#                torch.nn.LazyLinear(self.outputs * 2),
+#                torch.nn.LeakyReLU(),
+#                torch.nn.LazyLinear(self.outputs),
+#
+#                # torch.nn.BatchNorm1d(self.lin_dim, momentum=0.2, track_running_stats=False),
+#                #torch.nn.Dropout(self.dropout_rate),
+#                #torch.nn.Linear(self.lin_dim, self.lin_dim),
+#                #torch.nn.BatchNorm1d(self.lin_dim),
+#                #torch.nn.LeakyReLU(),
+#                #torch.nn.Dropout(self.dropout_rate),
+#                #torch.nn.Linear(self.lin_dim, self.lin_dim),
+#                #torch.nn.LeakyReLU(),
+#                #torch.nn.Dropout(self.dropout_rate),
+#                #torch.nn.Linear(self.lin_dim, self.lin_dim),
+#                #torch.nn.LeakyReLU(),
+#            )
             self.feat_arr_reshape = (-1, self.h_dim * self.T)
-            self.classifier_head = torch.nn.Sequential(torch.nn.Sigmoid() if self.outputs == 1
-                                                       else torch.nn.Identity())
+            #self.classifier_head = torch.nn.Sequential(torch.nn.Sigmoid() if self.outputs == 1
+            #                                           else torch.nn.Identity())
         elif hidden_encoder == 'transformer':
             encoder_layer = torch.nn.TransformerEncoderLayer(d_model=self.h_dim, dropout=self.dropout_rate,
                                                              nhead=2, batch_first=True,
@@ -1051,11 +1081,12 @@ class Cog2VecOptions(bmp.ModelOptions):
     n_negatives: int = 100
     cross_sample_negatives: int = 0
     codebook_negatives: int = 0
-    mask_length: int = 3
+    mask_length: int = 2
     mask_prob: float = 0.3
     n_encoder_heads: int = 4
     n_encoder_layers: int = 6
     encoder_dropout: float = 0.25
+    encoder_dim_feedforward: int = 2048
     quant_num_vars: int = 40
     quant_num_groups: int = 4
     quant_weight_proj_factor: int = 2
@@ -1079,6 +1110,7 @@ class Cog2VecOptions(bmp.ModelOptions):
             mask_length=self.mask_length, n_encoder_heads=self.n_encoder_heads,
             context_encoder_dropout=self.encoder_dropout,
             n_encoder_layers=self.n_encoder_layers,
+            encoder_dim_feedforward=self.encoder_dim_feedforward,
             quant_num_vars=self.quant_num_vars, quant_num_groups=self.quant_num_groups,
             feature_extractor_layers=self.feature_extractor_layers,
             positional_encoding_method=self.positional_encoding_method
