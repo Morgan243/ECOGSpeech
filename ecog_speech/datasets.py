@@ -1082,7 +1082,7 @@ class HarvardSentences(BaseASPEN):
                                                                       ))
         ]
 
-        start_stop_steps = [('new_mtss', pipeline.NewNewMultiTaskStartStop()),
+        start_stop_steps = [('new_mtss', pipeline.AppendExtraMultiTaskStartStop()),
                                                  # Stims from Start-stop-times
                                                  ('speaking_word_stim', pipeline.NewStimFromRegionStartStopTimes(
                                                                         start_t_column='start_t',

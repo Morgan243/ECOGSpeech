@@ -468,7 +468,7 @@ class SentCodeFromStartStopWordTimes(DictTrf):
 
 @with_logger
 @attr.s
-class NewNewMultiTaskStartStop(DictTrf):
+class AppendExtraMultiTaskStartStop(DictTrf):
     """
     Update start_stop_times frame to include region start-stop, as well as <region>_word_start/stop_t, for each region
 
@@ -563,117 +563,6 @@ class NewNewMultiTaskStartStop(DictTrf):
         return dict(word_start_stop_times=wsst_df)
         
 
-# Create multi-task start stop that extracts the start and stop times
-# Create general stim from start stop times
-# Separate out current implementation of stim from startstop stimes to be sentence start stop extract?
-@attr.s
-@with_logger
-class MultiTaskStartStop(DictTrf):
-    """
-     extract the same start stop times, only shifted to align in offset from the start of stims in the parameter value
-    map
-    """
-    stim_val_map = attr.ib()
-
-    @stim_val_map.default
-    def stim_val_map_factory(self):
-        return ({
-            52: 'imagine',
-            53: 'mouth',
-        })
-
-    def process(self, data_map):
-        _word_df = data_map['word_start_stop_times'].copy()
-        stim = data_map['stim']
-
-        self.logger.info("Hard coded to: Less than 51 and greater than zero")
-        start_listening_region = (stim[stim.lt(51) & stim.gt(0)]
-                                  .pipe(
-            # TODO: maybe first off of groupby would work, but not sure it sorts index first...
-            lambda s: s.groupby(s).apply(lambda s: s.sort_index().head(1)).reset_index(0, drop=True))
-                                  .pipe(lambda s: pd.Series(s.index, index=s.values, name='listening_region_start_t'))
-                                  )
-
-        start_listening_region.index = start_listening_region.index.rename('stim_sentcode')
-        end_listening_region = (stim[stim.lt(51) & stim.gt(0)]
-                                .pipe(
-            # TODO: maybe first off of groupby would work, but not sure it sorts index first...
-            lambda s: s.groupby(s).apply(lambda s: s.sort_index().tail(1)).reset_index(0, drop=True))
-                                .pipe(lambda s: pd.Series(s.index, index=s.values, name='listening_region_stop_t'))
-                                )
-
-        end_listening_region.index = end_listening_region.index.rename('stim_sentcode')
-
-        word_m_df = _word_df.merge(pd.concat([start_listening_region, end_listening_region], axis=1),
-                                    left_on='stim_sentcode', right_index=True)
-
-        #listening_start_t = word_m_df.listening_region_start_t.min()
-        #listening_stop_t = word_m_df.listening_region_stop_t.max()
-        self.logger.info(f"Finding closest labeled region to these stims: {self.stim_val_map}")
-        nearest_stim_d = dict()
-        for stim_val, stim_name in self.stim_val_map.items():
-            # Get stim values for this stim_name
-            _stim = stim[stim.eq(stim_val)]
-
-            # Find the stim time (with only these values) that is nearest each words start time
-            def closest_index_i_after_t(s, t, v):
-                # Filter stim to times past t threshold time
-                after_t_s = s[s.index >= t]
-                # Within the filtered data, what i index has the value closest to v
-                #closest_i_after_t_s = after_t_s.index.get_loc(v, method='nearest')
-                closest_i_after_t_s = after_t_s.index.get_indexer([v], method='nearest')[0]
-                # Access the index value at i
-                return after_t_s.index[closest_i_after_t_s]
-
-            stim_ixes = word_m_df.apply(lambda r: closest_index_i_after_t(_stim, r.stop_t, r.start_t), axis=1)
-
-            # stim_ixes = _word_df.apply(lambda r: _stim.loc[_stim.index >= r.start_t].index.get_loc(r.start_t, method='nearest'), axis=1)
-            nearest_stim_d[f'{stim_name}_region_start_t'] = stim_ixes
-            #nearest_stim_d[f'nekarest_{stim_name}_stim_code'] = _stim.iloc[stim_ixes].values
-            # nearest_stim_d[f'nearest_{stim_name}_stim_t'] = _stim.index[stim_ixes]
-            #nearest_stim_d[f'{stim_name}_region_start_t'] = stim.index[stim_ixes]
-
-        # The nearest timestamp of each key to the index (stim start of start stop word table)
-        nearest_df = pd.DataFrame(nearest_stim_d, index=_word_df.index)
-        nearest_df.sort_index()
-
-        _word_nearest_df = word_m_df.join(nearest_df)
-
-        _word_nearest_df['speaking_length_t'] = (_word_nearest_df.stop_t - _word_nearest_df.start_t)
-
-        # for sent_code, s_df in _word_nearest_df.groupby('stim_sentcode'):
-        def make_ref_offset_from_sent_code_groups(s_df):
-            # how far away from start of index/ref time
-            ref_diff_s = (s_df.index.to_series()
-                          # Distance from the start
-                          .pipe(lambda s: s - s.min())
-                          #
-                          .fillna(pd.Timedelta(0))
-                          .rename('ref_diff_from_min'))
-
-            # Add the difference to the 'nearest' columns - the start of those regions
-            s_start_df = s_df.loc[:, nearest_df.columns].apply(lambda s: s + ref_diff_s)
-            s_start_df.columns = s_start_df.columns.str.replace('region_start', 'start')
-
-            # Determine the stop by adding the length to the new start times
-            # - couldn't get this to broadcast, hence apply()
-            s_stop_df = s_start_df.apply(lambda s: s + s_df['speaking_length_t'])
-            s_stop_df.columns = s_start_df.columns.str.replace('start', 'stop')
-
-            return s_start_df.join([s_stop_df, ref_diff_s])
-
-        self.logger.info(f"Offsetting the nearest times to labeled data by the distance from start (within reference)")
-        mtask_word_df = _word_nearest_df.join(_word_nearest_df
-                                              .groupby('stim_sentcode')
-                                              .apply(make_ref_offset_from_sent_code_groups))
-
-        # Extract the word-level start stop for listening, assumed given in a similar cadence
-        mtask_word_df['listen_start_t'] = mtask_word_df['listening_region_start_t'] + mtask_word_df['ref_diff_from_min']
-        mtask_word_df['listen_stop_t'] = mtask_word_df['listen_start_t'] + mtask_word_df['speaking_length_t']
-
-        return dict(word_start_stop_times=mtask_word_df)
-
-
 @attr.s
 @with_logger
 class ParseSensorRAS(DictTrf):
@@ -749,89 +638,6 @@ class NewStimFromRegionStartStopTimes(DictTrf):
                  }
 
         return out_d
-
-
-@attr.s
-@with_logger
-class SentenceAndWordStimFromRegionStartStopTimes(DictTrf):
-    start_t_column = attr.ib('start_t')
-    stop_t_column = attr.ib('stop_t')
-    sent_code_column = attr.ib('stim_sentcode')
-    word_code_column = attr.ib('word')
-    word_stim_output_name = attr.ib('word_stim')
-    word_code_map_output_name = attr.ib('word_code')
-
-    set_as_word_stim = attr.ib(True)
-    sentence_stim_output_name = attr.ib('sentence_stim')
-
-    def process(self, data_map):
-        _word_df = data_map['word_start_stop_times'].copy()
-        stim = data_map['stim']
-        ix = stim.index
-        sentence_stim = pd.Series(0, index=ix, name='speaking_sentence_stim')
-        word_stim = pd.Series(0, index=ix, name='speaking_word_stim')
-
-        # # #
-        code_maps = list()
-        # We'll immediately +1 this, so we won't actually use zero for a word code - it will be silence
-        working_word_ix = 0
-        for i, (gname, gdf) in enumerate(_word_df.groupby(self.sent_code_column)):
-            _stim = stim[stim == gname]
-            sent_start_t, sent_stop_t = _stim.index.min(), _stim.index.max()
-            #sent_start_t = gdf[self.start_t_column].min()
-            #sent_stop_t = gdf[self.stop_t_column].max()
-
-            #  Use index.get_indexer([item], method=...)
-            start_i, stop_i = sentence_stim.index.get_indexer([sent_start_t, sent_stop_t], method='nearest')
-
-            # Set this sentence to some incrementing indicator
-            sentence_stim.iloc[start_i: stop_i] = sentence_stim.max() + 1
-
-            # Spoken is word is all caps string
-            is_word_m = gdf.word.str.upper() == gdf.word
-
-            # Set each words region in this sentence within the word_stim
-            #for ii, _start_t in enumerate(gdf[is_word_m].sort_values(self.start_t_column)[self.start_t_column].values):
-                #_gdf = gdf[is_word_m].query(f"{self.word_code_column} == '{_gname}'")
-            #    _gdf = gdf[is_word_m].pipe(lambda o: o[o[self.start_t_column] == _start_t])
-            # _gname = _gdf[self.word_code_column].unique()
-            # assert len(_gname) == 1, f"{len(_gname)} unique words in {self.word_code_column} for sentence {gname}"
-            # _gname = _gname[0]
-
-            for ii, (ix, r) in enumerate(gdf[is_word_m].sort_values(self.start_t_column).iterrows()):
-                word_code_val = r[self.word_code_column]
-                #_start_t = _gdf[self.start_t_column].min()
-                #_stop_t = _gdf[self.stop_t_column].max()
-                _start_t = r[self.start_t_column]
-                _stop_t = r[self.stop_t_column]
-
-                _start_i, _stop_i = word_stim.index.get_indexer([_start_t, _stop_t], method='nearest')
-                #_start_i = sentence_stim.index.get_loc(_start_t, method='nearest')
-                #_stop_i = sentence_stim.index.get_loc(_stop_t, method='nearest')
-
-                word_code = (working_word_ix := working_word_ix + 1)
-                code_maps.append({self.sent_code_column: gname, self.word_code_column: word_code_val,
-                                  self.word_code_map_output_name: word_code, 'start_t': _start_t})
-                word_stim.iloc[_start_i: _stop_i] = word_code
-
-        out = {self.word_stim_output_name: word_stim.rename(self.word_stim_output_name),
-               self.sentence_stim_output_name: sentence_stim.rename(self.sentence_stim_output_name),
-                #'wsst_df': wsst_df
-                }
-
-        if self.set_as_word_stim:
-            code_df = pd.DataFrame(code_maps)
-            wsst_df = _word_df.merge(code_df, on=['start_t', 'stim_sentcode', self.word_code_column], how='left')
-            wsst_df = wsst_df.set_index('start_t', drop=False).rename_axis(index='start_time')
-            wsst_df[self.word_code_map_output_name] = wsst_df[self.word_code_map_output_name].fillna(0).astype(int)
-            word_code_d = wsst_df.set_index('word_code').drop(0).word.to_dict()
-            out.update(
-                {'word_code_frame': code_df,
-                 'word_start_stop_times': wsst_df,
-                 'word_code_d': word_code_d}
-            )
-
-        return out
 
 
 @attr.s
