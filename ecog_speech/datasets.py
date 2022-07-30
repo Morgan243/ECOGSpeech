@@ -127,7 +127,7 @@ class BaseDataset(tdata.Dataset):
 
     def to_dataloader(self, batch_size=64, num_workers=2,
                       batches_per_epoch=None, random_sample=True,
-                      shuffle=False, **kwargs):
+                      shuffle=False, pin_memory=False, **kwargs):
         dset = self
         if random_sample:
             if batches_per_epoch is None:
@@ -139,10 +139,12 @@ class BaseDataset(tdata.Dataset):
                                                                       replacement=True,
                                                                       num_samples=batches_per_epoch * batch_size),
                                           shuffle=shuffle, num_workers=num_workers,
+                                          pin_memory=pin_memory,
                                           **kwargs)
         else:
             dataloader = tdata.DataLoader(dset, batch_size=batch_size,
                                           shuffle=shuffle, num_workers=num_workers,
+                                          pin_memory=pin_memory,
                                           **kwargs)
         return dataloader
 
@@ -1130,8 +1132,10 @@ class HarvardSentences(BaseASPEN):
 
 
         region_kws = dict(
-            target_onset_shift=pd.Timedelta(0.1, 's'),
-            target_offset_shift=pd.Timedelta(-0.1, 's'),
+            #target_onset_shift=pd.Timedelta(0.1, 's'),
+            #target_offset_shift=pd.Timedelta(-0.1, 's'),
+            target_onset_shift=pd.Timedelta(1, 's'),
+            target_offset_shift=pd.Timedelta(-1, 's'),
             sample_n=1000
             #max_target_region_size=1200
         )
@@ -1431,6 +1435,8 @@ class DatasetOptions(JsonSerializable):
     flatten_sensors_to_samples: bool = False
     # power_q: float = 0.7
     random_targets: bool = False
+    pin_memory: bool = False
+    dl_prefetch_factor: int = 2
 
     n_dl_workers: int = 4
     n_dl_eval_workers: int = 6
@@ -1442,6 +1448,7 @@ class DatasetOptions(JsonSerializable):
                                   train_sensor_columns='valid',
                                   pre_processing_pipeline=None,
                                   additional_transforms=None,
+                                  train_split_kws=None, test_split_kws=None,
                                   # additional_train_transforms=None, additional_eval_transforms=None,
                                   #num_dl_workers=None
                                   ) -> tuple:
@@ -1484,6 +1491,9 @@ class DatasetOptions(JsonSerializable):
         if test_p_tuples is None:
             test_p_tuples = dataset_cls.make_tuples_from_sets_str(self.test_sets if test_sets_str is None
                                                                   else test_sets_str)
+        train_split_kws = dict() if train_split_kws is None else train_split_kws
+        test_split_kws = dict() if test_split_kws is None else test_split_kws
+
         logger.info("Train tuples: " + str(train_p_tuples))
         logger.info("CV tuples: " + str(cv_p_tuples))
         logger.info("Test tuples: " + str(test_p_tuples))
@@ -1510,12 +1520,15 @@ class DatasetOptions(JsonSerializable):
 
         dl_kws = dict(num_workers=self.n_dl_workers, batch_size=self.batch_size,
                       batches_per_epoch=self.batches_per_epoch,
+                      pin_memory=self.pin_memory, prefetch_factor=self.dl_prefetch_factor,
                       shuffle=False, random_sample=True)
         print(f"DL Keyword arguments: {dl_kws}")
         eval_dl_kws = dict(num_workers=self.n_dl_eval_workers,
                            batch_size=self.batch_size if self.batch_size_eval is None else self.batch_size_eval,
                            batches_per_epoch=self.batches_per_eval_epoch,
                            shuffle=self.batches_per_eval_epoch is None,
+                           pin_memory=self.pin_memory,
+                           prefetch_factor=self.dl_prefetch_factor,
                            random_sample=self.batches_per_eval_epoch is not None)
                            #shuffle=False if self.batches_per_epoch is None else True,
                            #random_sample=False if self.batches_per_epoch is None else True)
@@ -1557,9 +1570,9 @@ class DatasetOptions(JsonSerializable):
             logger.info("*" * 30)
             logger.info("Splitting on random key levels for harvard sentences (UCSD)")
             logger.info("*" * 30)
-            _train, _test = train_nww.split_select_random_key_levels()
+            _train, _test = train_nww.split_select_random_key_levels(**train_split_kws)
             logger.info("Splitting out a test set")
-            _cv, _test = _test.split_select_random_key_levels()
+            _cv, _test = _test.split_select_random_key_levels(**test_split_kws)
             dataset_map.update(dict(train=_train, cv=_cv, test=_test))
         else:
             logger.info("~" * 30)
