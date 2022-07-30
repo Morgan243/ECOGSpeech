@@ -661,6 +661,7 @@ class Trainer:
             if self.lr_adjust_on_plateau_kws and (self.model_name_to_lr_adjust is None
                                                   or k in self.model_name_to_lr_adjust):
                 self.scheduler_map[k] = torch.optim.lr_scheduler.ReduceLROnPlateau(self.opt_map[k],
+                                                                                   verbose=True,
                                                                                    **self.lr_adjust_on_plateau_kws)
 
     def get_best_state(self, model_key='model'):
