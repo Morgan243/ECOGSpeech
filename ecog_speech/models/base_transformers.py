@@ -430,7 +430,7 @@ class CoG2Vec(torch.nn.Module):
         if self.projection_out_model is None:
             self.projection_out_model = torch.nn.Linear(embed_dim, embed_dim)
 
-    # Adapted From fairseq wave2vec2 (remove xla check
+    # Adapted From fairseq wave2vec2 (removed xla check)
     def compute_preds(self, x, y, negatives, ):
         # Negatives: n_negatives x B x T x C
 
@@ -843,9 +843,9 @@ class MultiChannelCog2Vec(torch.nn.Module):
 @attr.s
 class Cog2VecTrainer(Trainer):
     input_key = attr.ib('signal_arr')
-    squeeze_first = False  #True
+    ppl_weight = attr.ib(100.)
+    squeeze_first = False
     model_output_logits_key = 'preds'
-    ppl_weight = 100.
 
     def _score(self, epoch_i, dataloader, model_key='model'):
         model = self.model_map[model_key]
@@ -899,13 +899,11 @@ class Cog2VecTrainer(Trainer):
         with torch.no_grad():
             with tqdm(total=len(dataloader), desc="Eval") as pbar:
                 for i, _x in enumerate(dataloader):
-                    #X = _x['signal_arr'].to(self.device)
-
-                    #if self.squeeze_first:
-                    #    X = X.squeeze()
 
                     m_d = model(
-                        {k:arr.to(self.device) for k, arr in _x.items()}
+                        # Move all the arrays in the input dictionary to the right device
+                        # before passing to the model
+                        {k: arr.to(self.device) for k, arr in _x.items()}
                     )
 
                     loss_d = self.loss(m_d, as_tensor=False)
@@ -916,7 +914,7 @@ class Cog2VecTrainer(Trainer):
 
                     pbar.update(1)
 
-                eval_res_df = pd.DataFrame(eval_results_d_l)#.mean().to_dict()
+                eval_res_df = pd.DataFrame(eval_results_d_l)
                 if cb is not None:
                     cb(eval_res_df, pbar)
 
@@ -952,7 +950,7 @@ class Cog2VecTrainer(Trainer):
         eval_res_d = eval_res_df.mean().to_dict()
         eval_res_d['primary_loss'] = eval_res_d[primary_eval_key]
 
-        self.model_map['model'].train()
+        self.model_map[model_key].train()
 
         return eval_res_d
 
@@ -972,8 +970,8 @@ class Cog2VecTrainer(Trainer):
         #    logits, target.float(), reduction='sum' #weights, reduction=reduction
         #)
 
-        ppl_l = ((num_vars - prob_ppl) / num_vars) * self.ppl_weight #* 0.1
-        fpen_l = model_output_d["features_pen"] #* 10
+        ppl_l = ((num_vars - prob_ppl) / num_vars) * self.ppl_weight
+        fpen_l = model_output_d["features_pen"]
 
         o = dict(bce_loss=loss, perplexity=ppl_l, feature_pen=fpen_l)
         if not as_tensor:

@@ -406,13 +406,14 @@ class BaseASPEN(BaseDataset):
             ###
             # Sensor selection logic - based on the patients loaded - which sensors do we use?
             if self.sensor_columns is None or isinstance(self.sensor_columns, str):
-                # good_and_bad_tuple_d = {l_p_s_t_tuple: self.identify_good_and_bad_sensors(mat_d, self.sensor_columns)
-                #                            for l_p_s_t_tuple, mat_d in mat_data_maps.items()}
+                # Get each participant's good and bad sensor columns into a dictionary
                 good_and_bad_tuple_d = {l_p_s_t_tuple: (mat_d['good_sensor_columns'], mat_d['bad_sensor_columns'])
                                         for l_p_s_t_tuple, mat_d in self.data_maps.items()}
 
+                # Go back through and any missing sets of good_sensors are replaced with all sensor from the data
                 good_and_bad_tuple_d = {
-                    k: (set(gs) if gs else (list(range(self.data_maps[k][self.mat_d_keys['signal']].shape[1]))),
+                    k: (set(gs) if gs is not None
+                        else (list(range(self.data_maps[k][self.mat_d_keys['signal']].shape[1]))),
                         bs)
                     for k, (gs, bs) in good_and_bad_tuple_d.items()}
 
@@ -421,6 +422,7 @@ class BaseASPEN(BaseDataset):
 
                 # UNION: Select all good sensors from all inputs, zeros will be filled for those missing
                 if self.sensor_columns == 'union':
+                    # Create a sorted list of all sensor IDs found in the good sensor sets extracted
                     self.selected_columns = sorted(list({_gs for k, (gs, bs) in good_and_bad_tuple_d.items()
                                                          for _gs in gs}))
                 # INTERSECTION: Select only sensors that are rated good in all inputs
@@ -430,7 +432,7 @@ class BaseASPEN(BaseDataset):
 
                 # elif self.sensor_columns == 'all':
                 else:
-                    raise ValueError("Unknown snsor columns argument: " + str(self.sensor_columns))
+                    raise ValueError("Unknown sensor columns argument: " + str(self.sensor_columns))
                 # print("Selected columns with -%s- method: %s"
                 #      % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
                 self.logger.info(f"Selected {len(self.selected_columns)} columns using {self.sensor_columns} method: "
@@ -451,15 +453,11 @@ class BaseASPEN(BaseDataset):
             for l_p_s_t, index_map in self.sample_index_maps.items():
                 self.logger.info(f"Processing participant {l_p_s_t} index, having keys: {list(index_map.keys())}")
                 _data_map = self.data_maps[l_p_s_t]
-
                 #self.logger.info(f"Creating participants index frame: {l_p_s_t}")
-                patient_ixes = list()
-
                 cols = key_cols + ['start_t', 'stop_t', 'indices']
-
                 key_l = list(l_p_s_t)
 
-                patient_ixes += [tuple([label_code, ix_i] + key_l + [_ix.min(), _ix.max(), _ix])
+                patient_ixes = [tuple([label_code, ix_i] + key_l + [_ix.min(), _ix.max(), _ix])
                                  for label_code, indices_l in index_map.items()
                                  for ix_i, _ix in enumerate(indices_l)]
 
@@ -485,7 +483,6 @@ class BaseASPEN(BaseDataset):
             if self.flatten_sensors_to_samples:
                 self.logger.info(f"flatten_sensors_to_samples selected - creating channel/sensor labels for samples")
                 self.sample_ix_df['channel'] = [self.selected_columns] * len(self.sample_ix_df)
-                #self.sample_ix_df['channel'] = self.sample_ix_df['channel'].astype('int16')
                 key_cols.insert(2, 'channel')
                 self.k_select_offset += 1
                 self.logger.debug("exploding sensor data - does this take a while?")
@@ -1491,6 +1488,7 @@ class DatasetOptions(JsonSerializable):
         if test_p_tuples is None:
             test_p_tuples = dataset_cls.make_tuples_from_sets_str(self.test_sets if test_sets_str is None
                                                                   else test_sets_str)
+
         train_split_kws = dict() if train_split_kws is None else train_split_kws
         test_split_kws = dict() if test_split_kws is None else test_split_kws
 
@@ -1522,7 +1520,9 @@ class DatasetOptions(JsonSerializable):
                       batches_per_epoch=self.batches_per_epoch,
                       pin_memory=self.pin_memory, prefetch_factor=self.dl_prefetch_factor,
                       shuffle=False, random_sample=True)
-        print(f"DL Keyword arguments: {dl_kws}")
+
+        logger.info(f"dataloader Keyword arguments: {dl_kws}")
+
         eval_dl_kws = dict(num_workers=self.n_dl_eval_workers,
                            batch_size=self.batch_size if self.batch_size_eval is None else self.batch_size_eval,
                            batches_per_epoch=self.batches_per_eval_epoch,
@@ -1530,65 +1530,69 @@ class DatasetOptions(JsonSerializable):
                            pin_memory=self.pin_memory,
                            prefetch_factor=self.dl_prefetch_factor,
                            random_sample=self.batches_per_eval_epoch is not None)
-                           #shuffle=False if self.batches_per_epoch is None else True,
-                           #random_sample=False if self.batches_per_epoch is None else True)
 
         dataset_map = dict()
         logger.info("Using dataset class: %s" % str(dataset_cls))
-        # Setup train dataset
-        train_nww = dataset_cls(sensor_columns=train_sensor_columns, **train_kws)
 
+        # Setup train dataset - there is always a train dataset
+        train_dataset = dataset_cls(sensor_columns=train_sensor_columns, **train_kws)
+
+        # Check for some special options on this DatasetOptions
         roll_channels = getattr(self, 'roll_channels', False)
         shuffle_channels = getattr(self, 'shuffle_channels', False)
+
         if roll_channels and shuffle_channels:
             raise ValueError("--roll-channels and --shuffle-channels are mutually exclusive")
         elif roll_channels:
             logger.info("-->Rolling channels transform<--")
-            train_nww.append_transform(
+            train_dataset.append_transform(
                 RollDimension(roll_dim=0, min_roll=0,
-                              max_roll=train_nww.sensor_count - 1)
+                              max_roll=train_dataset.sensor_count - 1)
             )
         elif shuffle_channels:
             logger.info("-->Shuffle channels transform<--")
-            train_nww.append_transform(
+            train_dataset.append_transform(
                 ShuffleDimension()
             )
 
         if getattr(self, 'random_labels', False):
             logger.info("-->Randomizing target labels<--")
-            train_nww.append_target_transform(
+            train_dataset.append_target_transform(
                 RandomIntLike(low=0, high=2)
             )
 
-        dataset_map['train'] = train_nww
+        dataset_map['train'] = train_dataset
 
+        # Check for explicit specification of patient tuples for a CV set
         if cv_kws['patient_tuples'] is not None:
             logger.info("+" * 50)
             logger.info(f"Using {cv_kws['patient_tuples']}")
-            dataset_map['cv'] = dataset_cls(sensor_columns=train_nww.selected_columns, **cv_kws)
+            dataset_map['cv'] = dataset_cls(sensor_columns=train_dataset.selected_columns, **cv_kws)
+        # HVS is special case: CV set is automatic, and split at the participant-sentence code level
         elif dataset_cls == HarvardSentences:
             logger.info("*" * 30)
             logger.info("Splitting on random key levels for harvard sentences (UCSD)")
             logger.info("*" * 30)
-            _train, _test = train_nww.split_select_random_key_levels(**train_split_kws)
+            _train, _test = train_dataset.split_select_random_key_levels(**train_split_kws)
             logger.info("Splitting out a test set")
             _cv, _test = _test.split_select_random_key_levels(**test_split_kws)
             dataset_map.update(dict(train=_train, cv=_cv, test=_test))
+        # Otherwise, brute force split the window samples using size of data and dataset.select()
         else:
             logger.info("~" * 30)
             logger.info("Performing naive split at window level - expected for NWW datasets")
             logger.info("~" * 30)
             from sklearn.model_selection import train_test_split
-            train_ixs, cv_ixes = train_test_split(range(len(train_nww)))
-            cv_nww = dataset_cls(data_from=train_nww, **cv_kws).select(cv_ixes)
-            train_nww.select(train_ixs)
-            dataset_map.update(dict(train=train_nww,
+            train_ixs, cv_ixes = train_test_split(range(len(train_dataset)))
+            cv_nww = dataset_cls(data_from=train_dataset, **cv_kws).select(cv_ixes)
+            train_dataset.select(train_ixs)
+            dataset_map.update(dict(train=train_dataset,
                                     cv=cv_nww))
 
+        # Test data is not required, but must be loaded with same selection of sensors as train data
+        # TODO / Note: this could have a complex interplay if used tih flatten sensors or 2d data
         if test_kws['patient_tuples'] is not None:
-            dataset_map['test'] = dataset_cls(  # power_q=options.power_q,
-                sensor_columns=train_nww.selected_columns,
-                **test_kws)
+            dataset_map['test'] = dataset_cls(sensor_columns=train_dataset.selected_columns, **test_kws)
         else:
             logger.info(" - No test datasets provided - ")
 
