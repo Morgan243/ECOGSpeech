@@ -1,4 +1,4 @@
-## ASPEN + MHRG ECOG Processing Library
+## ASPEN + MHRG Neural Modeling Experiments
 See notbooks for example walkthroughs of internal processing and example usage
 
 
@@ -15,7 +15,7 @@ Example of practical development usage of the package, e.g. iterating in the not
 ### Command line entry points
 Pass `--help` for detailed usage
 #### experiments.py
-- Run basic configrutaions of Base models and Northwestern words.
+- Run basic configurations of Base models and Northwestern words.
 - Example usage:
 ```bash
 python -m ecog_speech.experiments.standard --model.dropout=0.5 --model.dropout_2d --model.n_cnn_filters=32 --n_epochs=35
