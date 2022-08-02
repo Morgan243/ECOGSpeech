@@ -1490,7 +1490,7 @@ class DatasetOptions(JsonSerializable):
                                                                   else test_sets_str)
 
         train_split_kws = dict() if train_split_kws is None else train_split_kws
-        test_split_kws = dict() if test_split_kws is None else test_split_kws
+        #test_split_kws = dict() if test_split_kws is None else test_split_kws
 
         logger.info("Train tuples: " + str(train_p_tuples))
         logger.info("CV tuples: " + str(cv_p_tuples))
@@ -1574,9 +1574,13 @@ class DatasetOptions(JsonSerializable):
             logger.info("Splitting on random key levels for harvard sentences (UCSD)")
             logger.info("*" * 30)
             _train, _test = train_dataset.split_select_random_key_levels(**train_split_kws)
-            logger.info("Splitting out a test set")
-            _cv, _test = _test.split_select_random_key_levels(**test_split_kws)
-            dataset_map.update(dict(train=_train, cv=_cv, test=_test))
+            if test_split_kws is not None:
+                logger.info("Splitting out a test set")
+                _cv, _test = _test.split_select_random_key_levels(**test_split_kws)
+                dataset_map.update(dict(train=_train, cv=_cv, test=_test))
+            else:
+                dataset_map.update(dict(train=_train, cv=_test))
+
         # Otherwise, brute force split the window samples using size of data and dataset.select()
         else:
             logger.info("~" * 30)
