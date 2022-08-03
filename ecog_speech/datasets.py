@@ -1129,12 +1129,9 @@ class HarvardSentences(BaseASPEN):
 
 
         region_kws = dict(
-            #target_onset_shift=pd.Timedelta(0.1, 's'),
-            #target_offset_shift=pd.Timedelta(-0.1, 's'),
             target_onset_shift=pd.Timedelta(1, 's'),
             target_offset_shift=pd.Timedelta(-1, 's'),
             sample_n=1000
-            #max_target_region_size=1200
         )
         region_from_word_kws = dict(
             target_onset_shift=pd.Timedelta(-.5, 's'),
@@ -1201,6 +1198,19 @@ class HarvardSentences(BaseASPEN):
             'audio_gate_speaking_only': Pipeline(parse_arr_steps + parse_input_steps  + start_stop_steps
                                                  # Slice out the generation of the silence stim data - only speaking
                                                  + audio_gate_steps[:-1] + [('output', 'passthrough')]),
+
+            'word_classification': Pipeline(parse_arr_steps + parse_input_steps  + start_stop_steps
+                                                 # Slice out the generation of the silence stim data - only speaking
+                                                 #+ audio_gate_steps +
+                                            + [
+                                                ('word_indices', pipeline.WindowSampleIndicesFromStim(
+                                                    'speaking_word_stim',
+                                                    target_onset_shift=pd.Timedelta(0, 's'),
+                                                    target_offset_shift=pd.Timedelta(0, 's'),
+
+                                                )),
+                                                ('output', 'passthrough')]
+                                            )
 
 #            'audio_gate_imagine': Pipeline(parse_arr_steps + parse_input_steps + [
 #                # Creates listening, imagine, mouth
