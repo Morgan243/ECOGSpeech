@@ -37,7 +37,7 @@ class TransferLearningResultParsingOptions(result_parsing.ResultParsingOptions):
 @dataclass
 class SpeechDetectionFineTuningTask(bxp.TaskOptions):
     task_name: str = "speech_classification_fine_tuning"
-    dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='UCSD-22',
+    dataset: datasets.DatasetOptions = datasets.DatasetOptions('hvs', train_sets='AUTO-REMAINING',
                                                                flatten_sensors_to_samples=False,
                                                                pre_processing_pipeline='audio_gate')
     method: str = '2d_linear'
