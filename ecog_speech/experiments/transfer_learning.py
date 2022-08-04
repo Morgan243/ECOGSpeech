@@ -208,6 +208,7 @@ class FineTuningExperiment(bxp.Experiment):
             #train_sets = list(set(datasets.BaseASPEN.make_tuples_from_sets_str('*'))
             #                  - set(datasets.BaseASPEN.make_tuples_from_sets_str(pretraining_sets)))
             logger.info(f"AUTO-REMAINING: pretrained on {pretraining_sets}, so fine tuning on {train_sets}")
+            self.auto_selected_train_sets = train_sets
 
         return self.task.dataset.make_datasets_and_loaders(train_p_tuples=train_sets,
                                                            test_split_kws=dict(test_size=0.5))
@@ -380,13 +381,16 @@ class FineTuningExperiment(bxp.Experiment):
             pretrained_result_input=vars(self.pretrained_result_input),
             task_options=vars(self.task),
             dataset_options=vars(self.task.dataset),
+            auto_selected_train_sets=getattr(self, 'auto_selected_train_sets'),
             #dataset_options=vars(self.dataset),
-            result_output_options=vars(self.result_output)
+            result_output_options=vars(self.result_output),
+            pretrained_results=self.pretraining_results
         )
         uid = res_dict['uid']
         name = res_dict['name']
 
-        self.save_results(self.fine_tune_model, name, result_output=self.result_output, uid=uid, res_dict=res_dict)
+        self.save_results(self.fine_tune_model, result_file_name=name, result_output=self.result_output,
+                          model_file_name=uid, res_dict=res_dict)
 
         return self.trainer, performance_map
 
