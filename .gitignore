@@ -2,4 +2,8 @@
 *.ipynb
 *.csv
 *.hdf
+*.log
+temp/
+data/
+.idea/
 __pycache__/
