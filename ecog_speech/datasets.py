@@ -158,6 +158,12 @@ class BaseDataset(tdata.Dataset):
         # can do minor processing on the name if needed
         if dataset_name == 'nww':
             dataset_cls = NorthwesternWords
+        elif dataset_name == 'nww-d':
+            dataset_cls = NWWDefault
+        elif dataset_name == 'nww-c':
+            dataset_cls = NWWChang
+        elif dataset_name == 'nww-h':
+            dataset_cls = NWWHerff
         elif dataset_name == 'chang-nww':
             dataset_cls = ChangNWW
         elif dataset_name == 'hvs':
@@ -1155,6 +1161,10 @@ class HarvardSentences(BaseASPEN):
         return fname
 
 
+
+
+
+
 @attr.s
 @with_logger
 class HarvardSentencesMFC(HarvardSentences):
@@ -1173,6 +1183,322 @@ class HarvardSentencesMFC(HarvardSentences):
 
     def get_target_shape(self):
         return self.pipeline_obj.named_steps.extract_mfc.n_mels
+
+
+
+@attr.s
+@with_logger
+class NWWDefault(BaseASPEN):
+    """
+    """
+
+    env_key = 'NORTHWESTERNWORDS_DEFAULT_DATASET'
+    default_hvs_path = path.join(pkg_data_dir, 'SingleWord')
+    default_base_path = environ.get(env_key,
+                                    path_map.get(socket.gethostname(),
+                                                 default_hvs_path))
+    mat_d_keys = dict(
+        signal='ECOG_signal',
+        signal_fs='fs_signal',
+        audio='audio',
+        audio_fs='fs_audio',
+        stimcode='stimcode',
+        electrodes='electrodes',
+        wordcode='wordcode',
+    )
+
+    all_patient_maps = dict(MC={
+        19: [('MayoClinic', 19, 1, 1),
+             ('MayoClinic', 19, 1, 2),
+             ('MayoClinic', 19, 1, 3)],
+
+        21: [('MayoClinic', 21, 1, 1),
+             ('MayoClinic', 21, 1, 2)],
+
+        22: [('MayoClinic', 22, 1, 1),
+             ('MayoClinic', 22, 1, 2),
+             ('MayoClinic', 22, 1, 3)],
+
+        24: [('MayoClinic', 24, 1, 2),
+             ('MayoClinic', 24, 1, 3),
+             ('MayoClinic', 24, 1, 4)],
+
+        26: [('MayoClinic', 26, 1, 1),
+             ('MayoClinic', 26, 1, 2)],
+    })
+    fname_prefix_map = {'MayoClinic': 'MC'}
+
+    def make_pipeline_map(self, default='speech_activity_classification'):
+        """
+        Pipeline parameters sometimes depend on the configuration of the dataset class,
+        so for now it is bound method (not classmethod or staticmethod).
+        """
+        parse_arr_steps = [
+            ('parse_signal', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['signal'],
+                                                                self.mat_d_keys['signal_fs'],
+                                                                1200, output_key='signal')),
+            ('parse_stim', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['stimcode'],
+                                                              self.mat_d_keys['signal_fs'],
+                                                              # TODO: Check the default rate here - 1024?
+                                                              1200, reshape=-1, output_key='stim')),
+        ]
+
+        parse_input_steps = [
+            ('sensor_selection', pipeline.IdentifyGoodAndBadSensors(sensor_selection=self.sensor_columns)),
+            # Other two datasets don't have 'electrodes' array in the mat file so first we'll try using all electrodes,
+            # then try to take electrodes from default NWW and apply to other two preprossessed paradigms
+            ('subsample', pipeline.SubsampleSignal()),
+            #('sent_from_start_stop', pipeline.SentCodeFromStartStopWordTimes()),
+            #No start stop word times for NWW at the moment
+
+        ]
+
+        speaking_region_kws = dict(
+            target_onset_shift=pd.Timedelta(0.0, 's'),
+            target_offset_shift=pd.Timedelta(1.5, 's'),
+            sample_n=300
+        )
+        silence_region_kws = dict(
+            target_onset_shift=pd.Timedelta(2.0, 's'),
+            target_offset_shift=pd.Timedelta(3.0, 's'),
+            sample_n=300
+        )
+        p_map = {
+            'speech_activity_classification': Pipeline(parse_arr_steps + parse_input_steps
+                                                             + [
+                                                                 # Indices from Stim - these populate the class labels
+                                                                 ('speaking_indices',
+                                                                  pipeline.WindowSampleIndicesFromStim(**speaking_region_kws)),
+                                                                 ('silence_indices',
+                                                                  pipeline.WindowSampleIndicesFromStim(**silence_region_kws)),
+                                                             ])
+        }
+
+        p_map['default'] = p_map[default]
+
+        return p_map
+
+    @classmethod
+    def make_filename(cls, patient, session, trial, location):
+        """
+        MC019-SW-S1-R1.mat ...
+        """
+        if location in cls.fname_prefix_map:  # == 'Mayo Clinic':
+            fname = f"{cls.fname_prefix_map.get(location)}{str(patient).zfill(3)}-SW-S{session}-R{trial}.mat"
+            return fname
+        else:
+            raise ValueError("Don't know location " + location)
+
+
+@attr.s
+@with_logger
+class NWWChang(BaseASPEN):
+    """
+    """
+
+    env_key = 'NORTHWESTERNWORDS_DEFAULT_DATASET'
+    default_hvs_path = path.join(pkg_data_dir, 'SingleWord')
+    default_base_path = environ.get(env_key,
+                                    path_map.get(socket.gethostname(),
+                                                 default_hvs_path))
+
+    data_subset = 'Chang3'
+
+    mat_d_keys = dict(
+        signal='signal',
+        stimcode='stimcode',
+        signal_fs='fs_signal',
+        wordcode='wordcode',
+    )
+
+    all_patient_maps = dict(MC={
+        19: [('MayoClinic', 19, 1, 1),
+             ('MayoClinic', 19, 1, 2),
+             ('MayoClinic', 19, 1, 3)],
+
+        21: [('MayoClinic', 21, 1, 1),
+             ('MayoClinic', 21, 1, 2)],
+
+        22: [('MayoClinic', 22, 1, 1),
+             ('MayoClinic', 22, 1, 2),
+             ('MayoClinic', 22, 1, 3)],
+
+        24: [('MayoClinic', 24, 1, 2),
+             ('MayoClinic', 24, 1, 3),
+             ('MayoClinic', 24, 1, 4)],
+
+        26: [('MayoClinic', 26, 1, 1),
+             ('MayoClinic', 26, 1, 2)],
+    })
+    fname_prefix_map = {'MayoClinic': 'MC'}
+
+    def make_pipeline_map(self, default='speech_activity_classification'):
+        """
+        Pipeline parameters sometimes depend on the configuration of the dataset class,
+        so for now it is bound method (not classmethod or staticmethod).
+        """
+        parse_arr_steps = [
+            ('parse_signal', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['signal'],
+                                                                self.mat_d_keys['signal_fs'],
+                                                                200, output_key='signal')),
+            ('parse_stim', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['stimcode'],
+                                                              self.mat_d_keys['signal_fs'],
+                                                              # TODO: Check the default rate here - 1024?
+                                                              200, reshape=-1, output_key='stim')),
+        ]
+
+        parse_input_steps = [
+            ('sensor_selection', pipeline.IdentifyGoodAndBadSensors(sensor_selection=self.sensor_columns)),
+            # Other two datasets don't have 'electrodes' array in the mat file so first we'll try using all electrodes,
+            # then try to take electrodes from default NWW and apply to other two preprossessed paradigms
+            #('subsample', pipeline.SubsampleSignal()),
+            #('sent_from_start_stop', pipeline.SentCodeFromStartStopWordTimes()),
+            #No start stop word times for NWW at the moment
+
+        ]
+
+        speaking_region_kws = dict(
+            target_onset_shift=pd.Timedelta(0.0, 's'),
+            target_offset_shift=pd.Timedelta(1.5, 's'),
+            sample_n=100
+        )
+        silence_region_kws = dict(
+            target_onset_shift=pd.Timedelta(2.0, 's'),
+            target_offset_shift=pd.Timedelta(3.0, 's'),
+            sample_n=100
+        )
+        p_map = {
+            'speech_activity_classification': Pipeline(parse_arr_steps + parse_input_steps
+                                                             + [
+                                                                 # Indices from Stim - these populate the class labels
+                                                                 ('speaking_indices',
+                                                                  pipeline.WindowSampleIndicesFromStim(**speaking_region_kws)),
+                                                                 ('silence_indices',
+                                                                  pipeline.WindowSampleIndicesFromStim(**silence_region_kws)),
+                                                             ])
+        }
+
+        p_map['default'] = p_map[default]
+
+        return p_map
+
+    @classmethod
+    def make_filename(cls, patient, session, trial, location):
+        """
+        MC019-SW-S1-R1.mat ...
+        """
+        if location in cls.fname_prefix_map:  # == 'Mayo Clinic':
+            fname = f"{cls.fname_prefix_map.get(location)}{str(patient).zfill(3)}-SW-S{session}-R{trial}.mat"
+            return fname
+        else:
+            raise ValueError("Don't know location " + location)
+
+
+@attr.s
+@with_logger
+class NWWHerff(BaseASPEN):
+    """
+    """
+
+    env_key = 'NORTHWESTERNWORDS_DEFAULT_DATASET'
+    default_hvs_path = path.join(pkg_data_dir, 'SingleWord')
+    default_base_path = environ.get(env_key,
+                                    path_map.get(socket.gethostname(),
+                                                 default_hvs_path))
+    data_subset = 'Herff1'
+
+    mat_d_keys = dict(
+        signal='signal',
+        stimcode='stimcode',
+        signal_fs='fs_signal',
+        wordcode='wordcode',
+    )
+
+    all_patient_maps = dict(MC={
+        19: [('MayoClinic', 19, 1, 1),
+             ('MayoClinic', 19, 1, 2),
+             ('MayoClinic', 19, 1, 3)],
+
+        21: [('MayoClinic', 21, 1, 1),
+             ('MayoClinic', 21, 1, 2)],
+
+        22: [('MayoClinic', 22, 1, 1),
+             ('MayoClinic', 22, 1, 2),
+             ('MayoClinic', 22, 1, 3)],
+
+        24: [('MayoClinic', 24, 1, 2),
+             ('MayoClinic', 24, 1, 3),
+             ('MayoClinic', 24, 1, 4)],
+
+        26: [('MayoClinic', 26, 1, 1),
+             ('MayoClinic', 26, 1, 2)],
+    })
+    fname_prefix_map = {'MayoClinic': 'MC'}
+
+    def make_pipeline_map(self, default='speech_activity_classification'):
+        """
+        Pipeline parameters sometimes depend on the configuration of the dataset class,
+        so for now it is bound method (not classmethod or staticmethod).
+        """
+        parse_arr_steps = [
+            ('parse_signal', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['signal'],
+                                                                self.mat_d_keys['signal_fs'],
+                                                                20, output_key='signal')),
+            ('parse_stim', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['stimcode'],
+                                                              self.mat_d_keys['signal_fs'],
+                                                              # TODO: Check the default rate here - 1024?
+                                                              20, reshape=-1, output_key='stim')),
+        ]
+
+        parse_input_steps = [
+            ('sensor_selection', pipeline.IdentifyGoodAndBadSensors(sensor_selection=self.sensor_columns)),
+            # Other two datasets don't have 'electrodes' array in the mat file so first we'll try using all electrodes,
+            # then try to take electrodes from default NWW and apply to other two preprossessed paradigms
+            #('subsample', pipeline.SubsampleSignal()),
+            #('sent_from_start_stop', pipeline.SentCodeFromStartStopWordTimes()),
+            #No start stop word times for NWW at the moment
+
+        ]
+
+        speaking_region_kws = dict(
+            target_onset_shift=pd.Timedelta(0.0, 's'),
+            target_offset_shift=pd.Timedelta(1.5, 's'),
+            sample_n=10
+        )
+        silence_region_kws = dict(
+            target_onset_shift=pd.Timedelta(2.0, 's'),
+            target_offset_shift=pd.Timedelta(3.0, 's'),
+            sample_n=10
+        )
+        p_map = {
+            'speech_activity_classification': Pipeline(parse_arr_steps + parse_input_steps
+                                                             + [
+                                                                 # Indices from Stim - these populate the class labels
+                                                                 ('speaking_indices',
+                                                                  pipeline.WindowSampleIndicesFromStim(**speaking_region_kws)),
+                                                                 ('silence_indices',
+                                                                  pipeline.WindowSampleIndicesFromStim(**silence_region_kws)),
+                                                             ])
+        }
+
+        p_map['default'] = p_map[default]
+
+        return p_map
+
+    @classmethod
+    def make_filename(cls, patient, session, trial, location):
+        """
+        MC019-SW-S1-R1.mat ...
+        """
+        if location in cls.fname_prefix_map:  # == 'Mayo Clinic':
+            fname = f"{cls.fname_prefix_map.get(location)}{str(patient).zfill(3)}-SW-S{session}-R{trial}.mat"
+            return fname
+        else:
+            raise ValueError("Don't know location " + location)
+
+
+
+
 
 
 @attr.s
@@ -1528,6 +1854,32 @@ class NorthwesternWordsDatasetOptions(DatasetOptions):
     dataset_name: str = 'nww'
     train_sets: str = 'MC-21-0'
 
+@dataclass
+class NWWDefaultDatasetOptions(DatasetOptions):
+    dataset_name: str = 'nww-d'
+    train_sets: str = 'MC-19-0'
+    cv_sets: str = 'MC-19-1'
+    test_sets: str = 'MC-19-2'
+
+
+@dataclass
+class NWWHerffDatasetOptions(DatasetOptions):
+    dataset_name: str = 'nww-h'
+    train_sets: str = 'MC-19-0'
+    cv_sets: str = 'MC-19-1'
+    test_sets: str = 'MC-19-2'
+
+    data_subset: str = 'Herff1'
+    default_signal_sample_rate: int = 20
+
+@dataclass
+class NWWChangDatasetOptions(DatasetOptions):
+    dataset_name: str = 'nww-c'
+    train_sets: str = 'MC-19-0'
+    cv_sets: str = 'MC-19-1'
+    test_sets: str = 'MC-19-2'
+    data_subset: str = 'Chang3'
+    default_signal_sample_rate: int = 200
 
 @dataclass
 class HarvardSentencesDatasetOptions(DatasetOptions):

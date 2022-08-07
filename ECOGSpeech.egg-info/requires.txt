@@ -1,0 +1,12 @@
+torch
+torchaudio
+tqdm
+numpy
+pandas
+scipy
+scikit_learn
+mne
+attrs
+simple_parsing
+python_speech_features
+mat73

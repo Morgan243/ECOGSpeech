@@ -6,7 +6,7 @@ mkdir -p $RESULT_PATH/models
 #--model.quant_num_vars=100 --task.ppl_weight=1000 \
 # --model.n_encoder_layers=7 \
 DEFAULT_CLI_ARGS=" --dataset.flatten_sensors_to_samples=True \
---dataset.extra_output_keys='sensor_ras_coord_arr' --dataset.n_dl_workers=39 --dataset.n_dl_eval_workers=39 --dataset.batch_size=1500 \
+--dataset.extra_output_keys='sensor_ras_coord_arr' --dataset.n_dl_workers=6 --dataset.n_dl_eval_workers=39 --dataset.batch_size=1500 \
 --task.learning_rate=0.001 --task=semi_supervised \
 --task.n_epochs=30 --task.device=cuda --dataset=hvs \
 --model=cog2vec \
@@ -20,11 +20,11 @@ DEFAULT_CLI_ARGS=" --dataset.flatten_sensors_to_samples=True \
 # --result_dir=$RESULT_PATH --save_model_path=$RESULT_PATH/models --n_epochs=10"
 
 eval "$EXEC  --dataset.train_sets=~UCSD-19 $DEFAULT_CLI_ARGS"
-eval "$EXEC  --dataset.train_sets=~UCSD-22 $DEFAULT_CLI_ARGS"
-eval "$EXEC  --dataset.train_sets=~UCSD-28 $DEFAULT_CLI_ARGS"
+#eval "$EXEC  --dataset.train_sets=~UCSD-22 $DEFAULT_CLI_ARGS"
+#eval "$EXEC  --dataset.train_sets=~UCSD-28 $DEFAULT_CLI_ARGS"
 
-eval "$EXEC --dataset.train_sets=~UCSD-4 $DEFAULT_CLI_ARGS"
-eval "$EXEC  --dataset.train_sets=~UCSD-5 $DEFAULT_CLI_ARGS"
-eval "$EXEC  --dataset.train_sets=~UCSD-10 $DEFAULT_CLI_ARGS"
-eval "$EXEC  --dataset.train_sets=~UCSD-18 $DEFAULT_CLI_ARGS"
+#eval "$EXEC --dataset.train_sets=~UCSD-4 $DEFAULT_CLI_ARGS"
+#eval "$EXEC  --dataset.train_sets=~UCSD-5 $DEFAULT_CLI_ARGS"
+#eval "$EXEC  --dataset.train_sets=~UCSD-10 $DEFAULT_CLI_ARGS"
+#eval "$EXEC  --dataset.train_sets=~UCSD-18 $DEFAULT_CLI_ARGS"
 

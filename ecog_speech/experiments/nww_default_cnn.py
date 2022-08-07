@@ -12,16 +12,16 @@ logger = utils.get_logger('semi_supervised')
 
 @dataclass
 class SemisupervisedCodebookTaskOptions(bxp.TaskOptions):
-    task_name: str = "semisupervised_codebook_training"
+    task_name: str = "default_cnn"
     ppl_weight: float = 100.
 
 
 @dataclass
-class SemiSupervisedExperiment(bxp.Experiment):
+class DefaultCNNExperiment(bxp.Experiment):
     model: bmp.ModelOptions = subgroups(
         {"cog2vec": base_transformers.Cog2VecOptions,
-         'dummy': base_transformers.Cog2VecOptions},
-        default=base_transformers.Cog2VecOptions()
+         'default_cnn': bmp.BaseCNNModelOptions},
+        default=bmp.BaseCNNModelOptions()
     )
 
     dataset: datasets.DatasetOptions = subgroups(
@@ -29,18 +29,25 @@ class SemiSupervisedExperiment(bxp.Experiment):
 
             "hvs": datasets.HarvardSentencesDatasetOptions(pre_processing_pipeline='random_sample'),
              # Not actually tested
-             "nww-d": datasets.NWWDatasetOptions
+            "nww-d": datasets.NWWDefaultDatasetOptions(pre_processing_pipeline='speech_activity_classification'),
+            "nww-c": datasets.NWWChangDatasetOptions(pre_processing_pipeline='speech_activity_classification'),
+            "nww-h": datasets.NWWHerffDatasetOptions(pre_processing_pipeline='speech_activity_classification')
         },
-        default=datasets.HarvardSentencesDatasetOptions(pre_processing_pipeline='random_sample'))
+        default=datasets.NWWDefaultDatasetOptions(pre_processing_pipeline='speech_activity_classification'))
 
     task: bxp.TaskOptions = subgroups(
-        {"semi_supervised": SemisupervisedCodebookTaskOptions,
+        {"default_cnn": SemisupervisedCodebookTaskOptions,
          "dummy": SemisupervisedCodebookTaskOptions},
         default=SemisupervisedCodebookTaskOptions())
 
     def run(self):
         # Reduce default test size for sklearn train/test split from 0.25 to 0.2
-        dataset_map, dl_map, eval_dl_map = self.dataset.make_datasets_and_loaders(train_split_kws=dict(test_size=0.2))
+        dataset_map, dl_map, eval_dl_map = self.dataset.make_datasets_and_loaders()
+        c_dataset = datasets.NWWChangDatasetOptions(pre_processing_pipeline='speech_activity_classification')
+        h_datatset = datasets.NWWHerffDatasetOptions(pre_processing_pipeline='speech_activity_classification')
+        dataset_map_c, dl_map_c, eval_dl_map_c = c_dataset.make_datasets_and_loaders()
+        dataset_map_h, dl_map_h, eval_dl_map_h = h_datatset.make_datasets_and_loaders()
+
         model, model_kws = self.model.make_model(dataset_map['train'])
 
         # Shake out any forward pass errors now by running example data through model - the model has a small random
@@ -118,8 +125,8 @@ if __name__ == """__main__""":
     from simple_parsing import ArgumentParser
 
     parser = ArgumentParser()
-    parser.add_arguments(SemiSupervisedExperiment, dest='semi_supervised')
+    parser.add_arguments(DefaultCNNExperiment, dest='default_cnn')
     args = parser.parse_args()
-    experiment: SemiSupervisedExperiment = args.semi_supervised
+    experiment: DefaultCNNExperiment = args.default_cnn
     logger.info(f"EXPERIMENT: {experiment}")
     experiment.run()

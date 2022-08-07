@@ -29,7 +29,7 @@ class SemiSupervisedExperiment(bxp.Experiment):
 
             "hvs": datasets.HarvardSentencesDatasetOptions(pre_processing_pipeline='random_sample'),
              # Not actually tested
-             "nww": datasets.NorthwesternWordsDatasetOptions
+             "nww-d": datasets.NWWDatasetOptions
         },
         default=datasets.HarvardSentencesDatasetOptions(pre_processing_pipeline='random_sample'))
 
