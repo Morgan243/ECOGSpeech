@@ -273,6 +273,7 @@ class BaseCNN(torch.nn.Module):
 
         self.m = torch.nn.Sequential(*layer_list )
         t_in = torch.rand(32, in_channels, window_size)
+        self.t_in = t_in
         if print_details:
             print("T input shape: " + str(t_in.shape))
         t_out = self.m(t_in)

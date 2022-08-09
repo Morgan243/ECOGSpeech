@@ -43,15 +43,16 @@ class DefaultCNNExperiment(bxp.Experiment):
     def run(self):
         # Reduce default test size for sklearn train/test split from 0.25 to 0.2
         dataset_map, dl_map, eval_dl_map = self.dataset.make_datasets_and_loaders()
-        c_dataset = datasets.NWWChangDatasetOptions(pre_processing_pipeline='speech_activity_classification')
-        h_datatset = datasets.NWWHerffDatasetOptions(pre_processing_pipeline='speech_activity_classification')
-        dataset_map_c, dl_map_c, eval_dl_map_c = c_dataset.make_datasets_and_loaders()
-        dataset_map_h, dl_map_h, eval_dl_map_h = h_datatset.make_datasets_and_loaders()
+        # c_dataset = datasets.NWWChangDatasetOptions(pre_processing_pipeline='speech_activity_classification')
+        # h_datatset = datasets.NWWHerffDatasetOptions(pre_processing_pipeline='speech_activity_classification')
+        # dataset_map_c, dl_map_c, eval_dl_map_c = c_dataset.make_datasets_and_loaders()
+        # dataset_map_h, dl_map_h, eval_dl_map_h = h_datatset.make_datasets_and_loaders()
 
         model, model_kws = self.model.make_model(dataset_map['train'])
 
         # Shake out any forward pass errors now by running example data through model - the model has a small random
         # tensor t_in that can be pass in
+
         with torch.no_grad():
             model(model.t_in)
 
@@ -65,12 +66,11 @@ class DefaultCNNExperiment(bxp.Experiment):
                                     # Needs to match a model name in the model map passed to trainer below
                                     model_name_to_lr_adjust='model'))
 
-        trainer = base_transformers.Cog2VecTrainer(model_map=dict(model=model), opt_map=dict(),
+        trainer = bmp.Trainer(model_map=dict(model=model), opt_map=dict(),
                                                    train_data_gen=dl_map['train'], cv_data_gen=eval_dl_map['cv'],
                                                    learning_rate=self.task.learning_rate,
                                                    early_stopping_patience=self.task.early_stopping_patience,
                                                    device=self.task.device,
-                                                   ppl_weight=self.task.ppl_weight,
                                                    **trainer_kws)
 
         # For some reason the codebook indices isn't always on the right device... so this seems to help force it over
