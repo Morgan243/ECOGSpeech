@@ -1117,7 +1117,7 @@ class Cog2VecOptions(bmp.ModelOptions):
     def make_model(self, dataset: Optional[datasets.BaseDataset],
                    in_channels=None, window_size=None):
         model_kws = self.make_model_kws(dataset)
-        return CoG2Vec(**model_kws, ), model_kws
+        return CoG2Vec(**model_kws), model_kws
 
 
 #if __name__ == """__main__""":
