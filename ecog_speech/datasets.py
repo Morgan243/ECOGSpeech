@@ -693,6 +693,10 @@ class BaseASPEN(BaseDataset):
 
         # Init the unique levels
         levels: pd.DataFrame = self.sample_ix_df.iloc[self.selected_flat_indices][keys].drop_duplicates()
+        stratify_col = train_test_split_kws.get('stratify')
+        if stratify_col is not None:
+            train_test_split_kws['stratify'] = levels[stratify_col]
+
         # Split on the unique levels
         train, test = train_test_split(levels, **train_test_split_kws)
         self.logger.info(f"{len(levels)} levels in {keys} split into train/test")
@@ -1045,7 +1049,6 @@ class HarvardSentences(BaseASPEN):
         #    ('stim_from_start_stop', pipeline.SentenceAndWordStimFromRegionStartStopTimes()),
         #]
 
-
         audio_gate_steps = [
             ('Threshold', pipeline.PowerThreshold(speaking_window_samples=48000 // 16,
                                                   silence_window_samples=int(48000 * 1.5),
@@ -1127,7 +1130,6 @@ class HarvardSentences(BaseASPEN):
                             ))
                             ]
 
-
         region_kws = dict(
             target_onset_shift=pd.Timedelta(1, 's'),
             target_offset_shift=pd.Timedelta(-1, 's'),
@@ -1137,6 +1139,7 @@ class HarvardSentences(BaseASPEN):
             target_onset_shift=pd.Timedelta(-.5, 's'),
             target_offset_shift=pd.Timedelta(-0.5, 's'),
         )
+        select_words = pipeline.SelectWordsFromStartStopTimes()
         p_map = {
             'random_sample': Pipeline(parse_arr_steps + parse_input_steps
             + [('rnd_stim', pipeline.RandomStim(10_000)),
@@ -1203,12 +1206,26 @@ class HarvardSentences(BaseASPEN):
                                                  # Slice out the generation of the silence stim data - only speaking
                                                  #+ audio_gate_steps +
                                             + [
-                                                ('word_indices', pipeline.WindowSampleIndicesFromStim(
-                                                    'speaking_word_stim',
-                                                    target_onset_shift=pd.Timedelta(0, 's'),
-                                                    target_offset_shift=pd.Timedelta(0, 's'),
-
+                                                ('select_words_from_wsst', select_words),
+                                                ('selected_speaking_word_stim', pipeline.NewStimFromRegionStartStopTimes(
+                                                    start_t_column='start_t',
+                                                    stop_t_column='stop_t',
+                                                    label_column='selected_word',
+                                                    code_column='selected_word_code',
+                                                    stim_output_name='selected_speaking_word_stim',
+                                                    default_stim_value=-1,
                                                 )),
+                                                ('word_indices', pipeline.WindowSampleIndicesFromIndex(
+                                                    'selected_speaking_word_stim',
+                                                    method='unique_values',
+                                                    stim_value_remap=select_words.code_to_word_map,
+                                                )),
+                                                ##('word_indices', pipeline.WindowSampleIndicesFromStim(
+                                                #    'selected_speaking_word_stim',
+                                                #    target_onset_shift=pd.Timedelta(0, 's'),
+                                                #    target_offset_shift=pd.Timedelta(0, 's'),
+                                                #    stim_value_remap=select_words.code_to_word_map,
+                                                #)),
                                                 ('output', 'passthrough')]
                                             )
 
@@ -1440,6 +1457,7 @@ class DatasetOptions(JsonSerializable):
     extra_output_keys: Optional[str] = None
     random_sensors_to_samples: bool = False
     flatten_sensors_to_samples: bool = False
+    split_cv_from_test: bool = True
     # power_q: float = 0.7
     random_targets: bool = False
     pin_memory: bool = False
@@ -1456,6 +1474,7 @@ class DatasetOptions(JsonSerializable):
                                   pre_processing_pipeline=None,
                                   additional_transforms=None,
                                   train_split_kws=None, test_split_kws=None,
+                                  #split_cv_from_test=True
                                   # additional_train_transforms=None, additional_eval_transforms=None,
                                   #num_dl_workers=None
                                   ) -> tuple:
@@ -1584,9 +1603,13 @@ class DatasetOptions(JsonSerializable):
             logger.info("Splitting on random key levels for harvard sentences (UCSD)")
             logger.info("*" * 30)
             _train, _test = train_dataset.split_select_random_key_levels(**train_split_kws)
-            if test_split_kws is not None:
-                logger.info("Splitting out a test set")
+            if test_split_kws is not None and self.split_cv_from_test:
+                logger.info("Splitting out cv from test set")
                 _cv, _test = _test.split_select_random_key_levels(**test_split_kws)
+                dataset_map.update(dict(train=_train, cv=_cv, test=_test))
+            elif test_split_kws is not None and not self.split_cv_from_test:
+                logger.info("Splitting out cv from train set")
+                _train, _cv = _train.split_select_random_key_levels(**test_split_kws)
                 dataset_map.update(dict(train=_train, cv=_cv, test=_test))
             else:
                 dataset_map.update(dict(train=_train, cv=_test))
@@ -1647,5 +1670,5 @@ if __name__ == """__main__""":
     hvs_tuples = HarvardSentences.make_tuples_from_sets_str('UCSD-28')
     hvs = HarvardSentences(hvs_tuples, #flatten_sensors_to_samples=False,
                            extra_output_keys='sensor_ras_coord_arr',
-                           pre_processing_pipeline='region_classification')
+                           pre_processing_pipeline='word_classification')
     print(hvs[0])
