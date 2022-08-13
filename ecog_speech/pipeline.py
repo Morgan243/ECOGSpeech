@@ -590,7 +590,7 @@ class NewStimFromRegionStartStopTimes(DictTrf):
     start_t_column = attr.ib('start_t')
     stop_t_column = attr.ib('stop_t')
     label_column = attr.ib('word')
-    #code_column = attr.ib('word_code')
+    code_column = attr.ib(None)
     group_code_column = attr.ib('stim_sentcode')
 
     stim_output_name = attr.ib('word_stim')
@@ -624,7 +624,7 @@ class NewStimFromRegionStartStopTimes(DictTrf):
 
                 _start_i, _stop_i = output_stim.index.get_indexer([_start_t, _stop_t], method='nearest')
 
-                _code = (working_ix := working_ix + 1)
+                _code = (working_ix := working_ix + 1) if self.code_column is None else r[self.code_column]
                 code_maps.append({self.group_code_column: gname,
                                   self.label_column: _label_val,
                                   #self.word_code_map_output_name: _code,
@@ -638,6 +638,62 @@ class NewStimFromRegionStartStopTimes(DictTrf):
                  }
 
         return out_d
+
+
+@attr.s
+@with_logger
+class SelectWordsFromStartStopTimes(DictTrf):
+    selected_words = [#'HER',
+                      'TANK',
+                      'SUN',
+                      #'SIZE',
+                      'FISH',
+                      'FENCE',
+                      #'OVER',
+                      'BLUE',
+                      'DAYS',
+                      #'LEFT',
+                      'BOY',
+                      'CLEAR',
+                      'YOUNG',
+                      #'BEFORE',
+                      'GIRL',
+                      'GAVE'
+                      ]
+
+    word_to_code_map = {k: i for i, k in enumerate(selected_words)}
+    code_to_word_map = {v: k for k, v in word_to_code_map.items()}
+
+    def process(self, data_map):
+        wsst_df = data_map['word_start_stop_times']
+        wsst_df['selected_word_code'] = wsst_df.word.map(self.word_to_code_map).fillna(-1)
+        wsst_df['selected_word'] = np.where(wsst_df.word.isin(self.word_to_code_map), wsst_df.word, 'not_selected')
+
+        key_cols = ['word', 'selected_word_code', 'stim_sentcode']
+        vc_check = wsst_df[wsst_df.selected_word_code.ge(0)][key_cols].value_counts()
+        assert vc_check.max() == 1, f"Unique values of {key_cols} should all be one - got : {vc_check.to_dict()}"
+
+        return dict(word_start_stop_times=wsst_df)
+
+
+class SelectWordsFromStartStopTime_Easy(DictTrf):
+    selected_words = [#'HER',
+                      'TANK',
+                      'SUN',
+                      #'SIZE',
+                      'FISH',
+                      'FENCE',
+                      #'OVER',
+                      #'BLUE',
+                      #'DAYS',
+                      #'LEFT',
+                      'BOY',
+                      #'CLEAR',
+                      #'YOUNG',
+                      #'BEFORE',
+                      'GIRL',
+                      #'GAVE'
+                      ]
 
 
 @attr.s
@@ -662,6 +718,7 @@ class RandomStim(DictTrf):
         self.logger.info(f"Total random indices in output: {random_stim.sum()}")
 
         return {self.output_key: random_stim}
+
 
 def object_as_key_or_itself(key_or_value, remap=None):
     """
@@ -688,10 +745,17 @@ class WindowSampleIndicesFromIndex(DictTrf):
     fs_key = attr.ib('fs_signal')
     index_shift = attr.ib(None)
     stim_target_value = attr.ib(1)
+    method = attr.ib('target_equality')
     window_size = attr.ib(pd.Timedelta(0.5, 's'))
     sample_n = attr.ib(None)
     stim_value_remap = attr.ib(None)
     stim_pre_process_f = attr.ib(None)
+
+    @staticmethod
+    def step_through_target_indexes(stim, target_indexes, win_size, index_shift, expected_window_samples):
+        return [stim.loc[offs + index_shift:offs + win_size + index_shift].iloc[:expected_window_samples].index
+                for offs in target_indexes
+                if len(stim.loc[offs + index_shift:offs + win_size + index_shift]) >= expected_window_samples]
 
     def process(self, data_map):
         stim = data_map[self.stim_key]
@@ -710,16 +774,41 @@ class WindowSampleIndicesFromIndex(DictTrf):
         index_shift = pd.Timedelta(0, 's') if self.index_shift is None else self.index_shift
         expected_window_samples = int(fs * win_size.total_seconds())
 
-        target_indexes = (stim.pipe(stim_pre_process_f) == self.stim_target_value)\
-            .pipe(lambda s: s[s] if self.sample_n is None else (
-            s[s].sample(n=self.sample_n) if len(s[s]) > self.sample_n else s[s])).index.tolist()
-        target_indices = [stim.loc[offs + index_shift:offs + win_size + index_shift].iloc[:expected_window_samples].index
-                          for offs in target_indexes
-                          if len(stim.loc[offs + index_shift:offs + win_size + index_shift]) >= expected_window_samples]
+        if self.method == 'target_equality':
+            target_indexes = (stim.pipe(stim_pre_process_f) == self.stim_target_value)\
+                .pipe(lambda s: s[s] if self.sample_n is None else (
+                s[s].sample(n=self.sample_n) if len(s[s]) > self.sample_n else s[s])).index.tolist()
+            #target_indices = [stim.loc[offs + index_shift:offs + win_size + index_shift].iloc[:expected_window_samples].index
+            #                  for offs in target_indexes
+            #                  if len(stim.loc[offs + index_shift:offs + win_size + index_shift]) >= expected_window_samples]
+            target_indices = self.step_through_target_indexes(stim, target_indexes, win_size, index_shift,
+                                                              expected_window_samples)
 
-        stim_key = object_as_key_or_itself(self.stim_target_value, self.stim_value_remap)
-        sample_indices[stim_key] = sample_indices.get(stim_key, list()) + target_indices
-        indices_sources[stim_key] = indices_sources.get(stim_key, self.stim_key)
+            stim_key = object_as_key_or_itself(self.stim_target_value, self.stim_value_remap)
+            sample_indices[stim_key] = sample_indices.get(stim_key, list()) + target_indices
+            indices_sources[stim_key] = indices_sources.get(stim_key, self.stim_key)
+        elif self.method == 'unique_values':
+            g = stim[stim >= 0].pipe(lambda s: s.groupby(s))
+            #g = stim.pipe(lambda s: s.groupby(s))
+            for gcode, gdf in g:
+                if self.sample_n is None or self.sample_n >= len(gdf):
+                    target_indexes = gdf.index.tolist()
+                else:
+                    # TODO / WARNGING: will evenly sample across any grouping of the stim value
+                    #                   - e.g. same word, different sentence
+                    target_indexes = gdf.sample(self.sample_n).index.tolist()
+
+                target_indices = self.step_through_target_indexes(stim, target_indexes, win_size, index_shift,
+                                                                  expected_window_samples)
+                stim_key = object_as_key_or_itself(gcode, self.stim_value_remap)
+                self.logger.info(
+                    f"Unique Code {gcode} (key={stim_key}) has {len(target_indexes)} taken from {len(gdf)}"
+                )
+                sample_indices[gcode] = sample_indices.get(gcode, list()) + target_indices
+                indices_sources[gcode] = indices_sources.get(gcode, stim_key)
+
+        else:
+            raise ValueError(f"Don't understand method = '{self.method}'")
 
         if existing_sample_indices_map is not None:
             existing_sample_indices_map.update(sample_indices)
