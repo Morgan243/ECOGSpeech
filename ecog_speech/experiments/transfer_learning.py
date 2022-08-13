@@ -50,6 +50,9 @@ class SpeechDetectionFineTuningTask(bxp.TaskOptions):
         target_key = 'target_arr'
         return criterion, target_key
 
+    def make_datasets_and_loaders(self, **kws):
+        return self.dataset.make_datasets_and_loaders(**kws, test_split_kws=dict(test_size=0.5))
+
 
 @dataclass
 class RegionDetectionFineTuningTask(bxp.TaskOptions):
@@ -66,10 +69,49 @@ class RegionDetectionFineTuningTask(bxp.TaskOptions):
         target_key = 'target_arr'
         return criterion, target_key
 
+    def make_datasets_and_loaders(self, **kws):
+        return self.dataset.make_datasets_and_loaders(**kws, test_split_kws=dict(test_size=0.5))
+
+
+@dataclass
+class WordDetectionFineTuningTask(bxp.TaskOptions):
+    task_name: str = "word_classification_fine_tuning"
+    dataset: datasets.DatasetOptions = datasets.HarvardSentencesDatasetOptions(train_sets='AUTO-REMAINING',
+                                                                               flatten_sensors_to_samples=False,
+                                                                               pre_processing_pipeline='word_classification',
+                                                                               split_cv_from_test=True)
+    method: str = '2d_linear'
+
+    squeeze_target: ClassVar[bool] = True
+
+    def make_criteria_and_target_key(self):
+        criterion = torch.nn.CrossEntropyLoss()
+        target_key = 'target_arr'
+        return criterion, target_key
+
+    def make_datasets_and_loaders(self, **kws):
+        # Hald the dataset, stratified on word label, belongs in the train data
+        # Take the set of unique patient x sentence x word label, then stratify on label (ensure one of each is in train)
+        train_split_kws = dict(keys=('patient', 'sent_code', 'label'), stratify='label', test_size=0.5)
+        #test_split_kws = dict(keys=('patient', 'sample_ix', 'label'), stratify='label', test_size=0.20)
+        if self.dataset.split_cv_from_test:
+            # Alt with split from test = True: Split the second occurence
+            test_split_kws = dict(keys=('patient', 'label'), test_size=0.50)
+        else:
+            # Split the second occurence amove cv and test
+            test_split_kws = dict(keys=('patient', 'sample_ix', 'label'), stratify='label', test_size=0.20)
+
+        return self.dataset.make_datasets_and_loaders(train_split_kws=train_split_kws,
+                                                      test_split_kws=test_split_kws,
+                                                      #split_cv_from_test=False,
+                                                      **kws)
+
+
 from ecog_speech.models import base as bmp
 from typing import Union
 @dataclass
 class FineTuningModel(bmp.DNNModelOptions):
+    model_name = 'basic_fine_tuner'
     fine_tuning_method: str = '2d_linear'
     freeze_pretrained_weights: bool = True
     linear_hidden_n: int = 16
@@ -145,7 +187,8 @@ class FineTuningExperiment(bxp.Experiment):
     pretrained_result_input: bxp.ResultInputOptions = None
     task: SpeechDetectionFineTuningTask = subgroups(
         {'speech_detection': SpeechDetectionFineTuningTask(),
-         'region_detection': RegionDetectionFineTuningTask()},
+         'region_detection': RegionDetectionFineTuningTask(),
+         'word_detection': WordDetectionFineTuningTask()},
         default=RegionDetectionFineTuningTask())
     model: FineTuningModel = FineTuningModel()
     # Don't need model options directly
@@ -184,6 +227,16 @@ class FineTuningExperiment(bxp.Experiment):
             result_json = json.load(f)
 
         print(f"\tKEYS: {list(sorted(result_json.keys()))}")
+        if 'model_name' not in result_json:
+            logger.info("MODEL NAME MISSING - setting to cog2vec")
+            result_json['model_name'] = 'cog2vec'
+
+        if 'cv' in result_json:
+            min_pretrain_bce = min(result_json['cv']['bce_loss'])
+            logger.info(f"MIN PRETRAINED BCE LOSS: {min_pretrain_bce}")
+        else:
+            logger.info(f"Pretraining result didn't have a 'cv' to check the loss of ... D:")
+
         pretrained_model = load_model_from_results(result_json, base_model_path=pretrained_result_model_base_path)
 
         return pretrained_model, result_json
@@ -210,8 +263,7 @@ class FineTuningExperiment(bxp.Experiment):
             logger.info(f"AUTO-REMAINING: pretrained on {pretraining_sets}, so fine tuning on {train_sets}")
             self.auto_selected_train_sets = train_sets
 
-        return self.task.dataset.make_datasets_and_loaders(train_p_tuples=train_sets,
-                                                           test_split_kws=dict(test_size=0.5))
+        return self.task.make_datasets_and_loaders(train_p_tuples=train_sets)
 
 #    @classmethod
 #    def create_fine_tuning_model(cls, pretrained_model,
@@ -366,7 +418,7 @@ class FineTuningExperiment(bxp.Experiment):
         #####
         # Prep a results structure for saving - everything must be json serializable (no array objects)
         res_dict = self.create_result_dictionary(
-            #model_name=self.model.model_name,
+            model_name=self.model.model_name,
             epoch_outputs=self.fine_tuning_results,
             train_selected_columns=self.dataset_map['train'].selected_columns,  # dataset_map['train'].selected_columns,
             #test_selected_flat_indices=dataset_map['test'].selected_flat_indices,
@@ -384,6 +436,7 @@ class FineTuningExperiment(bxp.Experiment):
             auto_selected_train_sets=getattr(self, 'auto_selected_train_sets'),
             #dataset_options=vars(self.dataset),
             result_output_options=vars(self.result_output),
+            model_options=vars(self.model),
             pretrained_results=self.pretraining_results
         )
         uid = res_dict['uid']
