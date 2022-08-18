@@ -22,6 +22,10 @@ def weights_init(m):
     elif 'BatchNorm' in classname:
         torch.nn.init.normal_(m.weight.data, 1.0, 0.02)
         torch.nn.init.constant_(m.bias.data, 0)
+    elif 'LayerNorm' in classname:
+        m.bias.data.zero_()
+        m.weight.data.fill_(1.0)
+
 
 
 def copy_model_state(m):
