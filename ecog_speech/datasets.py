@@ -1213,13 +1213,11 @@ class HarvardSentences(BaseASPEN):
                                                     label_column='selected_word',
                                                     code_column='selected_word_code',
                                                     stim_output_name='selected_speaking_word_stim',
-                                                    default_stim_value=-1,
-                                                )),
+                                                    default_stim_value=-1)),
                                                 ('word_indices', pipeline.WindowSampleIndicesFromIndex(
                                                     'selected_speaking_word_stim',
                                                     method='unique_values',
-                                                    stim_value_remap=select_words.code_to_word_map,
-                                                )),
+                                                    stim_value_remap=select_words.code_to_word_map)),
                                                 ##('word_indices', pipeline.WindowSampleIndicesFromStim(
                                                 #    'selected_speaking_word_stim',
                                                 #    target_onset_shift=pd.Timedelta(0, 's'),
