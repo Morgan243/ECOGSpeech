@@ -347,6 +347,7 @@ class CoG2Vec(torch.nn.Module):
         embed_dim = self.C
 
         self.feature_norm = torch.nn.LayerNorm(embed_dim, eps=1e-5, elementwise_affine=True)
+        bmp.weights_init(self.feature_norm)
 
         # for unseen regions
         self.mask_embedding = torch.nn.Parameter(
@@ -366,15 +367,19 @@ class CoG2Vec(torch.nn.Module):
         #self.combined_enc = None
         if self.positional_encoding_method == 'combined':
 
+            #nn.init.kaiming_normal_(conv.weight)
             self.ras_positional_enc = torch.nn.Sequential(
                 # Dimensions of RAS are [-128, 128] (?)
                 # bmp.ScaleByConstant(128.),
                 torch.nn.Linear(3, 32),
                 torch.nn.LeakyReLU(),
+                torch.nn.Linear(32, 32),
+                torch.nn.LeakyReLU(),
                 torch.nn.Linear(32, self.C * self.T),
                 #torch.nn.Linear(32, self.C),
                 torch.nn.LeakyReLU()
             )
+            self.ras_positional_enc.apply(bmp.weights_init)
             self.positional_enc = None
 
         elif self.ras_pos_encoding:
@@ -383,10 +388,13 @@ class CoG2Vec(torch.nn.Module):
                 #bmp.ScaleByConstant(128.),
                 torch.nn.Linear(3, 32),
                 torch.nn.LeakyReLU(),
+                torch.nn.Linear(32, 32),
+                torch.nn.LeakyReLU(),
                 #torch.nn.Linear(32, self.C * self.T),
                 torch.nn.Linear(32, self.C),
                 torch.nn.LeakyReLU()
             )
+            self.ras_positional_enc.apply(bmp.weights_init)
             self.positional_enc = None
         else:
             self.positional_enc = PositionalEncoding(d_model=embed_dim)
@@ -405,8 +413,13 @@ class CoG2Vec(torch.nn.Module):
             encoder_layer = torch.nn.TransformerEncoderLayer(d_model=embed_dim, nhead=self.n_heads, batch_first=True,
                                                              activation="gelu", dropout=self.context_encoder_dropout,
                                                              dim_feedforward=encoder_dim_feedforward)
-            transformer_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=self.num_encoder_layers)
+            transformer_encoder = torch.nn.TransformerEncoder(encoder_layer, num_layers=self.num_encoder_layers,
+                                                              norm=nn.LayerNorm(normalized_shape=embed_dim, eps=1e-6))
+            transformer_encoder.apply(bmp.weights_init)
             self.context_model = transformer_encoder
+
+            #from fairseq.models.wav2vec import TransformerEncoder
+            #TransformerEncoder()
 
         self.quant_weight_proj_depth, self.quant_weight_proj_factor = quant_weight_proj_depth, quant_weight_proj_factor
         # Use existing Gumbel Quant
@@ -425,10 +438,12 @@ class CoG2Vec(torch.nn.Module):
 
         if self.projection_q_model is None:
             self.projection_q_model = torch.nn.Linear(embed_dim, embed_dim)
+            bmp.weights_init(self.projection_q_model)
 
         self.projection_out_model = None
         if self.projection_out_model is None:
             self.projection_out_model = torch.nn.Linear(embed_dim, embed_dim)
+            bmp.weights_init(self.projection_out_model)
 
     # Adapted From fairseq wave2vec2 (removed xla check)
     def compute_preds(self, x, y, negatives, ):
