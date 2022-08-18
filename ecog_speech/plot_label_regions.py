@@ -189,7 +189,8 @@ def plot_grid_of_index_by_key(data_map, sample_index_key, n_to_plt=50, n_cols=5)
     n_ixes = len(ixes)
     ix_source = data_map.get('index_source_map', dict()).get(sample_index_key, 'no source in map')
 
-    i_to_plt = np.random.choice(list(range(len(ixes))), n_cols * n_rows, replace=False)
+    n_ixes = len(ixes)
+    i_to_plt = np.random.choice(list(range(n_ixes)), min(n_cols * n_rows, n_ixes), replace=False)
     ixes_to_plt = [ixes[_i] for _i in i_to_plt]
 
     # ixes_to_plt = [data_map['sample_index_map'][0][_i]
@@ -213,7 +214,7 @@ def plot_grid_of_index_by_key(data_map, sample_index_key, n_to_plt=50, n_cols=5)
     return fig
 
 
-def plot_label_inspection_figures(data_map):
+def plot_label_inspection_figures(data_map, n_to_plt=100):
     output_fig_map = dict()
 
     wrd_code_len_s = pd.Series({wrd_cd: len(ixes)
@@ -235,7 +236,7 @@ def plot_label_inspection_figures(data_map):
     #output_fig_map['silent_region_grid'] = plot_grid_of_silent_regions(data_map)
     #output_fig_map['label_region_grid'] = plot_grid_of_label_regions(data_map)
     output_fig_map['word_code_win_histo'] = fig
-    output_fig_map.update(**{f'sample_index_key_{k}': plot_grid_of_index_by_key(data_map, k)
+    output_fig_map.update(**{f'sample_index_key_{k}': plot_grid_of_index_by_key(data_map, k, n_to_plt=n_to_plt)
                              for k in data_map['sample_index_map'].keys()})
 
     return output_fig_map
@@ -246,12 +247,13 @@ class PlotLabelRegionOptions:
     output_dir: str = './'
     dataset_name: str = 'hvs'
     dataset_location_subset: str = 'UCSD'
-    pre_proc_pipeline: str = 'word_level'
+    pre_proc_pipeline: str = 'region_classification'
     n_workers: int = 2
     overwrite_existing: bool = False
+    n_to_plt: int = 50
 
 
-def run_plots_for_dataset(output_path, dataset_cls, patient_tuple, pre_processing_pipeline):
+def run_plots_for_dataset(output_path, dataset_cls, patient_tuple, pre_processing_pipeline, n_to_plt=50):
     loc_subset = patient_tuple[0]
     patient_tuples = [patient_tuple]
 
@@ -260,15 +262,18 @@ def run_plots_for_dataset(output_path, dataset_cls, patient_tuple, pre_processin
     data_map = dset.data_maps[patient_tuple]
     fig_map = dict()
     if loc_subset == 'UCSD':  # and pre_proc_pipeline == 'audio_gate_imagine':
-        fig, _ = plot_ucsd_sentence_regions(data_map)
-        fig.suptitle(f'Sentences for : {patient_tuple}', y=1., fontsize=20, ha='center', va='center')
-        fig_map['UCSD_sentence'] = fig
+        if not hasattr(dset.pipeline_obj.named_steps, 'new_mtss'):
+            print("UCSD pipeline detected, but no multi-task start stop time step - skipping region and word plots")
+        else:
+            fig, _ = plot_ucsd_sentence_regions(data_map)
+            fig.suptitle(f'Sentences for : {patient_tuple}', y=1., fontsize=20, ha='center', va='center')
+            fig_map['UCSD_sentence'] = fig
 
-        fig, _ = plot_ucsd_word_regions(data_map)
-        fig.suptitle(f'Words for : {patient_tuple}', y=1., fontsize=20, ha='center', va='center')
-        fig_map['UCSD_words'] = fig
+            fig, _ = plot_ucsd_word_regions(data_map)
+            fig.suptitle(f'Words for : {patient_tuple}', y=1., fontsize=20, ha='center', va='center')
+            fig_map['UCSD_words'] = fig
 
-    inspect_fig_map = plot_label_inspection_figures(data_map)
+    inspect_fig_map = plot_label_inspection_figures(data_map, n_to_plt=n_to_plt)
     fig_map.update(inspect_fig_map)
 
     print("saving plots")
@@ -294,11 +299,12 @@ def run(options: PlotLabelRegionOptions):
 
     for pid, ptuples in tqdm(dataset_cls.all_patient_maps[loc_subset].items()):
         for pt in ptuples:
-            output_path = f'{loc_subset}-{pt[1]}-{pt[3]}_label_inspection_plots.pdf'
+            output_path = f'{loc_subset}-{pt[1]}-{pt[3]}_{pre_proc_pipeline}_label_inspection_plots.pdf'
             output_path = os.path.join(options.output_dir, output_path)
             kwds = dict(output_path=output_path,
                         dataset_cls=dataset_cls,
                         patient_tuple=pt,
+                        n_to_plt=options.n_to_plt,
                         pre_processing_pipeline=pre_proc_pipeline)
 
             if p is not None:
