@@ -152,7 +152,7 @@ class ApplySensorSelection(DictTrf):
         sel_signal_df = signal_df.copy()
         if bs_cols is not None and len(bs_cols) > 0:
             if self.bad_sensor_method == 'zero':
-                signal_df.loc[:, bs_cols] = 0.
+                sel_signal_df.loc[:, bs_cols] = 0.
             elif self.bad_sensor_method == 'ignore':
                 self.logger.warning(f"Ignoring bad sensor columns: {bs_cols}")
             else:
