@@ -344,6 +344,12 @@ class BaseASPEN(BaseDataset):
         if self.initialize_data:
             self.initialize()
 
+#        import functools
+#        cache = True
+#        if cache:
+#            self.__orig_getitem__ = self.__getitem__
+#            self.__getitem__ = functools.cache(self.__getitem__)
+
     def initialize(self):
 
         # If nothing passed, use 'default' pipeline
@@ -1641,6 +1647,15 @@ class DatasetOptions(JsonSerializable):
         if isinstance(additional_transforms, list):
             dataset_map = {k: v.append_transform(additional_transforms)
                            for k, v in dataset_map.items()}
+
+#        import functools
+#        cache = True
+#        if cache:
+#            logger.info("EXPERIMENTAL CACHING ENABLED")
+#            for k, v in dataset_map.items():
+#                v.__orig_getitem__ = v.__getitem__
+#                v.__getitem__ = functools.cache(v.__getitem__)
+
 
         dataloader_map = {k: v.to_dataloader(**dl_kws)
                           for k, v in dataset_map.items()}
