@@ -13,7 +13,8 @@ logger = utils.get_logger('semi_supervised')
 @dataclass
 class SemisupervisedCodebookTaskOptions(bxp.TaskOptions):
     task_name: str = "semisupervised_codebook_training"
-    ppl_weight: float = 100.
+    ppl_weight: float = 1.
+    feature_pen_weight: float = .01
 
 
 @dataclass
@@ -26,7 +27,6 @@ class SemiSupervisedExperiment(bxp.Experiment):
 
     dataset: datasets.DatasetOptions = subgroups(
         {
-
             "hvs": datasets.HarvardSentencesDatasetOptions(pre_processing_pipeline='random_sample'),
              # Not actually tested
              "nww": datasets.NorthwesternWordsDatasetOptions
@@ -64,6 +64,7 @@ class SemiSupervisedExperiment(bxp.Experiment):
                                                    early_stopping_patience=self.task.early_stopping_patience,
                                                    device=self.task.device,
                                                    ppl_weight=self.task.ppl_weight,
+                                                   feature_pen_weight=self.task.feature_pen_weight,
                                                    **trainer_kws)
 
         # For some reason the codebook indices isn't always on the right device... so this seems to help force it over
