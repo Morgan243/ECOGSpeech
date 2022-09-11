@@ -344,6 +344,7 @@ class CoG2Vec(torch.nn.Module):
 
         # Unused, but maybe useful for debugging and experiments
         _, self.C, self.T = self.t_feat_o.shape
+        print("Feature extractor output shape: " + str(self.t_feat_o.shape))
         embed_dim = self.C
 
         self.feature_norm = torch.nn.LayerNorm(embed_dim, eps=1e-5, elementwise_affine=True)
@@ -652,7 +653,9 @@ class CoG2Vec(torch.nn.Module):
             return d
 
         # penalize for large features
-        features_pen = X_f.float().pow(2).mean()
+        # This is in the wave2vec2 fairseq codebase, but this is not an L2 norm...?
+        #features_pen = X_f.float().pow(2).mean()
+        features_pen = X.pow(2).sum().sqrt()
 
         padding_count = 0
 
@@ -859,6 +862,7 @@ class MultiChannelCog2Vec(torch.nn.Module):
 class Cog2VecTrainer(Trainer):
     input_key = attr.ib('signal_arr')
     ppl_weight = attr.ib(100.)
+    feature_pen_weight = attr.ib(1.)
     squeeze_first = False
     model_output_logits_key = 'preds'
 
@@ -986,7 +990,7 @@ class Cog2VecTrainer(Trainer):
         #)
 
         ppl_l = ((num_vars - prob_ppl) / num_vars) * self.ppl_weight
-        fpen_l = model_output_d["features_pen"]
+        fpen_l = model_output_d["features_pen"] * self.feature_pen_weight
 
         o = dict(bce_loss=loss, perplexity=ppl_l, feature_pen=fpen_l)
         if not as_tensor:
@@ -1101,10 +1105,10 @@ class Cog2VecOptions(bmp.ModelOptions):
     encoder_dropout: float = 0.25
     encoder_dim_feedforward: int = 2048
     quant_num_vars: int = 40
-    quant_num_groups: int = 4
+    quant_num_groups: int = 2
     quant_weight_proj_factor: int = 2
     quant_weight_proj_depth: int = 1
-    feature_extractor_layers: str = '[(128, 7, 3)] + [(64, 3, 2)] * 2 + [(64, 3, 1)]'
+    feature_extractor_layers: str = '[(128, 7, 7)] + [(64, 3, 1)] * 4 + [(32, 3, 2)]'
     feature_extractor_mode: str = 'layer_norm'
     ras_pos_encoding: bool = True
     positional_encoding_method: str = 'combined'
