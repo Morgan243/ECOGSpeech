@@ -5,6 +5,15 @@ import sys
 import json
 
 
+def figures_to_pdf(output_path, **figure_pages):
+    from matplotlib.backends.backend_pdf import PdfPages
+    pdf = PdfPages(output_path)
+    for fig_name, _fig in figure_pages.items():
+        pdf.savefig(_fig, bbox_inches='tight')
+    pdf.close()
+    del pdf
+
+
 # https://stackoverflow.com/questions/42033142/is-there-an-easy-way-to-check-if-an-object-is-json-serializable-in-python
 def is_jsonable(x):
     try:
