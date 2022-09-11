@@ -3,6 +3,56 @@ import pandas as pd
 import matplotlib
 
 
+def pca_and_scatter_plot(_df, c=None, **kws):
+    from sklearn.decomposition import PCA
+
+    _pca_arr = PCA(2).fit_transform(_df)
+
+    _pca_df = pd.DataFrame(_pca_arr,
+                           columns=[f"PCA-{n}" for n in range(2)])
+
+
+    ax = _pca_df.plot.scatter(x=0, y=1, c=c, sharex=False, **kws)
+    fig = ax.get_figure()
+    fig.patch.set_facecolor('white')
+    return _pca_df, fig, ax
+
+
+def pca_and_pair_plot(_df, _y_s=None, n_components=3, **pair_plt_kws):
+    from sklearn.decomposition import PCA
+    import seaborn as sns
+
+    _pca_arr = PCA(n_components).fit_transform(_df)
+
+    _pca_df = pd.DataFrame(_pca_arr,
+                           columns=[f"PCA-{n}" for n in range(n_components)])
+
+    plt_kws = dict(  # hue='target_val',
+        diag_kws=dict(common_norm=False), kind='hist',
+        diag_kind='kde', )
+    _plt_df = _pca_df
+    if _y_s is not None:
+        _plt_df = _plt_df.join(_y_s)
+        plt_kws['hue'] = _y_s.name
+
+    plt_kws.update(pair_plt_kws)
+    g = sns.pairplot(_plt_df, **plt_kws)
+
+    # ax = _pca_df.plot.scatter(x=0, y=1, alpha=0.3, c=all_y_s, cmap='tab10', sharex=False)
+    fig = g.fig  # ax.get_figure()
+    fig.patch.set_facecolor('white')
+    return _pca_df, fig, g
+
+def scatter3d(*dims, alpha=0.3, c=None):
+    fig = matplotlib.pyplot.figure(figsize=(15, 10))
+    ax = fig.add_subplot(projection='3d')
+    assert len(dims) == 3, f"Expected 3 arrays passed in first parameters - got {len(dims)}"
+    #plt_df = _pca_df.sample(10000)
+    #ax.scatter(plt_df[0], plt_df[1], plt_df[2], alpha=0.3, c = all_y_s.loc[plt_df.index])
+    ax.scatter(*dims, alpha=alpha, c=c)
+    return fig, ax
+
+
 def plot_word_sample_region(data_map, word_code=None, figsize=(15, 5), plot_features=False,
                             subplot_kwargs=None, feature_key='ecog', feature_ax=None, ax=None):
     word_code = np.random.choice(list(data_map['word_code_d'].keys())) if word_code is None else word_code
