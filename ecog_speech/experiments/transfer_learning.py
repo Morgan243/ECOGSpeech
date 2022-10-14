@@ -15,6 +15,7 @@ from tqdm.auto import tqdm
 import numpy as np
 import pandas as pd
 from typing import ClassVar
+import seaborn as sns
 
 import attr
 
@@ -75,6 +76,15 @@ class RegionDetectionFineTuningTask(bxp.TaskOptions):
 
     def make_datasets_and_loaders(self, **kws):
         return self.dataset.make_datasets_and_loaders(**kws, test_split_kws=dict(test_size=0.5))
+
+
+@dataclass
+class ParticipantIdentificationFineTuningTask(RegionDetectionFineTuningTask):
+    task_name: str = "participant_classification_fine_tuning"
+    dataset: datasets.DatasetOptions = datasets.HarvardSentencesDatasetOptions(train_sets='AUTO-PRETRAINING',
+                                                                               flatten_sensors_to_samples=False,
+                                                                               label_reindex_col='patient',
+                                                                               pre_processing_pipeline='random_sample')
 
 
 @dataclass
@@ -191,13 +201,15 @@ class FineTuningExperiment(bxp.Experiment):
     task: SpeechDetectionFineTuningTask = subgroups(
         {'speech_detection': SpeechDetectionFineTuningTask(),
          'region_detection': RegionDetectionFineTuningTask(),
-         'word_detection': WordDetectionFineTuningTask()},
+         'word_detection': WordDetectionFineTuningTask(),
+         'participant_detection': ParticipantIdentificationFineTuningTask()},
         default=RegionDetectionFineTuningTask())
     model: FineTuningModel = FineTuningModel()
 
     inspection_plot_path: Optional[str] = None
     n_rs_clf_iter: Optional[int] = None
     rs_clf: Optional[str] = 'svm'
+    run_ml: bool = True
     # Don't need model options directly
     # TODO: make a fine tuning model options to capture at elast 'method' in task above
     #model: bmp.ModelOptions = subgroups(
@@ -258,6 +270,7 @@ class FineTuningExperiment(bxp.Experiment):
 
     def make_fine_tuning_datasets_and_loaders(self, pretraining_sets=None):
         train_sets = None
+        # To use the remaining (holdout) participant data that was used during pretraining
         if self.task.dataset.train_sets == 'AUTO-REMAINING':
             dataset_cls = datasets.BaseDataset.get_dataset_by_name(self.task.dataset.dataset_name)
             pretraining_sets = self.pretraining_results['dataset_options']['train_sets'] if pretraining_sets is None else pretraining_sets
@@ -269,6 +282,15 @@ class FineTuningExperiment(bxp.Experiment):
             #                  - set(datasets.BaseASPEN.make_tuples_from_sets_str(pretraining_sets)))
             logger.info(f"AUTO-REMAINING: pretrained on {pretraining_sets}, so fine tuning on {train_sets}")
             self.auto_selected_train_sets = train_sets
+        # To use the same participant data that was used during pretraining
+        elif self.task.dataset.train_sets == 'AUTO-PRETRAINING':
+            dataset_cls = datasets.BaseDataset.get_dataset_by_name(self.task.dataset.dataset_name)
+            pretraining_sets = self.pretraining_results['dataset_options']['train_sets'] if pretraining_sets is None else pretraining_sets
+            train_sets = dataset_cls.make_tuples_from_sets_str(pretraining_sets)
+            logger.info(f"AUTO-PRETRAINING: pretrained on {pretraining_sets}, so fine tuning on {train_sets}")
+            self.auto_selected_train_sets = pretraining_sets
+        else:
+            logger.info(f"Will use specific pretraining: {self.task.dataset.train_sets}")
 
         return self.task.make_datasets_and_loaders(train_p_tuples=train_sets)
 
@@ -344,12 +366,13 @@ class FineTuningExperiment(bxp.Experiment):
     def eval(self):
         outputs_map = self.trainer.generate_outputs(**self.eval_dl_map)
 
-        class_val_to_label_d = next(iter(self.dataset_map['train'].data_maps.values()))['index_source_map']
-        class_labels = [class_val_to_label_d[i] for i in range(len(class_val_to_label_d))]
+        #class_val_to_label_d = next(iter(self.dataset_map['train'].data_maps.values()))['index_source_map']
+        #class_labels = [class_val_to_label_d[i] for i in range(len(class_val_to_label_d))]
         #out_d = self.outputs_map['train']
+        class_val_to_label_d, class_labels = self.dataset_map['train'].get_target_labels()
         from sklearn.metrics import confusion_matrix
         output_cm_map = dict()
-        for pname, out_d in outputs_map.items():
+        for part_name, out_d in outputs_map.items():
             preds_arr: np.ndarray = out_d['preds'].squeeze()
             if preds_arr.ndim == 1:
                 n_preds = 1 - preds_arr
@@ -357,8 +380,8 @@ class FineTuningExperiment(bxp.Experiment):
             preds_df = pd.DataFrame(preds_arr, columns=class_labels)
             y_s = pd.Series(out_d['actuals'].reshape(-1), index=preds_df.index, name='actuals')
             y_label_s = y_s.map(class_val_to_label_d)
-            cm = confusion_matrix(y_label_s, preds_df.idxmax(1))
-            output_cm_map = pd.DataFrame(cm, columns=preds_df.columns, index=preds_df.columns).to_json()
+            cm = confusion_matrix(y_label_s, preds_df.idxmax(1), labels=preds_df.columns.tolist())
+            output_cm_map[part_name] = pd.DataFrame(cm, columns=preds_df.columns, index=preds_df.columns).to_json()
 
 
         performance_map = dict()
@@ -430,13 +453,34 @@ class FineTuningExperiment(bxp.Experiment):
             p = f"pretrain_inspect_{tl.task.task_name}_{tl.pretraining_results['uid']}.pdf"
 
         fig_d = self.make_plots()
-        utils.figures_to_pdf(p, **fig_d)
+        utils.figures_to_pdf(p, **{k: getattr(v, 'fig', v) for k, v in fig_d.items()})
 
-    def make_plots(self):
+        for k, f in fig_d.items():
+            #fig = f.fig if isinstance(f, sns.FacetGrid) else f
+            fig = getattr(f, 'fig', f)
+            fig.savefig(p.replace('.pdf', f'_{k}.pdf'), bbox_inches='tight')
+
+    def make_plots(self, class_label_remap=None):
+
+        map_of_label_maps = {
+            'speech_classification_fine_tuning': {'stim_pwrt': 'Speaking', 'silence_stim_pwrt_s': 'Not-Speaking'},
+            'region_classification_fine_tuning' : {
+                'listening_region_stim': 'Listening Region',
+                'speaking_region_stim': 'Speaking Region',
+                'mouthing_region_stim': 'Mouthing Region',
+                 'imagining_region_stim': 'Imagining Region'},
+        }
 
         t_dataset = self.dataset_map['train']
         class_val_to_label_d = next(iter(t_dataset.data_maps.values()))['index_source_map']
         print(class_val_to_label_d)
+        if class_label_remap is None:
+            class_label_remap = map_of_label_maps.get(self.task.task_name)
+
+        if isinstance(class_label_remap, dict):
+            class_val_to_label_d = {k: class_label_remap.get(v, v) for k, v in class_val_to_label_d.items()}
+            print(class_val_to_label_d)
+
         device = 'cuda'
 
         from tqdm.auto import tqdm
@@ -482,8 +526,12 @@ class FineTuningExperiment(bxp.Experiment):
         #ax.text(0.01, 0.5, "Hist. of flattened b2v features corrwith target ")
         ax.set_title("Hist. of flattened b2v features corrwith target ")
         #kws_str = "".join((" " if i % 5 else "\n") + (f"{str(k)} = {str(v)}") for i, (k, v) in self.pretraining_results['model_kws'].items())
-        kws_str = "".join((" " + s if i % 5 else "\n" + s)
+        kws_str = "model options:\n"
+        kws_str += "".join((" " + s if i % 5 else "\n" + s)
                           for i, s in enumerate(str(self.pretraining_results['model_kws']).split()))
+        kws_str += "dataset options:\n"
+        kws_str += "".join((" " + s if i % 5 else "\n" + s)
+                           for i, s in enumerate(str(self.pretraining_results['dataset_options']).split()))
         #kws_str = str(self.pretraining_results['model_kws'])
         fig.text(1., 0.5, kws_str, fontsize=7)
         fig.text(1., 0.1, "Batch data shapes as multichannel pretrained:\n" + shape_str, fontsize=7)
@@ -495,9 +543,9 @@ class FineTuningExperiment(bxp.Experiment):
 
         _pca_df, fig, axs = viz.pca_and_scatter_plot(all_x_df, c=all_y_s, cmap='jet', alpha=0.3)
         fig_d['pca_2d_scatter'] = fig
-        _pca_df, fig, axs = viz.pca_and_pair_plot(all_x_df, all_y_label_s,
+        _pca_df, fig, g = viz.pca_and_pair_plot(all_x_df, all_y_label_s,
                                                   n_components=4)
-        fig_d['pca_2d_pair'] = fig
+        fig_d['pca_2d_pair'] = g
         s_df = _pca_df.sample(1000)
         fig, ax = viz.scatter3d(*[s_df.iloc[:, i] for i in range(3)], c=all_y_s.loc[s_df.index])
         fig_d['pca_3d_scatter'] = fig
@@ -518,12 +566,16 @@ class FineTuningExperiment(bxp.Experiment):
         import seaborn as sns
         _plt_df = tsne_pca_df.join(all_y_label_s)
         # _plt_df = _plt_df.assign(target_label=_plt_df.target_val.map(class_val_to_label_d))
-        plt_kws = dict(hue='target_label', diag_kws=dict(common_norm=False), palette='Set1', kind='hist',
+        plt_kws = dict(hue='target_label', diag_kws=dict(common_norm=False), palette='tab10', kind='hist',
                        diag_kind='kde', vars=_plt_df.columns.drop(['target_label']).tolist())
         g = sns.pairplot(_plt_df, **plt_kws)
-        fig_d['tsne_pair'] = g.fig
+        g.legend.set_title('Target Label')
+        fig_d['tsne_pair'] = g
 
         ###
+        if not self.run_ml:
+            return fig_d
+
         from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier
         from sklearn.cluster import KMeans
         from sklearn.svm import SVC
@@ -606,6 +658,11 @@ class FineTuningExperiment(bxp.Experiment):
                 fig = ax.get_figure()
                 fig.tight_layout()
                 fig_d['rs_barplot'] = fig
+
+            print("Running learning curve plots...")
+            fig, axes = viz.plot_learning_curve(rs.best_estimator_, str(rs.best_estimator_), all_x_df, all_y_s,
+                                                n_jobs=2, cv=3, train_sizes=np.linspace(0.05, .5, 5))
+            fig_d['best_estimator_learning_curve'] = fig
 
         return fig_d
 

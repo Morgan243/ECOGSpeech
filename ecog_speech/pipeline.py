@@ -134,6 +134,9 @@ class ApplySensorSelection(DictTrf):
     def process(self, data_map):
         # TODO: This doesn't actually select any sensors?
         signal_df = data_map[self.signal_key]
+        bs_cols = list()
+        missing_cols = list()
+        selected_cols = None
 
         if self.selection is None:
             self.logger.info("Checking data_map for good_sensor_columns")
@@ -147,18 +150,27 @@ class ApplySensorSelection(DictTrf):
 
         if selected_cols is None:
             selected_cols = signal_df.columns.tolist()
+            missing_cols = list()
+        else:
+            missing_cols = [c for c in selected_cols if c not in signal_df.columns]
+            #missing_cols = signal_df.columns[~signal_df.columns.isin(selected_cols)].tolist()
 
-        bs_cols = data_map['bad_sensor_columns']
+        bs_cols += data_map['bad_sensor_columns'] if data_map['bad_sensor_columns'] is not None else list()
+        bs_cols = bs_cols + missing_cols
+
         sel_signal_df = signal_df.copy()
         if bs_cols is not None and len(bs_cols) > 0:
             if self.bad_sensor_method == 'zero':
+                self.logger.info(f"ZEROING columns that were missing or bad")
+                self.logger.info(f"\tMissing: {missing_cols}")
+                self.logger.info(f"\tBad: {data_map['bad_sensor_columns']}")
                 sel_signal_df.loc[:, bs_cols] = 0.
             elif self.bad_sensor_method == 'ignore':
                 self.logger.warning(f"Ignoring bad sensor columns: {bs_cols}")
             else:
                 raise KeyError(f"Don't understand bad_sensor_method: {self.bad_sensor_method}")
 
-        r_val = {self.signal_key: sel_signal_df,
+        r_val = {self.signal_key: sel_signal_df[selected_cols],
                  'selected_columns': selected_cols,
                  'bad_columns': bs_cols,
                  'bad_sensor_method': self.bad_sensor_method}
@@ -184,6 +196,40 @@ class SubsampleSignal(DictTrf):
         output[self.signal_rate_key] = int((1. / self.rate) * data_map[self.signal_rate_key])
         return output
 
+
+@attr.s
+@with_logger
+class CreateAllStim(DictTrf):
+    """A stim that is always true, to use when needing a 'default' mask across all time samples"""
+    stim_key = attr.ib('stim')
+    def process(self, data_map):
+        s = data_map[self.stim_key]
+        return dict(all_stim=pd.Series(True, index=s.index, name='all_stim'))
+
+
+@attr.s
+@with_logger
+class ReplaceSignalWithPinkNoise(DictTrf):
+    signal_key = attr.ib('signal')
+    signal_rate_key = attr.ib('fs_signal')
+    output_key = attr.ib(None)
+
+    def process(self, data_map):
+        import pyplnoise
+        signal = data_map[self.signal_key]
+        fs_signal = data_map[self.signal_rate_key]
+        output_key = self.signal_key if self.output_key is None else self.output_key
+        pknoise = pyplnoise.PinkNoise(fs_signal, 1e-2, fs_signal // 2)
+        from tqdm.auto import tqdm
+
+        pk_df = pd.DataFrame({k: pknoise.get_series(signal.shape[0]).astype('float32') for k in
+                              tqdm(range(signal.shape[1]), desc='Generating PinkNoise')})
+
+        if isinstance(signal, pd.DataFrame):
+            pk_df.columns = signal.columns
+            pk_df.index = signal.index
+
+        return {output_key: pk_df}
 
 @attr.s
 @with_logger
@@ -653,7 +699,7 @@ class SelectWordsFromStartStopTimes(DictTrf):
                       'BLUE',
                       'DAYS',
                       #'LEFT',
-                      'BOY',
+                      #'BOY',
                       'CLEAR',
                       'YOUNG',
                       #'BEFORE',

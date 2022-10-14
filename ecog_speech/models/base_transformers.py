@@ -1108,7 +1108,7 @@ class Cog2VecOptions(bmp.ModelOptions):
     quant_num_groups: int = 2
     quant_weight_proj_factor: int = 2
     quant_weight_proj_depth: int = 1
-    feature_extractor_layers: str = '[(128, 7, 7)] + [(64, 3, 1)] * 4 + [(32, 3, 2)]'
+    feature_extractor_layers: str = '[(128, 7, 2)] + [(64, 3, 2)] * 2 + [(32, 3, 2)] * 2'
     feature_extractor_mode: str = 'layer_norm'
     ras_pos_encoding: bool = True
     positional_encoding_method: str = 'combined'
