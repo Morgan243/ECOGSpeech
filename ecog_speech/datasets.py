@@ -326,8 +326,12 @@ class BaseASPEN(BaseDataset):
     # can save on memory and reading+parsing time
     data_from: 'BaseASPEN' = attr.ib(None)
 
+    label_reindex_col: str = attr.ib(None)#"patient"
+
     initialize_data = attr.ib(True)
     selected_flat_keys = attr.ib(None, init=False)
+    label_reindex_map: Optional[dict] = attr.ib(None, init=False)
+    label_reindex_ix: Optional[int] = attr.ib(None, init=False)
 
     default_data_subset = 'Data'
     default_location = None
@@ -450,6 +454,16 @@ class BaseASPEN(BaseDataset):
 
             self.sensor_count = len(self.selected_columns)
 
+            ###-----
+            assert self.sensor_count == len(self.selected_columns)
+            self.logger.info(f"Selected {len(self.selected_columns)} sensors")
+            ###-----
+
+            self.sensor_selection_trf = pipeline.ApplySensorSelection(selection=self.selected_columns)
+            self.data_maps = {l_p_s_t_tuple: self.sensor_selection_trf.transform(mat_d)
+                              for l_p_s_t_tuple, mat_d in tqdm(self.data_maps.items(),
+                                                               desc='Applying sensor selection')}
+
             # ### New Version ###
             sample_ix_df_l = list()
             key_col_dtypes = {'label': 'int8', 'sample_ix': 'int32', 'location': 'string',
@@ -496,6 +510,11 @@ class BaseASPEN(BaseDataset):
 
             self.key_cols = key_cols
 
+            if self.label_reindex_col is not None:
+                self.label_reindex_ix = self.key_cols.index(self.label_reindex_col)
+                unique_reindex_labels = list(sorted(self.sample_ix_df[self.label_reindex_col].unique()))
+                self.label_reindex_map = {l: i for i, l in enumerate(unique_reindex_labels)}
+
             self.logger.info("Converting dataframe to a flat list of key variables (self.flat_keys)")
             self.ixed_sample_ix_df = self.sample_ix_df.set_index(key_cols).sort_index()
             #key_df = self.sample_ix_df[self.key_cols]
@@ -511,15 +530,6 @@ class BaseASPEN(BaseDataset):
 
             self.logger.info(f"Length of flat index map: {len(self.flat_index_map)}")
 
-            ###-----
-            assert self.sensor_count == len(self.selected_columns)
-            self.logger.info(f"Selected {len(self.selected_columns)} sensors")
-            ###-----
-
-            self.sensor_selection_trf = pipeline.ApplySensorSelection(selection=self.selected_columns)
-            self.data_maps = {l_p_s_t_tuple: self.sensor_selection_trf.transform(mat_d)
-                              for l_p_s_t_tuple, mat_d in tqdm(self.data_maps.items(),
-                                                               desc='Applying sensor selection')}
 
         else:
             # print("Warning: using naive shared-referencing across objects - only use when feeling lazy")
@@ -540,6 +550,9 @@ class BaseASPEN(BaseDataset):
             self.flatten_sensors_to_samples = self.data_from.flatten_sensors_to_samples
             self.extra_output_keys = self.data_from.extra_output_keys
             self.fs_signal = self.data_from.fs_signal
+            self.label_reindex_col = self.data_from.label_reindex_col
+            self.label_reindex_ix = self.data_from.label_reindex_ix
+            self.label_reindex_map = self.data_from.label_reindex_map
 
         self.select(self.selected_flat_indices)
 
@@ -655,7 +668,10 @@ class BaseASPEN(BaseDataset):
         )
 
         so.update(
-            self.get_targets(data_d, ix, ix_k, target_transform=self.target_transform)
+            self.get_targets(data_d, ix,
+                             # get the 0-1 label from the value of the selected reindex value - or just grab the first (default)
+                             label=self.label_reindex_map[ix_k[self.label_reindex_ix]] if self.label_reindex_ix is not None else ix_k[0],
+                             target_transform=self.target_transform)
         )
 
         if self.post_processing_func is not None:
@@ -908,7 +924,7 @@ class BaseASPEN(BaseDataset):
 
     @staticmethod
     def get_targets(data_map, ix, label, target_transform=None, target_key='target_arr'):
-        label = label[0]
+        #label = label[0]
         #kws = dict(text='<silence>' if label <= 0 else '<speech>',
         #           text_arr=torch.Tensor([0] if label <= 0 else [1]))
         kws = {target_key: torch.LongTensor([label])}
@@ -985,8 +1001,24 @@ class BaseASPEN(BaseDataset):
         return axs
 
     def get_target_shape(self):#, target_key='target_arr'):
-        n_targets = self.sample_ix_df.label.nunique()
+        if self.label_reindex_col is None:
+            n_targets = self.sample_ix_df.label.nunique()
+        else:
+            n_targets = len(self.label_reindex_map)
+
         return 1 if n_targets == 2 else n_targets
+
+    def get_target_labels(self):
+        # TODO: Warning - assuming these are all the same across data_maps values - just using the first
+        if self.label_reindex_col is None:
+            class_val_to_label_d = next(iter(self.data_maps.values()))['index_source_map']
+        else:
+            class_val_to_label_d = {cls_id: f"{self.label_reindex_col}_{label}"
+                                    for label, cls_id in self.label_reindex_map.items()}
+
+        class_labels = [class_val_to_label_d[i] for i in range(len(class_val_to_label_d))]
+        return class_val_to_label_d, class_labels
+
 
 
 @attr.s
@@ -1047,6 +1079,7 @@ class HarvardSentences(BaseASPEN):
             #('rescale_signal', pipeline.StandardNormSignal()),
             ('subsample', pipeline.SubsampleSignal()),
             ('sent_from_start_stop', pipeline.SentCodeFromStartStopWordTimes()),
+            ('all_stim', pipeline.CreateAllStim()),
 
         ]
 
@@ -1090,6 +1123,18 @@ class HarvardSentences(BaseASPEN):
                                                                       sample_n=10000,
                                                                       ))
         ]
+        audio_gate_all_region_steps = [
+                                          ('Threshold', pipeline.PowerThreshold(speaking_window_samples=48000 // 16,
+                                                  silence_window_samples=int(48000 * 1.5),
+                                                  speaking_quantile_threshold=0.85,
+                                                  # silence_threshold=0.001,
+                                                  silence_quantile_threshold=0.05,
+                                                  n_silence_windows=35000,
+                                                  # silence_n_smallest=30000,
+                                                  #stim_key='speaking_region_stim'
+                                                  stim_key='all_stim'
+                                                  ))
+        ] + audio_gate_steps[1:]
 
         start_stop_steps = [('new_mtss', pipeline.AppendExtraMultiTaskStartStop()),
                                                  # Stims from Start-stop-times
@@ -1137,7 +1182,7 @@ class HarvardSentences(BaseASPEN):
                             ]
 
         region_kws = dict(
-            target_onset_shift=pd.Timedelta(1, 's'),
+            target_onset_shift=pd.Timedelta(.5, 's'),
             target_offset_shift=pd.Timedelta(-1, 's'),
             sample_n=1000
         )
@@ -1152,10 +1197,21 @@ class HarvardSentences(BaseASPEN):
                ('rnd_indices', pipeline.WindowSampleIndicesFromIndex(stim_key='random_stim'))]
                                       + [('output', 'passthrough')]),
 
+            'random_sample_pinknoise': Pipeline(parse_arr_steps + parse_input_steps +
+                                                [
+                                                    ('pinknoise', pipeline.ReplaceSignalWithPinkNoise()),
+                                                    ('rnd_stim', pipeline.RandomStim(10_000)),
+                                                    ('rnd_indices',
+                                                     pipeline.WindowSampleIndicesFromIndex(stim_key='random_stim'))]
+                                                + [('output', 'passthrough')]
+                                                ),
+
             # -----
             # Directly from audio
             'audio_gate': Pipeline(parse_arr_steps + parse_input_steps  + start_stop_steps  #+ parse_stim_steps
                                    + audio_gate_steps + [('output', 'passthrough')]),
+            'audio_gate_all_region': Pipeline(parse_arr_steps + parse_input_steps + start_stop_steps  # + parse_stim_steps
+                                   + audio_gate_all_region_steps + [('output', 'passthrough')]),
 
             'region_classification': Pipeline(parse_arr_steps + parse_input_steps + start_stop_steps
                                                              + [
@@ -1458,6 +1514,8 @@ class DatasetOptions(JsonSerializable):
 
     data_subset: str = 'Data'
     output_key: str = 'signal_arr'
+    label_reindex_col: Optional[str] = None#"patient"
+
     extra_output_keys: Optional[str] = None
     random_sensors_to_samples: bool = False
     flatten_sensors_to_samples: bool = False
@@ -1532,6 +1590,7 @@ class DatasetOptions(JsonSerializable):
         base_kws = dict(pre_processing_pipeline=self.pre_processing_pipeline if pre_processing_pipeline is None
                                                 else pre_processing_pipeline,
                         data_subset=self.data_subset,
+                        label_reindex_col=self.label_reindex_col,
                         extra_output_keys=self.extra_output_keys.split(',') if self.extra_output_keys is not None
                                           else None,
                         flatten_sensors_to_samples=self.flatten_sensors_to_samples)
@@ -1588,11 +1647,6 @@ class DatasetOptions(JsonSerializable):
                 ShuffleDimension()
             )
 
-        if getattr(self, 'random_labels', False):
-            logger.info("-->Randomizing target labels<--")
-            train_dataset.append_target_transform(
-                RandomIntLike(low=0, high=2)
-            )
 
         dataset_map['train'] = train_dataset
 
@@ -1629,6 +1683,14 @@ class DatasetOptions(JsonSerializable):
             train_dataset.select(train_ixs)
             dataset_map.update(dict(train=train_dataset,
                                     cv=cv_nww))
+
+        if getattr(self, 'random_targets', False):
+            logger.info("-->Randomizing target labels<--")
+            class_val_to_label_d, class_labels = dataset_map['train'].get_target_labels()
+            logger.info(f"Will use random number between 0 and {len(class_labels)}")
+            dataset_map['train'].append_target_transform(
+                RandomIntLike(low=0, high=len(class_labels))
+            )
 
         # Test data is not required, but must be loaded with same selection of sensors as train data
         # TODO / Note: this could have a complex interplay if used tih flatten sensors or 2d data
