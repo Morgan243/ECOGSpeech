@@ -126,6 +126,7 @@ class ApplySensorSelection(DictTrf):
 
     @classmethod
     def select_from_ras(cls, data_map, selected_columns, bad_columns, **kws):
+        #s_df = data_map['sensor_ras_df'].loc[selected_columns]
         s_df = data_map['sensor_ras_df'].loc[selected_columns]
         return {'sensor_ras_df': s_df,
                 'sensor_ras_coord_arr': s_df.filter(like='coord').values
@@ -178,6 +179,14 @@ class ApplySensorSelection(DictTrf):
         # TODO: a way to apply a bunch of selection functions
         if 'sensor_ras_df' in data_map:
             self.logger.info("Selecting columns in RAS coordinate data")
+            self.logger.info(f"Bad columns {bs_cols}")
+            sensor_ras_df = data_map['sensor_ras_df']
+
+            bs_ras_df = pd.DataFrame([dict(electrode_name='UNKW', contact_number=contact_num,
+                                           x_coord=0., y_coord=0., z_coord=0.) for contact_num in bs_cols ])
+            #sensor_ras_df.loc[bs_cols, :] = 0
+            sensor_ras_df = pd.concat([sensor_ras_df, bs_ras_df]).reset_index(drop=True)
+            data_map['sensor_ras_df'] = sensor_ras_df
             ras_sel = self.select_from_ras(data_map, **r_val)
             r_val.update(ras_sel)
 
