@@ -1742,8 +1742,15 @@ class HarvardSentencesDatasetOptions(DatasetOptions):
 
 
 if __name__ == """__main__""":
-    hvs_tuples = HarvardSentences.make_tuples_from_sets_str('UCSD-28')
-    hvs = HarvardSentences(hvs_tuples, #flatten_sensors_to_samples=False,
-                           extra_output_keys='sensor_ras_coord_arr',
-                           pre_processing_pipeline='word_classification')
-    print(hvs[0])
+    hvs_tuples = HarvardSentences.make_tuples_from_sets_str('*')
+    hvs = HarvardSentences(hvs_tuples,
+                            # pre_processing_pipeline='region_classification',
+                            pre_processing_pipeline='random_sample',
+                            flatten_sensors_to_samples=False,
+                            extra_output_keys='sensor_ras_coord_arr')
+
+#    hvs_tuples = HarvardSentences.make_tuples_from_sets_str('UCSD-28')
+#    hvs = HarvardSentences(hvs_tuples, #flatten_sensors_to_samples=False,
+#                           extra_output_keys='sensor_ras_coord_arr',
+#                           pre_processing_pipeline='word_classification')
+#    print(hvs[0])
