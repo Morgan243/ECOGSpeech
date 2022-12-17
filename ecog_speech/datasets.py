@@ -127,7 +127,7 @@ class BaseDataset(tdata.Dataset):
 
     def to_dataloader(self, batch_size=64, num_workers=2,
                       batches_per_epoch=None, random_sample=True,
-                      shuffle=False, **kwargs):
+                      shuffle=False, pin_memory=False, **kwargs):
         dset = self
         if random_sample:
             if batches_per_epoch is None:
@@ -139,10 +139,12 @@ class BaseDataset(tdata.Dataset):
                                                                       replacement=True,
                                                                       num_samples=batches_per_epoch * batch_size),
                                           shuffle=shuffle, num_workers=num_workers,
+                                          pin_memory=pin_memory,
                                           **kwargs)
         else:
             dataloader = tdata.DataLoader(dset, batch_size=batch_size,
                                           shuffle=shuffle, num_workers=num_workers,
+                                          pin_memory=pin_memory,
                                           **kwargs)
         return dataloader
 
@@ -305,7 +307,7 @@ class BaseASPEN(BaseDataset):
 
     num_mfcc = attr.ib(13)
 
-    selected_word_indices = attr.ib(None)
+    selected_flat_indices = attr.ib(None)
     transform = attr.ib(None)
     transform_l = attr.ib(attr.Factory(list))
     target_transform = attr.ib(None)
@@ -324,7 +326,12 @@ class BaseASPEN(BaseDataset):
     # can save on memory and reading+parsing time
     data_from: 'BaseASPEN' = attr.ib(None)
 
+    label_reindex_col: str = attr.ib(None)#"patient"
+
+    initialize_data = attr.ib(True)
     selected_flat_keys = attr.ib(None, init=False)
+    label_reindex_map: Optional[dict] = attr.ib(None, init=False)
+    label_reindex_ix: Optional[int] = attr.ib(None, init=False)
 
     default_data_subset = 'Data'
     default_location = None
@@ -337,6 +344,17 @@ class BaseASPEN(BaseDataset):
         # Build pipelines based on this NWW dataset state
         self.pipeline_map = self.make_pipeline_map()
         self.logger.debug(f"Available pipelines: {list(self.pipeline_map.keys())}")
+
+        if self.initialize_data:
+            self.initialize()
+
+#        import functools
+#        cache = True
+#        if cache:
+#            self.__orig_getitem__ = self.__getitem__
+#            self.__getitem__ = functools.cache(self.__getitem__)
+
+    def initialize(self):
 
         # If nothing passed, use 'default' pipeline
         if self.pre_processing_pipeline is None:
@@ -387,11 +405,6 @@ class BaseASPEN(BaseDataset):
                 # self.fs_signal = getattr(self, 'fs_signal', res_dmap[self.mat_d_keys['signal_fs']])
                 self.fs_signal = res_dmap[self.mat_d_keys['signal_fs']] if self.fs_signal is None else self.fs_signal
 
-                # self.ecog_window_size = getattr(self, 'ecog_window_size',
-                #                                int(self.fs_signal * self.sample_ixer.window_size.total_seconds()))
-                # self.ecog_window_size = int(self.fs_signal * self.sample_ixer.window_size.total_seconds())
-
-                # self.n_samples_per_window = res_dmap['n_samples_per_window']
                 self.n_samples_per_window = getattr(self, 'n_samples_per_window', res_dmap['n_samples_per_window'])
                 self.logger.info(f"N samples per window: {self.n_samples_per_window}")
 
@@ -403,13 +416,14 @@ class BaseASPEN(BaseDataset):
             ###
             # Sensor selection logic - based on the patients loaded - which sensors do we use?
             if self.sensor_columns is None or isinstance(self.sensor_columns, str):
-                # good_and_bad_tuple_d = {l_p_s_t_tuple: self.identify_good_and_bad_sensors(mat_d, self.sensor_columns)
-                #                            for l_p_s_t_tuple, mat_d in mat_data_maps.items()}
+                # Get each participant's good and bad sensor columns into a dictionary
                 good_and_bad_tuple_d = {l_p_s_t_tuple: (mat_d['good_sensor_columns'], mat_d['bad_sensor_columns'])
                                         for l_p_s_t_tuple, mat_d in self.data_maps.items()}
 
+                # Go back through and any missing sets of good_sensors are replaced with all sensor from the data
                 good_and_bad_tuple_d = {
-                    k: (set(gs) if gs else (list(range(self.data_maps[k][self.mat_d_keys['signal']].shape[1]))),
+                    k: (set(gs) if gs is not None
+                        else (list(range(self.data_maps[k][self.mat_d_keys['signal']].shape[1]))),
                         bs)
                     for k, (gs, bs) in good_and_bad_tuple_d.items()}
 
@@ -418,6 +432,7 @@ class BaseASPEN(BaseDataset):
 
                 # UNION: Select all good sensors from all inputs, zeros will be filled for those missing
                 if self.sensor_columns == 'union':
+                    # Create a sorted list of all sensor IDs found in the good sensor sets extracted
                     self.selected_columns = sorted(list({_gs for k, (gs, bs) in good_and_bad_tuple_d.items()
                                                          for _gs in gs}))
                 # INTERSECTION: Select only sensors that are rated good in all inputs
@@ -427,96 +442,20 @@ class BaseASPEN(BaseDataset):
 
                 # elif self.sensor_columns == 'all':
                 else:
-                    raise ValueError("Unknown snsor columns argument: " + str(self.sensor_columns))
+                    raise ValueError("Unknown sensor columns argument: " + str(self.sensor_columns))
                 # print("Selected columns with -%s- method: %s"
                 #      % (self.sensor_columns, ", ".join(map(str, self.selected_columns))) )
-                self.logger.info("Selected columns with -%s- method: %s"
-                                 % (self.sensor_columns, ", ".join(map(str, self.selected_columns))))
+                self.logger.info(f"Selected {len(self.selected_columns)} columns using {self.sensor_columns} method: "
+                                 f"{', '.join(map(str, self.selected_columns))}")
+                #self.logger.info("Selected columns with -%s- method: %s"
+                #                 % (self.sensor_columns, ", ".join(map(str, self.selected_columns))))
             else:
                 self.selected_columns = self.sensor_columns
 
             self.sensor_count = len(self.selected_columns)
 
-            #            if self.flatten_sensors_to_samples:
-            #                # Map full description (word label, window index, sensor,...trial key elements..}
-            #                # to the actual pandas index
-            #                self.logger.info("Flattening sensors to samples")
-            #                self.flat_index_map = {tuple([wrd_id, ix_i, s_i] + list(k_t)): ixes
-            #                                       for k_t, index_map in tqdm(self.sample_index_maps.items(),
-            #                                                                  desc="Creating sample indices")
-            #                                       for wrd_id, ix_list in index_map.items()
-            #                                       for ix_i, ixes in enumerate(ix_list)
-            #                                       for s_i, s in enumerate(self.selected_columns)}
-            #
-            #                # Enumerate all the keys across flat_index_map into one large list for index-style,
-            #                # has a len() and can be indexed into nicely (via np.ndarray)
-            #                self.flat_keys = np.array([(k, k[3:])
-            #                                           for i, k in enumerate(self.flat_index_map.keys())],
-            #                                          dtype='object')
-            #            else:
-            #                # Map full description (word label, window index,...trial key elements..}
-            #                # to the actual pandas index
-            #                self.flat_index_map = {tuple([wrd_id, ix_i] + list(k_t)): ixes
-            #                                       for k_t, index_map in tqdm(self.sample_index_maps.items(),
-            #                                                                  desc="Creating sample indices")
-            #                                       for wrd_id, ix_list in index_map.items()
-            #                                       for ix_i, ixes in enumerate(ix_list)}
-            #
-            #                # Enumerate all the keys across flat_index_map into one large list for index-style,
-            #                # has a len() and can be indexed into nicely (via np.ndarray)
-            #                self.flat_keys = np.array([(k, k[2:])
-            #                                           for i, k in enumerate(self.flat_index_map.keys())],
-            #                                          dtype='object')
-
-            # ### New Version ###
-            sample_ix_df_l = list()
-            key_cols = ['label', 'sample_ix', 'location', 'patient', 'session', 'trial']
-            for l_p_s_t, index_map in self.sample_index_maps.items():
-                patient_ixes = list()
-
-                cols = key_cols + ['start_t', 'stop_t', 'indices']
-
-                key_l = list(l_p_s_t)
-
-                patient_ixes += [tuple([label_code, ix_i] + key_l + [_ix.min(), _ix.max(), _ix])
-                                 for label_code, indices_l in index_map.items()
-                                 for ix_i, _ix in enumerate(indices_l)]
-
-                p_ix_df = pd.DataFrame(patient_ixes, columns=cols)
-
-                if 'word_start_stop_times' in self.data_maps[l_p_s_t]:
-                    wsst_df = self.data_maps[l_p_s_t]['word_start_stop_times']
-                    nearest_ixes = wsst_df.index.get_indexer(p_ix_df.start_t, method='nearest')
-                    p_ix_df['sent_code'] = wsst_df.iloc[nearest_ixes].stim_sentcode.values
-
-                sample_ix_df_l.append(p_ix_df)
-
-            self.sample_ix_df = pd.concat(sample_ix_df_l).reset_index(drop=True)
-            k_select_offset = 2
-            if self.flatten_sensors_to_samples:
-                self.sample_ix_df['channel'] = [self.selected_columns] * len(self.sample_ix_df)
-                key_cols.insert(2, 'channel')
-                k_select_offset += 1
-                self.sample_ix_df = self.sample_ix_df.explode('channel')
-
-            self.key_cols = key_cols
-
-            key_df = self.sample_ix_df[self.key_cols]
-            self.flat_keys = np.array(list(zip(key_df.to_records(index=False).tolist(),
-                                               key_df.iloc[:, k_select_offset:].to_records(index=False).tolist())),
-                                      dtype='object')
-            self.flat_index_map = self.sample_ix_df.set_index(key_cols).indices.to_dict()
-
-            # ## END NEW VERSION
-
-            self.logger.info(f"Length of flat index map: {len(self.flat_index_map)}")
-
-            # Finish processing the data mapping loaded from the mat data files
-            # self.data_maps = {l_p_s_t_tuple: self.parse_mat_arr_dict(mat_d, self.selected_columns)
-            #                  for l_p_s_t_tuple, mat_d in tqdm(mat_data_maps.items(), desc='Parsing data')}
             ###-----
             assert self.sensor_count == len(self.selected_columns)
-            # print(f"Selected {len(self.selected_columns)} sensors")
             self.logger.info(f"Selected {len(self.selected_columns)} sensors")
             ###-----
 
@@ -525,23 +464,97 @@ class BaseASPEN(BaseDataset):
                               for l_p_s_t_tuple, mat_d in tqdm(self.data_maps.items(),
                                                                desc='Applying sensor selection')}
 
+            # ### New Version ###
+            sample_ix_df_l = list()
+            key_col_dtypes = {'label': 'int8', 'sample_ix': 'int32', 'location': 'string',
+                             'patient': 'int8', 'session': 'int8', 'trial': 'int8'}
+            key_cols = list(key_col_dtypes.keys())
+
+            for l_p_s_t, index_map in self.sample_index_maps.items():
+                self.logger.info(f"Processing participant {l_p_s_t} index, having keys: {list(index_map.keys())}")
+                _data_map = self.data_maps[l_p_s_t]
+                #self.logger.info(f"Creating participants index frame: {l_p_s_t}")
+                cols = key_cols + ['start_t', 'stop_t', 'indices']
+                key_l = list(l_p_s_t)
+
+                patient_ixes = [tuple([label_code, ix_i] + key_l + [_ix.min(), _ix.max(), _ix])
+                                 for label_code, indices_l in index_map.items()
+                                 for ix_i, _ix in enumerate(indices_l)]
+
+                p_ix_df = pd.DataFrame(patient_ixes, columns=cols)
+                p_ix_df = p_ix_df.astype(key_col_dtypes)
+                # Store a numeric index into underlying numpy array for faster indexing
+                if 'signal' in _data_map:
+                    signal_df = _data_map['signal']
+                    p_ix_df['start_ix'] = signal_df.index.get_indexer(p_ix_df.start_t)
+
+                # #TODO: Is this still necessary? Determining the sentence code for every window sample from scratch
+                if 'word_start_stop_times' in self.data_maps[l_p_s_t]:
+                    self.logger.info(f"word_start_stop_times found aligning all index start times to a sentence code")
+                    wsst_df = self.data_maps[l_p_s_t]['word_start_stop_times']
+                    nearest_ixes = wsst_df.index.get_indexer(p_ix_df.start_t, method='nearest')
+                    p_ix_df['sent_code'] = wsst_df.iloc[nearest_ixes].stim_sentcode.values
+
+                sample_ix_df_l.append(p_ix_df)
+
+            self.logger.info(f"Combining all of {len(sample_ix_df_l)} index frames")
+            self.sample_ix_df = pd.concat(sample_ix_df_l).reset_index(drop=True)
+            self.k_select_offset = 2
+            if self.flatten_sensors_to_samples:
+                self.logger.info(f"flatten_sensors_to_samples selected - creating channel/sensor labels for samples")
+                self.sample_ix_df['channel'] = [self.selected_columns] * len(self.sample_ix_df)
+                key_cols.insert(2, 'channel')
+                self.k_select_offset += 1
+                self.logger.debug("exploding sensor data - does this take a while?")
+                self.sample_ix_df = self.sample_ix_df.explode('channel')
+
+            self.key_cols = key_cols
+
+            if self.label_reindex_col is not None:
+                self.label_reindex_ix = self.key_cols.index(self.label_reindex_col)
+                unique_reindex_labels = list(sorted(self.sample_ix_df[self.label_reindex_col].unique()))
+                self.label_reindex_map = {l: i for i, l in enumerate(unique_reindex_labels)}
+
+            self.logger.info("Converting dataframe to a flat list of key variables (self.flat_keys)")
+            self.ixed_sample_ix_df = self.sample_ix_df.set_index(key_cols).sort_index()
+            #key_df = self.sample_ix_df[self.key_cols]
+            self.flat_keys = self.ixed_sample_ix_df.index
+            #self.flat_keys = np.array(list(zip(key_df.to_records(index=False).tolist(),
+            #                                   key_df.iloc[:, k_select_offset:].to_records(index=False).tolist())),
+            #                          dtype='object')
+            self.logger.info(f"Extracting mapping of ({key_cols})->indices")
+            self.flat_index_map = self.ixed_sample_ix_df.indices#.to_dict()
+            self.flat_ix_map = self.ixed_sample_ix_df.start_ix
+
+            # ## END NEW VERSION
+
+            self.logger.info(f"Length of flat index map: {len(self.flat_index_map)}")
+
+
         else:
             # print("Warning: using naive shared-referencing across objects - only use when feeling lazy")
             self.logger.warning("Warning: using naive shared-referencing across objects - only use when feeling lazy")
             # self.mfcc_m = self.data_from.mfcc_m
             self.data_maps = self.data_from.data_maps
+            self.n_samples_per_window = self.data_from.n_samples_per_window
             self.sample_index_maps = self.data_from.sample_index_maps
             self.flat_index_map = self.data_from.flat_index_map
+            self.flat_ix_map = self.data_from.flat_ix_map
             self.flat_keys = self.data_from.flat_keys
             self.key_cols = self.data_from.key_cols
+            self.k_select_offset = self.data_from.k_select_offset
             # self.logger.info("Copying over sample ix dataframe")
             self.sample_ix_df = self.data_from.sample_ix_df.copy()
+            self.ixed_sample_ix_df = self.data_from.ixed_sample_ix_df.copy()
             self.selected_columns = self.data_from.selected_columns
             self.flatten_sensors_to_samples = self.data_from.flatten_sensors_to_samples
             self.extra_output_keys = self.data_from.extra_output_keys
             self.fs_signal = self.data_from.fs_signal
+            self.label_reindex_col = self.data_from.label_reindex_col
+            self.label_reindex_ix = self.data_from.label_reindex_ix
+            self.label_reindex_map = self.data_from.label_reindex_map
 
-        self.select(self.selected_word_indices)
+        self.select(self.selected_flat_indices)
 
     def make_pipeline_map(self, default='audio_gate'):
         """
@@ -587,9 +600,9 @@ class BaseASPEN(BaseDataset):
                 ('output', 'passthrough')
             ]),
 
-            'minimal':
-                feature_processing.SubsampleECOG() >>
-                feature_processing.WordStopStartTimeMap() >> feature_processing.ChangSampleIndicesFromStim()
+            #'minimal':
+            #    feature_processing.SubsampleECOG() >>
+            #    feature_processing.WordStopStartTimeMap() >> feature_processing.ChangSampleIndicesFromStim()
         }
         p_map['default'] = p_map[default]
 
@@ -632,7 +645,9 @@ class BaseASPEN(BaseDataset):
     def __getitem__(self, item):
         # ix_k includes the class and window id, and possibly sensor id if flattened
         # data_k specifies subject dataset in data_map (less granular than ix_k)
-        ix_k, data_k = self.selected_flat_keys[item]
+        #ix_k, data_k = self.selected_flat_keys[item]
+        ix_k = self.selected_flat_keys[item]
+        data_k = ix_k[self.k_select_offset:]
         data_d = self.data_maps[data_k]
 
         selected_channels = None
@@ -641,15 +656,22 @@ class BaseASPEN(BaseDataset):
 
         so = dict()
 
+        #ix = self.flat_index_map.at[ix_k]
+        ix = self.flat_ix_map.at[ix_k]
+        ix = range(ix, ix+self.n_samples_per_window)
         so.update(
-            self.get_features(data_d, self.flat_index_map[ix_k],
+            self.get_features(data_d, ix,
                               ix_k, transform=self.transform,
                               channel_select=selected_channels,
+                              index_loc=True,
                               extra_output_keys=self.extra_output_keys)
         )
 
         so.update(
-            self.get_targets(data_d, self.flat_index_map[ix_k], ix_k, target_transform=self.target_transform)
+            self.get_targets(data_d, ix,
+                             # get the 0-1 label from the value of the selected reindex value - or just grab the first (default)
+                             label=self.label_reindex_map[ix_k[self.label_reindex_ix]] if self.label_reindex_ix is not None else ix_k[0],
+                             target_transform=self.target_transform)
         )
 
         if self.post_processing_func is not None:
@@ -665,8 +687,8 @@ class BaseASPEN(BaseDataset):
         # split_time = 0.75
         from tqdm.auto import tqdm
 
-        selected_keys_arr = self.flat_keys[self.selected_word_indices]
-        index_start_stop = [(self.flat_index_map[a[0]].min(), self.flat_index_map[a[0]].max())
+        selected_keys_arr = self.flat_keys[self.selected_flat_indices]
+        index_start_stop = [(self.flat_index_map.at[a[0]].min(), self.flat_index_map.at[a[0]].max())
                             for a in tqdm(selected_keys_arr)]
         split_time = max(a for a, b, in index_start_stop) * split_time if isinstance(split_time, float) else split_time
         left_side_indices, right_side_indices = list(), list()
@@ -684,29 +706,43 @@ class BaseASPEN(BaseDataset):
 
         return left_dataset, right_dataset
 
-    def split_select_random_key_levels(self, key='sent_code', **train_test_split_kws):
+    def split_select_random_key_levels(self, keys=('patient', 'sent_code'), **train_test_split_kws):
         from sklearn.model_selection import train_test_split
-        s: pd.Series = self.sample_ix_df[key]
-        levels = s.unique()
+        keys = list(keys) if isinstance(keys, tuple) else keys
+        # In case we have already split - check for existing selected indices
+        if getattr(self, 'selected_flat_indices') is None:
+            self.selected_flat_indices = range(0, self.sample_ix_df.shape[0] - 1)
+
+        # Init the unique levels
+        levels: pd.DataFrame = self.sample_ix_df.iloc[self.selected_flat_indices][keys].drop_duplicates()
+        stratify_col = train_test_split_kws.get('stratify')
+        if stratify_col is not None:
+            train_test_split_kws['stratify'] = levels[stratify_col]
+
+        # Split on the unique levels
         train, test = train_test_split(levels, **train_test_split_kws)
+        self.logger.info(f"{len(levels)} levels in {keys} split into train/test")
+        self.logger.info(f"Train: {train}")
+        self.logger.info(f"Test : {test}")
 
-        train_mask = s.isin(train)
-        test_mask = s.isin(test)
+        # Merge back to the original full sample_ix_df to determine the original index into the sample data
+        train_indices = self.sample_ix_df[keys].reset_index().merge(train, on=keys, how='inner').set_index('index').index.tolist()
+        test_indices = self.sample_ix_df[keys].reset_index().merge(test, on=keys, how='inner').set_index('index').index.tolist()
 
-        train_indices = self.sample_ix_df[train_mask].index.tolist()
-        test_indices = self.sample_ix_df[test_mask].index.tolist()
-
-        train_dataset = self.__class__(data_from=self, selected_word_indices=train_indices)
-        test_dataset = self.__class__(data_from=self, selected_word_indices=test_indices)
+        # Create new train and test datsets - tack on the levels df for debugging, probably don't depend on them?
+        train_dataset = self.__class__(data_from=self, selected_flat_indices=train_indices)
+        train_dataset.selected_levels_df = train
+        test_dataset = self.__class__(data_from=self, selected_flat_indices=test_indices)
+        test_dataset.selected_levels_df = test
 
         return train_dataset, test_dataset
 
     def select(self, sample_indices):
         # select out specific samples from the flat_keys array if selection passed
         # - Useful if doing one-subject training and want to split data up among datasets for use
-        self.selected_word_indices = sample_indices
-        if self.selected_word_indices is not None:
-            self.selected_flat_keys = self.flat_keys[self.selected_word_indices]
+        self.selected_flat_indices = sample_indices
+        if self.selected_flat_indices is not None:
+            self.selected_flat_keys = self.flat_keys[self.selected_flat_indices]
         else:
             self.selected_flat_keys = self.flat_keys
 
@@ -774,8 +810,8 @@ class BaseASPEN(BaseDataset):
         trial = cls.default_trial if trial is None else trial
         sensor_columns = cls.default_sensor_columns if sensor_columns is None else sensor_columns
 
+        cls.logger.info(f"-----------Subset: {str(subset)}------------")
         cls.logger.info(f"---{patient}-{session}-{trial}-{location}---")
-        cls.logger.info("|--->Using Subset: " + str(subset))
 
         p = cls.get_data_path(patient, session, trial, location, base_path=base_path, subset=subset)
         cls.logger.debug(f"Path : {p}")
@@ -792,6 +828,12 @@ class BaseASPEN(BaseDataset):
         """
         if sets_str is None:
             return None
+
+        # Select everything from all locations
+        if sets_str.strip() == '*':
+            return [t for loc, p_t_d in cls.all_patient_maps.items()
+                     for t_l in p_t_d.values()
+                     for t in t_l]
 
         # e.g. MC-19-0,MC-19-1
         if ',' in sets_str:
@@ -834,6 +876,10 @@ class BaseASPEN(BaseDataset):
                             start=list())
         return remaining_t_l
 
+    @classmethod
+    def make_remaining_tuples_from_selected(cls, sets_str):
+        return list(set(cls.make_tuples_from_sets_str('*')) - set(cls.make_tuples_from_sets_str(sets_str)))
+
     @staticmethod
     def get_features(data_map, ix, label=None, transform=None, index_loc=False, signal_key='signal',
                      channel_select=None, extra_output_keys=None):
@@ -841,10 +887,11 @@ class BaseASPEN(BaseDataset):
         signal_df = data_map[signal_key]
 
         kws = dict()
-        kws['signal'] = signal_df.loc[ix] if not index_loc else signal_df.iloc[ix]
+        kws['signal'] = signal_df.loc[ix].values if not index_loc else signal_df.values[ix]
 
         # Transpose to keep time as last index for torch
-        np_ecog_arr = kws['signal'].values.T
+        #np_ecog_arr = kws['signal'].values.T
+        np_ecog_arr = kws['signal'].T
 
         # if self.flatten_sensors_to_samples:
         # Always pass a list/array for channels, even if only 1, to maintain the dimension
@@ -877,7 +924,7 @@ class BaseASPEN(BaseDataset):
 
     @staticmethod
     def get_targets(data_map, ix, label, target_transform=None, target_key='target_arr'):
-        label = label[0]
+        #label = label[0]
         #kws = dict(text='<silence>' if label <= 0 else '<speech>',
         #           text_arr=torch.Tensor([0] if label <= 0 else [1]))
         kws = {target_key: torch.LongTensor([label])}
@@ -904,7 +951,7 @@ class BaseASPEN(BaseDataset):
         # offs = pd.Timedelta(offset_seconds)
         # t_word_ix = self.word_index[self.word_index == i].index
         ix_k, data_k = self.selected_flat_keys[i]
-        t_word_ix = self.flat_index_map[ix_k]
+        t_word_ix = self.flat_index_map.at[ix_k]
         offs_td = pd.Timedelta(offset_seconds, 's')
         t_word_slice = slice(t_word_ix.min() - offs_td, t_word_ix.max() + offs_td)
         display(t_word_slice)
@@ -954,7 +1001,24 @@ class BaseASPEN(BaseDataset):
         return axs
 
     def get_target_shape(self):#, target_key='target_arr'):
-        return self.sample_ix_df.label.nunique()
+        if self.label_reindex_col is None:
+            n_targets = self.sample_ix_df.label.nunique()
+        else:
+            n_targets = len(self.label_reindex_map)
+
+        return 1 if n_targets == 2 else n_targets
+
+    def get_target_labels(self):
+        # TODO: Warning - assuming these are all the same across data_maps values - just using the first
+        if self.label_reindex_col is None:
+            class_val_to_label_d = next(iter(self.data_maps.values()))['index_source_map']
+        else:
+            class_val_to_label_d = {cls_id: f"{self.label_reindex_col}_{label}"
+                                    for label, cls_id in self.label_reindex_map.items()}
+
+        class_labels = [class_val_to_label_d[i] for i in range(len(class_val_to_label_d))]
+        return class_val_to_label_d, class_labels
+
 
 
 @attr.s
@@ -1002,6 +1066,7 @@ class HarvardSentences(BaseASPEN):
                                                                48000, reshape=-1)),
             ('parse_stim', pipeline.ParseTimeSeriesArrToFrame(self.mat_d_keys['stimcode'],
                                                               self.mat_d_keys['signal_fs'],
+                                                              # TODO: Check the default rate here - 1024?
                                                               1200, reshape=-1, output_key='stim')),
             ('parse_sensor_ras', pipeline.ParseSensorRAS()),
             ('extract_mfc', pipeline.ExtractMFCC())
@@ -1009,155 +1074,252 @@ class HarvardSentences(BaseASPEN):
 
         parse_input_steps = [
             ('sensor_selection', pipeline.IdentifyGoodAndBadSensors(sensor_selection=self.sensor_columns)),
-            ('rescale_signal', pipeline.StandardNormSignal()),
+            # TODO: Wave2Vec2 standardizes like this
+            #  - but should we keep this in to match or should we batch norm at the top?
+            #('rescale_signal', pipeline.StandardNormSignal()),
             ('subsample', pipeline.SubsampleSignal()),
             ('sent_from_start_stop', pipeline.SentCodeFromStartStopWordTimes()),
-            # Creates listening, imagine, mouth
-             ('multi_task_start_stop', pipeline.MultiTaskStartStop()),
+            ('all_stim', pipeline.CreateAllStim()),
 
         ]
 
-        parse_stim_steps = [
-            # Produces imagine_start/stop_t and mouth_start/stop_t
-            ('stim_from_start_stop', pipeline.SentenceAndWordStimFromRegionStartStopTimes()),
-        ]
+        #parse_stim_steps = [
+        #    # Produces imagine_start/stop_t and mouth_start/stop_t
+        #    ('stim_from_start_stop', pipeline.SentenceAndWordStimFromRegionStartStopTimes()),
+        #]
 
         audio_gate_steps = [
             ('Threshold', pipeline.PowerThreshold(speaking_window_samples=48000 // 16,
                                                   silence_window_samples=int(48000 * 1.5),
-                                                  speaking_quantile_threshold=0.9,
+                                                  speaking_quantile_threshold=0.85,
                                                   # silence_threshold=0.001,
                                                   silence_quantile_threshold=0.05,
                                                   n_silence_windows=35000,
                                                   # silence_n_smallest=30000,
-                                                  stim_key='word_stim')),
-            ('speaking_indices', pipeline.WindowSampleIndicesFromStim('stim_pwrt',
-                                                                      target_onset_shift=pd.Timedelta(-.5, 's'),
-                                                                      # input are centers, and output is a window of
-                                                                      # .5 sec so to center it, move the point (
-                                                                      # center) back .25 secods so that extracted 0.5
-                                                                      # sec window saddles the original center
-                                                                      # target_offset_shift=pd.Timedelta(-0.25, 's')
-                                                                      target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                      max_target_region_size=300
+                                                  #stim_key='speaking_region_stim'
+                                                  stim_key='speaking_region_stim_mask'
+                                                  )),
+#            ('speaking_indices', pipeline.WindowSampleIndicesFromStim('stim_pwrt',
+#                                                                      target_onset_shift=pd.Timedelta(-.5, 's'),
+#                                                                      # input are centers, and output is a window of
+#                                                                      # .5 sec so to center it, move the point (
+#                                                                      # center) back .25 secods so that extracted 0.5
+#                                                                      # sec window saddles the original center
+#                                                                      # target_offset_shift=pd.Timedelta(-0.25, 's')
+#                                                                      target_offset_shift=pd.Timedelta(-0.5, 's'),
+#                                                                      #max_target_region_size=300
+#                                                                      sample_n=20000,
+#                                                                      )),
+            ('speaking_indices', pipeline.WindowSampleIndicesFromIndex('stim_pwrt',
+                                                                      # Center the extracted 0.5 second window
+                                                                      index_shift=pd.Timedelta(-0.25, 's'),
+                                                                      stim_value_remap=1,
+                                                                      sample_n=10000,
                                                                       )),
             ('silence_indices', pipeline.WindowSampleIndicesFromIndex('silence_stim_pwrt_s',
                                                                       # Center the extracted 0.5 second window
                                                                       index_shift=pd.Timedelta(-0.25, 's'),
-                                                                      stim_value_remap=0
-                                                                      ))]
+                                                                      stim_value_remap=0,
+                                                                      sample_n=10000,
+                                                                      ))
+        ]
+        audio_gate_all_region_steps = [
+                                          ('Threshold', pipeline.PowerThreshold(speaking_window_samples=48000 // 16,
+                                                  silence_window_samples=int(48000 * 1.5),
+                                                  speaking_quantile_threshold=0.85,
+                                                  # silence_threshold=0.001,
+                                                  silence_quantile_threshold=0.05,
+                                                  n_silence_windows=35000,
+                                                  # silence_n_smallest=30000,
+                                                  #stim_key='speaking_region_stim'
+                                                  stim_key='all_stim'
+                                                  ))
+        ] + audio_gate_steps[1:]
 
+        start_stop_steps = [('new_mtss', pipeline.AppendExtraMultiTaskStartStop()),
+                                                 # Stims from Start-stop-times
+                                                 ('speaking_word_stim', pipeline.NewStimFromRegionStartStopTimes(
+                                                                        start_t_column='start_t',
+                                                                        stop_t_column='stop_t',
+                                                                        stim_output_name='speaking_word_stim',
+                                                 )),
+                                                 ('listening_word_stim', pipeline.NewStimFromRegionStartStopTimes(
+                                                                        start_t_column='listening_word_start_t',
+                                                                        stop_t_column='listening_word_stop_t',
+                                                                        stim_output_name='listening_word_stim',
+                                                 )),
+                                                 ('mouthing_word_stim', pipeline.NewStimFromRegionStartStopTimes(
+                                                                        start_t_column='mouthing_word_start_t',
+                                                                        stop_t_column='mouthing_word_stop_t',
+                                                                        stim_output_name='mouthing_word_stim',
+                                                 )),
+                                                ('imagining_word_stim', pipeline.NewStimFromRegionStartStopTimes(
+                                                                        start_t_column='imagining_word_start_t',
+                                                                        stop_t_column='imagining_word_stop_t',
+                                                                        stim_output_name='imagining_word_stim',
+                                                )),
+
+                            ('speaking_region_stim', pipeline.NewStimFromRegionStartStopTimes(
+                                start_t_column='speaking_region_start_t',
+                                stop_t_column='speaking_region_stop_t',
+                                stim_output_name='speaking_region_stim',
+                            )),
+                            ('listening_region_stim', pipeline.NewStimFromRegionStartStopTimes(
+                                start_t_column='listening_region_start_t',
+                                stop_t_column='listening_region_stop_t',
+                                stim_output_name='listening_region_stim',
+                            )),
+                            ('mouthing_region_stim', pipeline.NewStimFromRegionStartStopTimes(
+                                start_t_column='mouthing_region_start_t',
+                                stop_t_column='mouthing_region_stop_t',
+                                stim_output_name='mouthing_region_stim',
+                            )),
+                            ('imagining_region_stim', pipeline.NewStimFromRegionStartStopTimes(
+                                start_t_column='imagining_region_start_t',
+                                stop_t_column='imagining_region_stop_t',
+                                stim_output_name='imagining_region_stim',
+                            ))
+                            ]
+
+        region_kws = dict(
+            target_onset_shift=pd.Timedelta(.5, 's'),
+            target_offset_shift=pd.Timedelta(-1, 's'),
+            sample_n=1000
+        )
+        region_from_word_kws = dict(
+            target_onset_shift=pd.Timedelta(-.5, 's'),
+            target_offset_shift=pd.Timedelta(-0.5, 's'),
+        )
+        select_words = pipeline.SelectWordsFromStartStopTimes()
         p_map = {
+            'random_sample': Pipeline(parse_arr_steps + parse_input_steps
+            + [('rnd_stim', pipeline.RandomStim(10_000)),
+               ('rnd_indices', pipeline.WindowSampleIndicesFromIndex(stim_key='random_stim'))]
+                                      + [('output', 'passthrough')]),
+
+            'random_sample_pinknoise': Pipeline(parse_arr_steps + parse_input_steps +
+                                                [
+                                                    ('pinknoise', pipeline.ReplaceSignalWithPinkNoise()),
+                                                    ('rnd_stim', pipeline.RandomStim(10_000)),
+                                                    ('rnd_indices',
+                                                     pipeline.WindowSampleIndicesFromIndex(stim_key='random_stim'))]
+                                                + [('output', 'passthrough')]
+                                                ),
+
             # -----
             # Directly from audio
-            'audio_gate': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
+            'audio_gate': Pipeline(parse_arr_steps + parse_input_steps  + start_stop_steps  #+ parse_stim_steps
                                    + audio_gate_steps + [('output', 'passthrough')]),
-            # ---
-            # Word level
-            'word_level': Pipeline(parse_arr_steps + parse_input_steps  + parse_stim_steps
+            'audio_gate_all_region': Pipeline(parse_arr_steps + parse_input_steps + start_stop_steps  # + parse_stim_steps
+                                   + audio_gate_all_region_steps + [('output', 'passthrough')]),
 
-            # This stim will be used for silent indices
-              + [('stim_from_listening', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='listening_region_start_t',
-                                                                                              stop_t_column='listening_region_stop_t',
-                                                                                              word_stim_output_name='listening_word_stim',
-                                                                                              sentence_stim_output_name='listening_sentence_stim',
-                                                                                              set_as_word_stim=False)),
-                 # Target index extraction
-                 ('speaking_indices', pipeline.WindowSampleIndicesFromStim('word_stim',  # 'word_stim',
-                                                                           target_onset_shift=pd.Timedelta(-.5, 's'),
-                                                                           target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                           )),
-                 # Negative target index extraction
-                 ('silent_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',
-                                                                         target_onset_shift=pd.Timedelta(.5, 's'),
-                                                                         target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                         stim_value_remap=0)),
-                ('output', 'passthrough')
-              ]),
-            # --
+            'region_classification': Pipeline(parse_arr_steps + parse_input_steps + start_stop_steps
+                                                             + [
+                                                                 # Indices from Stim - these populate the class labels
+                                                                 ('speaking_indices',
+                                                                  pipeline.WindowSampleIndicesFromStim(
+                                                                      'speaking_region_stim',
+                                                                      stim_value_remap=0, **region_kws)),
+                                                                 ('listening_indices',
+                                                                  pipeline.WindowSampleIndicesFromStim(
+                                                                      'listening_region_stim',
+                                                                      stim_value_remap=1, **region_kws)),
+                                                                 ('mouthing_indices',
+                                                                  pipeline.WindowSampleIndicesFromStim(
+                                                                      'mouthing_region_stim',
+                                                                      stim_value_remap=2, **region_kws)),
+                                                                 ('imagining_indices',
+                                                                  pipeline.WindowSampleIndicesFromStim(
+                                                                      'imagining_region_stim',
+                                                                      stim_value_remap=3, **region_kws)),
+                                                                 ('output', 'passthrough')
+                                                             ]),
 
-            'region_classification': Pipeline(
-                parse_arr_steps + parse_input_steps #+ parse_stim_steps
-                + [
-                    ('speakinging_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='start_t',
-                                                                                              stop_t_column='stop_t',
-                                                                                              word_stim_output_name='word_stim',
-                                                                                              sentence_stim_output_name='sentence_stim',
-                                                                                              set_as_word_stim=False)),
-                    ('listening_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='listen_start_t',
-                                                                                            stop_t_column='listen_stop_t',
-                                                                                            word_stim_output_name='listening_word_stim',
-                                                                                            sentence_stim_output_name='listening_sentence_stim',
-                                                                                            set_as_word_stim=False)),
-                    ('mouthing_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='mouth_start_t',
-                                                                                           stop_t_column='mouth_stop_t',
-                                                                                           word_stim_output_name='mouthing_word_stim',
-                                                                                           sentence_stim_output_name='mouthing_sentence_stim',
-                                                                                           set_as_word_stim=False)),
-                    ('imagine_stim', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='imagine_start_t',
-                                                                                          stop_t_column='imagine_stop_t',
-                                                                                          word_stim_output_name='imagining_word_stim',
-                                                                                          sentence_stim_output_name='imagining_sentence_stim',
-                                                                                          set_as_word_stim=False)),
+            'region_classification_from_word_stim': Pipeline(parse_arr_steps + parse_input_steps + start_stop_steps
+                                              + [
+                                                # Indices from Stim - these populate the class labels
+                                                ('speaking_indices', pipeline.WindowSampleIndicesFromStim(
+                                                    'speaking_word_stim',
+                                                    stim_value_remap=0,
+                                                    **region_from_word_kws
+                                                )),
+                                                 ('listening_indices', pipeline.WindowSampleIndicesFromStim(
+                                                    'listening_word_stim',
+                                                    stim_value_remap=1,
+                                                    **region_from_word_kws
+                                                 )),
+                                                 ('mouthing_indices', pipeline.WindowSampleIndicesFromStim(
+                                                    'mouthing_word_stim',
+                                                    stim_value_remap=2,
+                                                    **region_from_word_kws
 
-                    ('listening_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',
-                                                                             target_onset_shift=pd.Timedelta(.5, 's'),
-                                                                             target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                             stim_value_remap=0)),
+                                                 )),
+                                                 ('imagining_indices', pipeline.WindowSampleIndicesFromStim(
+                                                    'imagining_word_stim',
+                                                    stim_value_remap=3,
+                                                    **region_from_word_kws
+                                                 )),('output', 'passthrough')]),
 
-                    ('imagining_indices', pipeline.WindowSampleIndicesFromStim('imagining_word_stim',
-                                                                             target_onset_shift=pd.Timedelta(.5, 's'),
-                                                                             target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                             stim_value_remap=1)),
-
-                    ('mouthing_indices', pipeline.WindowSampleIndicesFromStim('mouthing_word_stim',
-                                                                               target_onset_shift=pd.Timedelta(.5, 's'),
-                                                                               target_offset_shift=pd.Timedelta(-0.5,'s'),
-                                                                               stim_value_remap=2)),
-
-                    ('speaking_indices', pipeline.WindowSampleIndicesFromStim('word_stim',  # 'word_stim',
-                                                                              target_onset_shift=pd.Timedelta(-.5, 's'),
-                                                                              target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                              stim_value_remap=3
-                                                                              )),
-
-                    ('output', 'passthrough')
-                ]
-            ),
-
-            'audio_gate_speaking_only': Pipeline(parse_arr_steps + parse_input_steps + parse_stim_steps
+            'audio_gate_speaking_only': Pipeline(parse_arr_steps + parse_input_steps  + start_stop_steps
                                                  # Slice out the generation of the silence stim data - only speaking
                                                  + audio_gate_steps[:-1] + [('output', 'passthrough')]),
 
-            'audio_gate_imagine': Pipeline(parse_arr_steps + parse_input_steps + [
-                # Creates listening, imagine, mouth
-                #('multi_task_start_stop', pipeline.MultiTaskStartStop()),
-                # Creates the word_stim and sentence_stim from the start stop of imagine
-                ('stim_from_start_stop', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='imagine_start_t',
-                                                                                              stop_t_column='imagine_stop_t')),
-                # creat stim for listening (i.e. not speaking or active) that we'll use for silent
-                ('stim_from_listening', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='listening_region_start_t',
-                                                                                             stop_t_column='listening_region_stop_t',
-                                                                                             word_stim_output_name='listening_word_stim',
-                                                                                             sentence_stim_output_name='listening_sentence_stim',
-                                                                                             set_as_word_stim=False)),
-                # Target index extraction - word stim is the imagine stim extracted above
-                ('speaking_indices', pipeline.WindowSampleIndicesFromStim('word_stim',
-                                                                          target_onset_shift=pd.Timedelta(-.5, 's'),
-                                                                          target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                          )),
-                # Negative target index extraction - use listening regions for negatives
-                ('silent_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',
-                                                                        target_onset_shift=pd.Timedelta(.5, 's'),
-                                                                        target_offset_shift=pd.Timedelta(-0.5, 's'),
-                                                                        stim_value_remap=0,
-                                                                        )),
+            'word_classification': Pipeline(parse_arr_steps + parse_input_steps  + start_stop_steps
+                                                 # Slice out the generation of the silence stim data - only speaking
+                                                 #+ audio_gate_steps +
+                                            + [
+                                                ('select_words_from_wsst', select_words),
+                                                ('selected_speaking_word_stim', pipeline.NewStimFromRegionStartStopTimes(
+                                                    start_t_column='start_t',
+                                                    stop_t_column='stop_t',
+                                                    label_column='selected_word',
+                                                    code_column='selected_word_code',
+                                                    stim_output_name='selected_speaking_word_stim',
+                                                    default_stim_value=-1)),
+                                                ('word_indices', pipeline.WindowSampleIndicesFromIndex(
+                                                    'selected_speaking_word_stim',
+                                                    method='unique_values',
+                                                    stim_value_remap=select_words.code_to_word_map)),
+                                                ##('word_indices', pipeline.WindowSampleIndicesFromStim(
+                                                #    'selected_speaking_word_stim',
+                                                #    target_onset_shift=pd.Timedelta(0, 's'),
+                                                #    target_offset_shift=pd.Timedelta(0, 's'),
+                                                #    stim_value_remap=select_words.code_to_word_map,
+                                                #)),
+                                                ('output', 'passthrough')]
+                                            )
 
-                ('output', 'passthrough')
-            ]),
+#            'audio_gate_imagine': Pipeline(parse_arr_steps + parse_input_steps + [
+#                # Creates listening, imagine, mouth
+#                #('multi_task_start_stop', pipeline.MultiTaskStartStop()),
+#                # Creates the word_stim and sentence_stim from the start stop of imagine
+#                ('stim_from_start_stop', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='imagine_start_t',
+#                                                                                              stop_t_column='imagine_stop_t')),
+#                # creat stim for listening (i.e. not speaking or active) that we'll use for silent
+#                ('stim_from_listening', pipeline.SentenceAndWordStimFromRegionStartStopTimes(start_t_column='listening_region_start_t',
+#                                                                                             stop_t_column='listening_region_stop_t',
+#                                                                                             word_stim_output_name='listening_word_stim',
+#                                                                                             sentence_stim_output_name='listening_sentence_stim',
+#                                                                                             set_as_word_stim=False)),
+#                # Target index extraction - word stim is the imagine stim extracted above
+#                ('speaking_indices', pipeline.WindowSampleIndicesFromStim('word_stim',
+#                                                                          target_onset_shift=pd.Timedelta(-.5, 's'),
+#                                                                          target_offset_shift=pd.Timedelta(-0.5, 's'),
+#                                                                          )),
+#                # Negative target index extraction - use listening regions for negatives
+#                ('silent_indices', pipeline.WindowSampleIndicesFromStim('listening_word_stim',
+#                                                                        target_onset_shift=pd.Timedelta(.5, 's'),
+#                                                                        target_offset_shift=pd.Timedelta(-0.5, 's'),
+#                                                                        stim_value_remap=0,
+#                                                                        )),
+#
+#                ('output', 'passthrough')
+#            ]),
 
         }
+
         p_map['default'] = p_map[default]
+
         return p_map
 
     @classmethod
@@ -1339,8 +1501,10 @@ class DatasetOptions(JsonSerializable):
     dataset_name: str = None
 
     batch_size: int = 256
+    batch_size_eval: Optional[int] = None
     batches_per_epoch: Optional[int] = None
     """If set, only does this many batches in an epoch - otherwise, will do enough batches to equal dataset size"""
+    batches_per_eval_epoch: Optional[int] = None
 
     pre_processing_pipeline: str = 'default'
 
@@ -1350,11 +1514,16 @@ class DatasetOptions(JsonSerializable):
 
     data_subset: str = 'Data'
     output_key: str = 'signal_arr'
+    label_reindex_col: Optional[str] = None#"patient"
+
     extra_output_keys: Optional[str] = None
     random_sensors_to_samples: bool = False
     flatten_sensors_to_samples: bool = False
+    split_cv_from_test: bool = True
     # power_q: float = 0.7
     random_targets: bool = False
+    pin_memory: bool = False
+    dl_prefetch_factor: int = 2
 
     n_dl_workers: int = 4
     n_dl_eval_workers: int = 6
@@ -1362,11 +1531,15 @@ class DatasetOptions(JsonSerializable):
     def make_datasets_and_loaders(self, dataset_cls=None, base_data_kws=None,
                                   train_data_kws=None, cv_data_kws=None, test_data_kws=None,
                                   train_sets_str=None, cv_sets_str=None, test_sets_str=None,
+                                  train_p_tuples=None, cv_p_tuples=None, test_p_tuples=None,
                                   train_sensor_columns='valid',
                                   pre_processing_pipeline=None,
                                   additional_transforms=None,
+                                  train_split_kws=None, test_split_kws=None,
+                                  #split_cv_from_test=True
                                   # additional_train_transforms=None, additional_eval_transforms=None,
-                                  num_dl_workers=8) -> tuple:
+                                  #num_dl_workers=None
+                                  ) -> tuple:
         """
         Helper method to create instances of dataset_cls as specified in the command-line options and
         additional keyword args.
@@ -1397,22 +1570,29 @@ class DatasetOptions(JsonSerializable):
         if dataset_cls is None:
             dataset_cls = BaseDataset.get_dataset_by_name(self.dataset_name)
 
-        train_p_tuples = dataset_cls.make_tuples_from_sets_str(self.train_sets if train_sets_str is None
-                                                               else train_sets_str)
-        cv_p_tuples = dataset_cls.make_tuples_from_sets_str(self.cv_sets if cv_sets_str is None
-                                                            else cv_sets_str)
-        test_p_tuples = dataset_cls.make_tuples_from_sets_str(self.test_sets if test_sets_str is None
-                                                              else test_sets_str)
+        if train_p_tuples is None:
+            train_p_tuples = dataset_cls.make_tuples_from_sets_str(self.train_sets if train_sets_str is None
+                                                                   else train_sets_str)
+        if cv_p_tuples is None:
+            cv_p_tuples = dataset_cls.make_tuples_from_sets_str(self.cv_sets if cv_sets_str is None
+                                                                else cv_sets_str)
+        if test_p_tuples is None:
+            test_p_tuples = dataset_cls.make_tuples_from_sets_str(self.test_sets if test_sets_str is None
+                                                                  else test_sets_str)
+
+        train_split_kws = dict() if train_split_kws is None else train_split_kws
+        #test_split_kws = dict() if test_split_kws is None else test_split_kws
+
         logger.info("Train tuples: " + str(train_p_tuples))
         logger.info("CV tuples: " + str(cv_p_tuples))
         logger.info("Test tuples: " + str(test_p_tuples))
 
-        base_kws = dict(pre_processing_pipeline=self.pre_processing_pipeline
-        if pre_processing_pipeline is None
-        else pre_processing_pipeline,
+        base_kws = dict(pre_processing_pipeline=self.pre_processing_pipeline if pre_processing_pipeline is None
+                                                else pre_processing_pipeline,
                         data_subset=self.data_subset,
-                        extra_output_keys=self.extra_output_keys.split(
-                            ',') if self.extra_output_keys is not None else None,
+                        label_reindex_col=self.label_reindex_col,
+                        extra_output_keys=self.extra_output_keys.split(',') if self.extra_output_keys is not None
+                                          else None,
                         flatten_sensors_to_samples=self.flatten_sensors_to_samples)
 
         base_kws.update(base_data_kws)
@@ -1428,71 +1608,94 @@ class DatasetOptions(JsonSerializable):
         if test_data_kws is not None:
             test_kws.update(test_data_kws)
 
-        dl_kws = dict(num_workers=num_dl_workers, batch_size=self.batch_size,
+        dl_kws = dict(num_workers=self.n_dl_workers, batch_size=self.batch_size,
                       batches_per_epoch=self.batches_per_epoch,
+                      pin_memory=self.pin_memory, prefetch_factor=self.dl_prefetch_factor,
                       shuffle=False, random_sample=True)
-        print(f"DL Keyword arguments: {dl_kws}")
-        eval_dl_kws = dict(num_workers=num_dl_workers, batch_size=512,
-                           batches_per_epoch=self.batches_per_epoch,
-                           shuffle=False, random_sample=False if self.batches_per_epoch is None else True)
+
+        logger.info(f"dataloader Keyword arguments: {dl_kws}")
+
+        eval_dl_kws = dict(num_workers=self.n_dl_eval_workers,
+                           batch_size=self.batch_size if self.batch_size_eval is None else self.batch_size_eval,
+                           batches_per_epoch=self.batches_per_eval_epoch,
+                           shuffle=self.batches_per_eval_epoch is None,
+                           pin_memory=self.pin_memory,
+                           prefetch_factor=self.dl_prefetch_factor,
+                           random_sample=self.batches_per_eval_epoch is not None)
 
         dataset_map = dict()
         logger.info("Using dataset class: %s" % str(dataset_cls))
-        # Setup train dataset
-        train_nww = dataset_cls(
-            sensor_columns=train_sensor_columns,
-            **train_kws)
 
+        # Setup train dataset - there is always a train dataset
+        train_dataset = dataset_cls(sensor_columns=train_sensor_columns, **train_kws)
+
+        # Check for some special options on this DatasetOptions
         roll_channels = getattr(self, 'roll_channels', False)
         shuffle_channels = getattr(self, 'shuffle_channels', False)
+
         if roll_channels and shuffle_channels:
             raise ValueError("--roll-channels and --shuffle-channels are mutually exclusive")
         elif roll_channels:
             logger.info("-->Rolling channels transform<--")
-            train_nww.append_transform(
+            train_dataset.append_transform(
                 RollDimension(roll_dim=0, min_roll=0,
-                              max_roll=train_nww.sensor_count - 1)
+                              max_roll=train_dataset.sensor_count - 1)
             )
         elif shuffle_channels:
             logger.info("-->Shuffle channels transform<--")
-            train_nww.append_transform(
+            train_dataset.append_transform(
                 ShuffleDimension()
             )
 
-        if getattr(self, 'random_labels', False):
-            logger.info("-->Randomizing target labels<--")
-            train_nww.append_target_transform(
-                RandomIntLike(low=0, high=2)
-            )
 
-        dataset_map['train'] = train_nww
+        dataset_map['train'] = train_dataset
 
+        # Check for explicit specification of patient tuples for a CV set
         if cv_kws['patient_tuples'] is not None:
-            print("+" * 50)
-            print(f"Using {cv_kws['patient_tuples']}")
-            dataset_map['cv'] = dataset_cls(  # power_q=options.power_q,
-                sensor_columns=train_nww.selected_columns,
-                **cv_kws)
+            logger.info("+" * 50)
+            logger.info(f"Using {cv_kws['patient_tuples']}")
+            dataset_map['cv'] = dataset_cls(sensor_columns=train_dataset.selected_columns, **cv_kws)
+        # HVS is special case: CV set is automatic, and split at the participant-sentence code level
         elif dataset_cls == HarvardSentences:
+            logger.info("*" * 30)
             logger.info("Splitting on random key levels for harvard sentences (UCSD)")
-            print("*" * 30)
-            print("Splitting on random key levels for harvard sentences (UCSD)")
-            print("*" * 30)
-            _train, _cv = train_nww.split_select_random_key_levels()
-            dataset_map.update(dict(train=_train, cv=_cv))
+            logger.info("*" * 30)
+            _train, _test = train_dataset.split_select_random_key_levels(**train_split_kws)
+            if test_split_kws is not None and self.split_cv_from_test:
+                logger.info("Splitting out cv from test set")
+                _cv, _test = _test.split_select_random_key_levels(**test_split_kws)
+                dataset_map.update(dict(train=_train, cv=_cv, test=_test))
+            elif test_split_kws is not None and not self.split_cv_from_test:
+                logger.info("Splitting out cv from train set")
+                _train, _cv = _train.split_select_random_key_levels(**test_split_kws)
+                dataset_map.update(dict(train=_train, cv=_cv, test=_test))
+            else:
+                dataset_map.update(dict(train=_train, cv=_test))
+
+        # Otherwise, brute force split the window samples using size of data and dataset.select()
         else:
-            print("~" * 100)
+            logger.info("~" * 30)
+            logger.info("Performing naive split at window level - expected for NWW datasets")
+            logger.info("~" * 30)
             from sklearn.model_selection import train_test_split
-            train_ixs, cv_ixes = train_test_split(range(len(train_nww)))
-            cv_nww = dataset_cls(data_from=train_nww, **cv_kws).select(cv_ixes)
-            train_nww.select(train_ixs)
-            dataset_map.update(dict(train=train_nww,
+            train_ixs, cv_ixes = train_test_split(range(len(train_dataset)))
+            cv_nww = dataset_cls(data_from=train_dataset, **cv_kws).select(cv_ixes)
+            train_dataset.select(train_ixs)
+            dataset_map.update(dict(train=train_dataset,
                                     cv=cv_nww))
 
+        if getattr(self, 'random_targets', False):
+            logger.info("-->Randomizing target labels<--")
+            class_val_to_label_d, class_labels = dataset_map['train'].get_target_labels()
+            logger.info(f"Will use random number between 0 and {len(class_labels)}")
+            dataset_map['train'].append_target_transform(
+                RandomIntLike(low=0, high=len(class_labels))
+            )
+
+        # Test data is not required, but must be loaded with same selection of sensors as train data
+        # TODO / Note: this could have a complex interplay if used tih flatten sensors or 2d data
         if test_kws['patient_tuples'] is not None:
-            dataset_map['test'] = dataset_cls(  # power_q=options.power_q,
-                sensor_columns=train_nww.selected_columns,
-                **test_kws)
+            dataset_map['test'] = dataset_cls(sensor_columns=train_dataset.selected_columns, **test_kws)
         else:
             logger.info(" - No test datasets provided - ")
 
@@ -1506,6 +1709,15 @@ class DatasetOptions(JsonSerializable):
         if isinstance(additional_transforms, list):
             dataset_map = {k: v.append_transform(additional_transforms)
                            for k, v in dataset_map.items()}
+
+#        import functools
+#        cache = True
+#        if cache:
+#            logger.info("EXPERIMENTAL CACHING ENABLED")
+#            for k, v in dataset_map.items():
+#                v.__orig_getitem__ = v.__getitem__
+#                v.__getitem__ = functools.cache(v.__getitem__)
+
 
         dataloader_map = {k: v.to_dataloader(**dl_kws)
                           for k, v in dataset_map.items()}
@@ -1531,6 +1743,7 @@ class HarvardSentencesDatasetOptions(DatasetOptions):
 
 if __name__ == """__main__""":
     hvs_tuples = HarvardSentences.make_tuples_from_sets_str('UCSD-28')
-    hvs = HarvardSentences(hvs_tuples, flatten_sensors_to_samples=False,
-                           pre_processing_pipeline='audio_gate_speaking_only')
+    hvs = HarvardSentences(hvs_tuples, #flatten_sensors_to_samples=False,
+                           extra_output_keys='sensor_ras_coord_arr',
+                           pre_processing_pipeline='word_classification')
     print(hvs[0])

@@ -22,6 +22,10 @@ def weights_init(m):
     elif 'BatchNorm' in classname:
         torch.nn.init.normal_(m.weight.data, 1.0, 0.02)
         torch.nn.init.constant_(m.bias.data, 0)
+    elif 'LayerNorm' in classname:
+        m.bias.data.zero_()
+        m.weight.data.fill_(1.0)
+
 
 
 def copy_model_state(m):
@@ -84,6 +88,18 @@ class Reshape(torch.nn.Module):
         return x.reshape(x.shape[0], *self.shape)
 
 
+class StandardizeOnLastDim(torch.nn.Module):
+    eps = 1e-05
+
+    def __init__(self):
+        super(StandardizeOnLastDim, self).__init__()
+
+    def forward(self, x):
+        t_mu = x.mean(-1, keepdim=True)
+        t_var = x.std(-1, keepdim=True)
+        o_x = (x - t_mu) / (t_var + self.eps)
+        return o_x
+
 class Select(torch.nn.Module):
     def __init__(self, dim=1, index='random', keep_dim=True):
         super(Select, self).__init__()
@@ -100,6 +116,15 @@ class Select(torch.nn.Module):
         x = x.unsqueeze(1) if self.keep_dim else x
 
         return x
+
+
+class FactorByConstant(torch.nn.Module):
+    def __init__(self, scale):
+        super(FactorByConstant, self).__init__()
+        self.scale = scale
+
+    def forward(self, x):
+        return x * self.scale
 
 
 class CogAttn(torch.nn.Module):
@@ -640,6 +665,7 @@ class Trainer:
             if self.lr_adjust_on_plateau_kws and (self.model_name_to_lr_adjust is None
                                                   or k in self.model_name_to_lr_adjust):
                 self.scheduler_map[k] = torch.optim.lr_scheduler.ReduceLROnPlateau(self.opt_map[k],
+                                                                                   verbose=True,
                                                                                    **self.lr_adjust_on_plateau_kws)
 
     def get_best_state(self, model_key='model'):

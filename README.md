@@ -1,4 +1,4 @@
-## ASPEN + MHRG ECOG Processing Library
+## ASPEN + MHRG Neural Modeling Experiments
 See notbooks for example walkthroughs of internal processing and example usage
 
 
@@ -15,12 +15,12 @@ Example of practical development usage of the package, e.g. iterating in the not
 ### Command line entry points
 Pass `--help` for detailed usage
 #### experiments.py
-- Run basic configrutaions of Base models and Northwestern words.
+- Run basic configurations of Base models and Northwestern words.
 - Example usage:
 ```bash
 python -m ecog_speech.experiments.standard --model.dropout=0.5 --model.dropout_2d --model.n_cnn_filters=32 --n_epochs=35
 ```
-- Add `--results-dir` option to save results in a `./results/` directory
+- Add `--results_dir` option to save results in a `./results/` directory
 ```bash
 python -m ecog_speech.experiments.standard --result_dir=./results/ --model.dropout=0.5 --model.dropout_2d --model.n_cnn_filters=32 --n_epochs=35
 ```
@@ -30,6 +30,6 @@ python -m ecog_speech.experiments.standard --result_dir=./results/ --model.dropo
 - If --eval-sets is passed, then that set is loaded and the model is run on it to produce predictions
 - Without --eval-sets, just results parsable from the JSON file are utilized 
 ```bash
-python result_parsing.py --result-file results_per_patient/1617896854_78dea683-86a4-46c1-b592-5d7b248a0841_TL.json --eval-sets=test
+python result_parsing.py --result_file results_per_patient/1617896854_78dea683-86a4-46c1-b592-5d7b248a0841_TL.json --eval_sets=test
 ```
 

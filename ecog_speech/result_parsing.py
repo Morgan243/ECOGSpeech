@@ -15,6 +15,7 @@ import torch
 
 from pprint import pprint
 
+
 def frame_to_torch_batch(_df, win_size, win_step):
     _arr = torch.from_numpy(_df.values)
     outputs =list()
@@ -576,6 +577,8 @@ def load_model_from_results(results, base_model_path=None, **kws_update):
 
         model_filename = os.path.split(_p)[-1]
         model_path = os.path.join(base_model_path, model_filename)
+        if not os.path.isfile(model_path):
+            raise ValueError(f"Inferred model path does not exist: {model_path}")
     else:
         model_path = results['save_model_path']
 
@@ -776,10 +779,11 @@ default_option_kwargs = [
 ]
 
 from dataclasses import dataclass
+from simple_parsing.helpers import JsonSerializable
 from typing import Optional
 
 @dataclass
-class ResultParsingOptions:
+class ResultParsingOptions(JsonSerializable):
     result_file: str = None
     print_results: bool = False
     base_model_path: Optional[str] = None

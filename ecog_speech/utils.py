@@ -5,6 +5,15 @@ import sys
 import json
 
 
+def figures_to_pdf(output_path, **figure_pages):
+    from matplotlib.backends.backend_pdf import PdfPages
+    pdf = PdfPages(output_path)
+    for fig_name, _fig in figure_pages.items():
+        pdf.savefig(_fig, bbox_inches='tight')
+    pdf.close()
+    del pdf
+
+
 # https://stackoverflow.com/questions/42033142/is-there-an-easy-way-to-check-if-an-object-is-json-serializable-in-python
 def is_jsonable(x):
     try:
@@ -89,10 +98,22 @@ def performance(y, preds):
                 )
 
 
-def make_classification_reports(output_map, pretty_print=True):
+def multiclass_performance(y, preds, average='micro'):
+    from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
+    return dict(f1=f1_score(y, preds, average=average),
+                accuracy=accuracy_score(y, preds),
+                precision=precision_score(y, preds, average=average),
+                recall=recall_score(y, preds, average=average),
+                )
+
+
+def make_classification_reports(output_map, pretty_print=True, threshold=0.5):
     out_d = dict()
     for dname, o_map in output_map.items():
-        report_str = classification_report(o_map['actuals'], (o_map['preds'] > 0.5))
+        if threshold is None:
+            report_str = classification_report(o_map['actuals'], o_map['preds'].argmax(1))
+        else:
+            report_str = classification_report(o_map['actuals'], (o_map['preds'] > 0.5))
         if pretty_print:
             print("-"*10 + str(dname) + "-"*10)
             print(report_str)

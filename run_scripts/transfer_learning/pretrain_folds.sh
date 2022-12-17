@@ -9,10 +9,13 @@ DEFAULT_CLI_ARGS="--batch_size=512 --learning_rate=0.0001 \
  --flatten_sensors_to_samples=True --n_dl_workers=32 \
  --result_dir=$RESULT_PATH --save_model_path=$RESULT_PATH/models --n_epochs=10"
 
-eval "$EXEC --train_sets=~UCSD-4 $DEFAULT_CLI_ARGS"
-eval "$EXEC  --train_sets=~UCSD-5 $DEFAULT_CLI_ARGS"
-#$EXEC  --train_sets=~UCSD-10 $DEFAULT_CLI_ARGS
-#$EXEC  --train_sets=~UCSD-18 $DEFAULT_CLI_ARGS
-#$EXEC  --train_sets=~UCSD-19 $DEFAULT_CLI_ARGS
-#$EXEC  --train_sets=~UCSD-22 $DEFAULT_CLI_ARGS
-#$EXEC  --train_sets=~UCSD-28 $DEFAULT_CLI_ARGS
+#eval "$EXEC --train_sets=~UCSD-4 $DEFAULT_CLI_ARGS"
+#eval "$EXEC  --train_sets=~UCSD-5 $DEFAULT_CLI_ARGS"
+
+#eval "$EXEC  --train_sets=~UCSD-10 $DEFAULT_CLI_ARGS"
+#eval "$EXEC  --train_sets=~UCSD-18 $DEFAULT_CLI_ARGS"
+
+#eval "$EXEC  --train_sets=~UCSD-19 $DEFAULT_CLI_ARGS"
+#eval "$EXEC  --train_sets=~UCSD-22 $DEFAULT_CLI_ARGS"
+
+eval "$EXEC  --train_sets=~UCSD-28 $DEFAULT_CLI_ARGS"
